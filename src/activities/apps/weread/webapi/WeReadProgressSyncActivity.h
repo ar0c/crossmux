@@ -55,6 +55,10 @@ class WeReadProgressSyncActivity final : public Activity {
   float remoteFraction_ = 0.0f;
   bool uploadConflict_ = false;
   bool wifiActivated_ = false;
+  uint64_t pendingTimeSeconds_ = 0;
+  bool timeCollectionFailed_ = false;
+
+  void collectReadingTime(const char* account);
 
   void launchWifiSelection();
   void onWifiSelectionComplete(bool connected);

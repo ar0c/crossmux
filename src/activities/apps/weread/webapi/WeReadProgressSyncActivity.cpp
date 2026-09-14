@@ -24,6 +24,7 @@
 #include "ProgressMapper.h"
 #include "ReadingStatsStore.h"
 #include "SilentRestart.h"
+#include "WeReadTimeStorage.h"
 #include "WeReadXhtmlCodec.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -87,6 +88,7 @@ void WeReadProgressSyncActivity::onEnter() {
 
   WeReadStore::Session session;
   const bool loggedIn = WeReadStore::loadSession(session) && session.valid();
+  if (loggedIn) collectReadingTime(session.vid);
   session.clear();
   if (!loggedIn) {
     state_ = State::LoginRequired;
@@ -102,6 +104,50 @@ void WeReadProgressSyncActivity::onEnter() {
     return;
   }
   launchWifiSelection();
+}
+
+void WeReadProgressSyncActivity::collectReadingTime(const char* account) {
+  pendingTimeSeconds_ = 0;
+  timeCollectionFailed_ = false;
+  // The reader ends the measured session before opening this activity. Save
+  // its source first; the time journal never rewrites the original statistics.
+  if (!READING_STATS.saveToFile()) {
+    timeCollectionFailed_ = true;
+    return;
+  }
+  const auto* book = READING_STATS.findBook(epubPath_);
+  if (!book) return;
+  struct Workspace {
+    WeReadTime::SdByteLog log;
+    WeReadTime::Journal journal{log};
+  };
+  // ~1 KiB, once per sync entry; fixed buffers must not live on the task stack.
+  auto work = makeUniqueNoThrow<Workspace>();
+  if (!work) {
+    LOG_ERR("WRTime", "OOM: journal workspace");
+    timeCollectionFailed_ = true;
+    return;
+  }
+  uint64_t assignedMs = 0;
+  for (const auto& day : book->readingDays) {
+    if (day.readingMs > UINT64_MAX - assignedMs) {
+      timeCollectionFailed_ = true;
+      return;
+    }
+    assignedMs += day.readingMs;
+    if (!work->log.configure(account, bookId_, book->bookId.c_str(), day.dayOrdinal) ||
+        !work->journal.open(account, bookId_, book->bookId.c_str(), day.dayOrdinal) ||
+        !work->journal.collect(day.readingMs)) {
+      timeCollectionFailed_ = true;
+      LOG_ERR("WRTime", "History import blocked: day=%lu", static_cast<unsigned long>(day.dayOrdinal));
+      continue;
+    }
+    pendingTimeSeconds_ += work->journal.ledger().pendingSeconds();
+  }
+  // Undated legacy time cannot silently become today's measured time.
+  if (assignedMs != book->totalReadingMs) timeCollectionFailed_ = true;
+  LOG_INF("WRTime", "History pending=%llu seconds blocked=%u; no timed request sent",
+          static_cast<unsigned long long>(pendingTimeSeconds_), static_cast<unsigned>(timeCollectionFailed_));
 }
 
 void WeReadProgressSyncActivity::onExit() {
@@ -477,10 +523,20 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
       }
       break;
     }
-    case State::Success:
-      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, SubpageLayout::centeredTop(content, titleHeight),
-                                resultMessage(), true, EpdFontFamily::BOLD);
+    case State::Success: {
+      const int resultY = SubpageLayout::centeredTop(content, titleHeight) - titleHeight;
+      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, resultY, resultMessage(), true,
+                                EpdFontFamily::BOLD);
+      char pending[96];
+      snprintf(pending, sizeof(pending), tr(STR_WEREAD_TIME_PENDING_FMT),
+               static_cast<unsigned long long>(pendingTimeSeconds_ / 60),
+               static_cast<unsigned>(pendingTimeSeconds_ % 60));
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, resultY + titleHeight * 3, pending, true);
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, resultY + titleHeight * 4,
+                                timeCollectionFailed_ ? tr(STR_WEREAD_TIME_REVIEW) : tr(STR_WEREAD_TIME_NOT_SENT),
+                                true);
       break;
+    }
     case State::LoginRequired:
       UITheme::drawCenteredWrappedText(renderer, textBounds, UI_10_FONT_ID, tr(STR_WEREAD_LOGIN_REQUIRED), 2, true,
                                        EpdFontFamily::BOLD);

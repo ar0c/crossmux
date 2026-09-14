@@ -9,6 +9,9 @@ Runtime readers additionally cap resource paths at 4096 bytes and human-readable
 text at 16384 bytes. A length that exceeds its field's cap or the remaining file
 bytes invalidates the cache; the output value is left unchanged.
 
+WeRead time journals are durable accounting data, not disposable caches. See
+[time journal v1](engineering/weread-time-sync.md#journal-format-v1).
+
 ## `book.bin`
 
 ### Version 11

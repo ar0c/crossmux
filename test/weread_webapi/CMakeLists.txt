@@ -4,6 +4,16 @@ add_executable(WeReadProtocolTest
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadProtocol.cpp
 )
 
+add_executable(WeReadTimeLedgerTest WeReadTimeLedgerStandaloneTest.cpp)
+target_include_directories(WeReadTimeLedgerTest PRIVATE ${REPO_ROOT}/lib/WeReadWebApi/src)
+# The standalone regression harness deliberately uses assertions in Release too.
+if(MSVC)
+  target_compile_options(WeReadTimeLedgerTest PRIVATE /UNDEBUG)
+else()
+  target_compile_options(WeReadTimeLedgerTest PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+endif()
+add_test(NAME WeReadTimeLedgerTest COMMAND WeReadTimeLedgerTest)
+
 target_include_directories(WeReadProtocolTest BEFORE PRIVATE
   ${crosspoint_simulator_SOURCE_DIR}/src
   ${REPO_ROOT}/src
