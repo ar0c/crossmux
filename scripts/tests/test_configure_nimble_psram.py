@@ -72,18 +72,19 @@ class NimblePsramMiddlewareTest(unittest.TestCase):
         self.assertFalse(fnmatch.fnmatch("framework/cores/esp32/esp32-hal-bt.c", env.pattern))
         node = object()
         self.assertIs(env.callback(env, node), node)
-        self.assertEqual(env.dependency, (node, str(root / "src/platform/NimblePsramConfig.h")))
+        self.assertIs(env.dependency[0], node)
+        self.assertEqual(Path(env.dependency[1]), root / "src/platform/NimblePsramConfig.h")
         self.assertEqual(env["CCFLAGS"], ["-Os"])
-        self.assertEqual(
-            env.object_flags, ["-Os", "-include", str(root / "src/platform/NimblePsramConfig.h")]
-        )
+        self.assertEqual(env.object_flags[:2], ["-Os", "-include"])
+        self.assertEqual(Path(env.object_flags[2]), root / "src/platform/NimblePsramConfig.h")
         env["custom_nimble_config"] = "src/platform/NimbleC3Config.h"
         runpy.run_path(
             str(root / "scripts/configure_nimble_psram.py"),
             init_globals={"env": env, "Import": lambda _: None},
         )
         self.assertIs(env.callback(env, node), node)
-        self.assertEqual(env.dependency, (node, str(root / "src/platform/NimbleC3Config.h")))
+        self.assertIs(env.dependency[0], node)
+        self.assertEqual(Path(env.dependency[1]), root / "src/platform/NimbleC3Config.h")
 
 
 if __name__ == "__main__":

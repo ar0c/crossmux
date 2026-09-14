@@ -790,11 +790,16 @@ def _print_language_table(
     sep = "  ".join("-" * w for w in col_widths)
 
     def _safe_print(line: str) -> None:
-        print(
-            line.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(
-                sys.stdout.encoding or "utf-8", errors="replace"
-            )
-        )
+        # SCons stdout is forwarded through another process; its final console
+        # encoding is not observable here. Keep build diagnostics ASCII-safe.
+        if "Import" in globals():
+            line = line.encode("ascii", errors="backslashreplace").decode("ascii")
+        # PlatformIO can capture UTF-8 stdout and forward it to a GBK console.
+        # Make diagnostics representable at both boundaries, not just capture.
+        for stream in (sys.stdout, sys.__stdout__):
+            encoding = getattr(stream, "encoding", None) or "utf-8"
+            line = line.encode(encoding, errors="replace").decode(encoding)
+        print(line)
 
     _safe_print(fmt.format(*headers))
     _safe_print(sep)

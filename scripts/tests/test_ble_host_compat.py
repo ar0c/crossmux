@@ -20,7 +20,7 @@ class BleHostCompatTest(unittest.TestCase):
                 return self.get(name, default)
 
             def subst(self, value):
-                return value.replace("$PROJECT_DIR", str(root))
+                return str(Path(value.replace("$PROJECT_DIR", str(root))))
 
             def AddBuildMiddleware(self, callback, pattern):
                 self.callback, self.pattern = callback, pattern

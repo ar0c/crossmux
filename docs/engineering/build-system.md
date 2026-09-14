@@ -25,6 +25,13 @@
 * `platformio.local.ini`: Local overrides (gitignored, create if needed)
 * `partitions.csv`: ESP32 flash partition layout
 
+The default PlatformIO core directory is project-local (`.platformio`, ignored).
+This isolates both pinned framework packages and platform build-script patches:
+another project's upgrade must not replace Arduino headers during this build.
+Install packages through PlatformIO; do not copy a mutable/customized framework
+from another checkout. An explicit `PLATFORMIO_CORE_DIR` still overrides this
+default for the isolated cache-switch tests below.
+
 ## Build Environment
 * **Standard**: C++20 (`-std=c++2a`). No Exceptions, No RTTI.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.
@@ -106,6 +113,26 @@ Use the same overrides when uploading. Check the resulting ELF for the actual
 PSRAM initialization and heap-registration call paths, not just the
 `BOARD_HAS_PSRAM` macro or `psramInit` symbol. Runtime BLE diagnostics must report
 nonzero PSRAM capacity and a successful allocator probe before connection tests.
+
+## Windows middleware compatibility
+
+The pinned pioarduino 55.03.37 Windows dispatcher ignores middleware file
+patterns and temporarily replaces `Object()` with a function returning `None`.
+This breaks BLE generated-source compilation and per-library configuration.
+`scripts/patch_windows_middleware.py` applies a hash-guarded, idempotent repair
+to that build-tool dispatcher, following the existing platform cache patch
+mechanism. It preserves the original callback patterns, replacement sources,
+and real object nodes; unmatched sources retain platform include shortening.
+Custom callbacks retain their own compilation flags. SDK sources are untouched.
+Review this patch when upgrading the pinned platform; unknown source fails closed.
+
+The i18n summary uses ASCII escapes under SCons because its parent process's
+console encoding cannot be inferred from captured stdout. Standalone diagnostic
+output respects stdout and the outer console encoding; translations remain UTF-8.
+Run the Windows regression tests with
+`python -X utf8 -m unittest discover -s scripts/tests -p test_windows_build.py`.
+The UTF-8 interpreter option is also needed by older tests that read UTF-8 files
+without specifying an encoding.
 
 ## Desktop Simulator
 
