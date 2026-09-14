@@ -187,7 +187,7 @@ class AboutActivity final : public Activity {
     char value[48];
     switch (row) {
       case AboutRow::FirmwareName:
-        return tr(STR_CROSSPOINT);
+        return tr(STR_FORK_FIRMWARE_NAME);
       case AboutRow::FirmwareVersion:
         return CROSSPOINT_VERSION;
       case AboutRow::DeviceModel:

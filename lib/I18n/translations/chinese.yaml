@@ -4,6 +4,7 @@ _order: "23"
 _bcp47: "zh-CN"
 
 STR_CROSSPOINT: "CrossMux"
+STR_FORK_FIRMWARE_NAME: "CrossMux ar0c"
 STR_BOOTING: "启动中"
 STR_SLEEPING: "休眠中"
 STR_ENTERING_SLEEP: "正在进入休眠"

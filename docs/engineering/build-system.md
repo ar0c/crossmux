@@ -33,6 +33,21 @@ from another checkout. An explicit `PLATFORMIO_CORE_DIR` still overrides this
 default for the isolated cache-switch tests below.
 
 ## Build Environment
+
+### ar0c fork identity
+
+The `x4pro` development target uses `1.5.8-ar0c-x4pro+<git-short-sha>`
+(base version read from `platformio.ini`). Startup, About, and `/api/status`
+share `CROSSPOINT_VERSION`. The startup/About product name is `CrossMux ar0c`,
+with English fallback for other UI languages. Hardware model, chip, MAC,
+statistics, partition layout, and USB descriptors are unchanged.
+
+On a successful image build, `scripts/git_branch.py` exports an identical copy
+as `crossmux-ar0c-<base>-x4pro-<sha>.bin` beside `firmware.bin`.
+Commit the intended source before a distributable build so its revision is
+traceable. Other build targets retain their existing version generation;
+upstream OTA endpoints are not redirected by this branding change.
+
 * **Standard**: C++20 (`-std=c++2a`). No Exceptions, No RTTI.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.
 * **Environments** (in `platformio.ini`):

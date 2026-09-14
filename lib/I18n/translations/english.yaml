@@ -4,6 +4,7 @@ _order: "0"
 _bcp47: "en"
 
 STR_CROSSPOINT: "CrossMux"
+STR_FORK_FIRMWARE_NAME: "CrossMux ar0c"
 STR_BOOTING: "BOOTING"
 STR_SLEEPING: "SLEEPING"
 STR_ENTERING_SLEEP: "Going to sleep"
