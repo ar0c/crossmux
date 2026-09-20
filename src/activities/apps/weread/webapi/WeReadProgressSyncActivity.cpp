@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -36,8 +37,14 @@
 #include "util/TimeUtils.h"
 
 namespace {
-static_assert(sizeof(WeReadClient::Operation) <= 8 * 1024, "WeRead progress workspace exceeds its fixed heap budget");
+Rect timeActionRect(const Rect& content, const int height, const int index) {
+  constexpr int gap = 6;
+  const int width = (content.width - gap) / 2;
+  return Rect{content.x + index * (width + gap), content.y + content.height - height, width, height};
 }
+}  // namespace
+
+WeReadProgressSyncActivity::~WeReadProgressSyncActivity() = default;
 
 WeReadProgressSyncActivity::WeReadProgressSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                        std::string epubPath, const char* bookId,
@@ -84,10 +91,37 @@ WeReadProgressContext WeReadProgressSyncActivity::makeContext(const Epub& epub, 
 
 void WeReadProgressSyncActivity::onEnter() {
   Activity::onEnter();
+  timeInputBarrier_ = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+
+  WeReadTimeSync::Status status;
+  if (WeReadTimeSync::active()) {
+    if (WeReadTimeSync::status(bookId_, status)) {
+      backgroundView_ = true;
+      timeBatchUsed_ = true;
+      state_ = State::TimeUploading;
+      advanceTimeUpload();
+    } else {
+      state_ = State::TimeResult;
+      timeCollectionFailed_ = true;
+      timeQueueState_ = WeReadTime::TimeQueue::State::Paused;
+      std::snprintf(timeDiagnosticText_, sizeof(timeDiagnosticText_), "%s", tr(STR_WEREAD_TIME_BACKGROUND_BUSY));
+      requestUpdate();
+    }
+    return;
+  }
 
   WeReadStore::Session session;
   const bool loggedIn = WeReadStore::loadSession(session) && session.valid();
+  if (loggedIn && WeReadTimeSync::status(bookId_, status, session.vid)) {
+    session.clear();
+    backgroundView_ = true;
+    timeBatchUsed_ = true;
+    state_ = State::TimeUploading;
+    advanceTimeUpload();
+    return;
+  }
+  WeReadTimeSync::dismiss(bookId_);  // Never show another account's old result.
   if (loggedIn) collectReadingTime(session.vid);
   session.clear();
   if (!loggedIn) {
@@ -108,11 +142,17 @@ void WeReadProgressSyncActivity::onEnter() {
 
 void WeReadProgressSyncActivity::collectReadingTime(const char* account) {
   pendingTimeSeconds_ = 0;
+  externalConfirmedSeconds_ = externalUnknownSeconds_ = 0;
   timeCollectionFailed_ = false;
+  timeHostPaused_ = false;
   // The reader ends the measured session before opening this activity. Save
   // its source first; the time journal never rewrites the original statistics.
   if (!READING_STATS.saveToFile()) {
     timeCollectionFailed_ = true;
+    return;
+  }
+  if (Storage.exists(WeReadTime::kLegacyTimeManifest) || Storage.exists(WeReadTime::kTimeManifest)) {
+    timeCollectionFailed_ = !auditTime(account);
     return;
   }
   const auto* book = READING_STATS.findBook(epubPath_);
@@ -120,6 +160,7 @@ void WeReadProgressSyncActivity::collectReadingTime(const char* account) {
   struct Workspace {
     WeReadTime::SdByteLog log;
     WeReadTime::Journal journal{log};
+    WeReadTime::ExternalTimeStorage external;
   };
   // ~1 KiB, once per sync entry; fixed buffers must not live on the task stack.
   auto work = makeUniqueNoThrow<Workspace>();
@@ -142,7 +183,15 @@ void WeReadProgressSyncActivity::collectReadingTime(const char* account) {
       LOG_ERR("WRTime", "History import blocked: day=%lu", static_cast<unsigned long>(day.dayOrdinal));
       continue;
     }
-    pendingTimeSeconds_ += work->journal.ledger().pendingSeconds();
+    uint64_t pending = 0, confirmed = 0, unknown = 0;
+    if (!work->external.reconcile(work->journal.ledger(),pending,confirmed,unknown)) {
+      timeCollectionFailed_ = true;
+      LOG_ERR("WRTime", "External accounting requires reconciliation; no sendable balance exposed");
+      continue;
+    }
+    pendingTimeSeconds_ += pending;
+    externalConfirmedSeconds_ += confirmed;
+    externalUnknownSeconds_ += unknown;
   }
   // Undated legacy time cannot silently become today's measured time.
   if (assignedMs != book->totalReadingMs) timeCollectionFailed_ = true;
@@ -151,15 +200,196 @@ void WeReadProgressSyncActivity::collectReadingTime(const char* account) {
 }
 
 void WeReadProgressSyncActivity::onExit() {
+  if (backgroundView_) WeReadTimeSync::dismiss(bookId_);
+  timeAccounting_.clear();
+  timeQuery_.reset();
   operation_.reset();
   Activity::onExit();
-  if (!wifiActivated_) return;
+  if (WeReadTimeSync::ownsWifi() || !wifiActivated_) return;
+  if (backgroundView_) {
+    // A cancelled/failed reconnect has no worker to release its Wi-Fi session.
+    WiFi.disconnect(false);
+    WiFi.mode(WIFI_OFF);
+    return;
+  }
   WiFi.disconnect(false);
   delay(30);
   silentRestartToReader();
 }
 
-bool WeReadProgressSyncActivity::preventAutoSleep() { return state_ == State::Starting || state_ == State::Syncing; }
+bool WeReadProgressSyncActivity::preventAutoSleep() {
+  return state_ == State::Starting || state_ == State::CheckingTime || state_ == State::Syncing ||
+         state_ == State::TimeUploading;
+}
+
+bool WeReadProgressSyncActivity::auditTime(const char* account, WeReadTime::ExternalTime* selected,
+                                           uint64_t* measured) {
+  const auto* book = READING_STATS.findBook(epubPath_);
+  if (!book) return false;
+  WeReadTimeSync::Totals totals;
+  const WeReadTimeSync::Source source{bookId_, book->bookId.c_str(), book->readingDays.data(), book->readingDays.size(),
+                                      book->totalReadingMs};
+  const bool ok = timeAccounting_.audit(source, account, totals, selected, measured);
+  pendingTimeSeconds_ = totals.pending;
+  externalConfirmedSeconds_ = totals.externalConfirmed;
+  externalUnknownSeconds_ = totals.externalUnknown;
+  deviceConfirmedSeconds_ = totals.deviceConfirmed;
+  deviceUnknownSeconds_ = totals.deviceUnknown;
+  servicePendingSeconds_ = totals.servicePending;
+  serviceConfirmedSeconds_ = totals.serviceConfirmed;
+  serviceMode_ = totals.serviceMode;
+  selectedTimeDay_ = totals.selectedDay;
+  timeHostPaused_ = totals.hostPaused;
+  return ok;
+}
+
+void WeReadProgressSyncActivity::startTimeUpload() {
+  if (!selectedTimeDay_ || timeBatchUsed_ || timeCollectionFailed_) return;
+  if (!READING_STATS.saveToFile()) {
+    timeCollectionFailed_ = true;
+    timeQueueState_ = WeReadTime::TimeQueue::State::StorageError;
+    state_ = State::TimeResult;
+    requestUpdate();
+    return;
+  }
+  operation_.reset();
+  timeQuery_.reset();
+  timeAccounting_.clear();
+  timeDiagnosticText_[0] = '\0';
+  timeRunConfirmed_ = 0;
+  timeWaitSeconds_ = 0;
+  timePreparationRetries_ = 0;
+  timeIssue_ = WeReadTime::TimeTransaction::Issue::None;
+  // The service copies only stable identity/day counters before the reader can
+  // resume. No Activity, renderer or mutable statistics pointer escapes.
+  auto session = makeUniqueNoThrow<WeReadStore::Session>();
+  const auto* book = READING_STATS.findBook(epubPath_);
+  bool started = false;
+  const char* startError = session ? tr(STR_WEREAD_LOGIN_REQUIRED) : tr(STR_WEREAD_TIME_START_MEMORY);
+  if (!book) startError = tr(STR_WEREAD_TIME_START_SOURCE);
+  if (session && book && WeReadStore::loadSession(*session) && session->valid()) {
+    const WeReadTimeSync::Source source{bookId_, book->bookId.c_str(), book->readingDays.data(),
+                                        book->readingDays.size(), book->totalReadingMs};
+    started = WeReadTimeSync::start(source, session->vid);
+    using Failure = WeReadTimeSync::StartFailure;
+    switch (WeReadTimeSync::lastStartFailure()) {
+      case Failure::Headroom:
+      case Failure::JobMemory:
+      case Failure::SourceMemory:
+      case Failure::TaskMemory:
+        startError = tr(STR_WEREAD_TIME_START_MEMORY);
+        break;
+      case Failure::Network:
+        startError = tr(STR_WEREAD_TIME_START_NETWORK);
+        break;
+      case Failure::InvalidSource:
+        startError = tr(STR_WEREAD_TIME_START_SOURCE);
+        break;
+      case Failure::Busy:
+        startError = tr(STR_WEREAD_TIME_BACKGROUND_BUSY);
+        break;
+      case Failure::None:
+        break;
+    }
+  }
+  if (session)
+    session->clear();
+  else
+    LOG_ERR("WRTime", "OOM: startup session");
+  if (!started) {
+    timeResult_ = WeReadTime::TimeTransaction::State::NotSent;
+    timeQueueState_ = WeReadTime::TimeQueue::State::Paused;
+    state_ = State::TimeResult;
+    std::snprintf(timeDiagnosticText_, sizeof(timeDiagnosticText_), "%s", startError);
+    requestUpdate();
+    return;
+  }
+  timeBatchUsed_ = true;
+  backgroundView_ = true;
+  timeInputBarrier_ = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+  timeStatusRevision_ = 0;
+  state_ = State::TimeUploading;
+  advanceTimeUpload();
+}
+
+void WeReadProgressSyncActivity::advanceTimeUpload() {
+  WeReadTimeSync::Status status;
+  if (!WeReadTimeSync::status(bookId_, status) || status.revision == timeStatusRevision_) return;
+  RenderLock lock(*this);
+  timeStatusRevision_ = status.revision;
+  pendingTimeSeconds_ = status.totals.pending;
+  externalConfirmedSeconds_ = status.totals.externalConfirmed;
+  externalUnknownSeconds_ = status.totals.externalUnknown;
+  deviceConfirmedSeconds_ = status.totals.deviceConfirmed;
+  deviceUnknownSeconds_ = status.totals.deviceUnknown;
+  servicePendingSeconds_ = status.totals.servicePending;
+  serviceConfirmedSeconds_ = status.totals.serviceConfirmed;
+  serviceMode_ = status.totals.serviceMode;
+  selectedTimeDay_ = status.totals.selectedDay;
+  timeHostPaused_ = status.totals.hostPaused;
+  timeCollectionFailed_ = status.auditFailed;
+  timeQueueState_ = status.queue;
+  timeResult_ = status.phase;
+  timeIssue_ = status.issue;
+  timeRunConfirmed_ = status.confirmed;
+  timeWaitSeconds_ = status.waitSeconds;
+  timePreparationRetries_ = status.retries;
+  if (status.diagnostic.stage != WeReadTime::Diagnostic::Stage::None) {
+    std::snprintf(timeDiagnosticText_, sizeof(timeDiagnosticText_), tr(STR_WEREAD_TIME_DIAGNOSTIC),
+                  status.diagnostic.name(), status.diagnostic.error, status.diagnostic.http);
+  } else
+    timeDiagnosticText_[0] = '\0';
+  state_ = status.running ? State::TimeUploading : State::TimeResult;
+  if (!status.running) timeInputBarrier_ = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+  requestUpdate();
+}
+
+const char* WeReadProgressSyncActivity::timeMessage() const {
+  if (serviceMode_) {
+    using Q = WeReadTime::TimeQueue::State;
+    if (timeQueueState_ == Q::Complete) return tr(STR_WEREAD_SERVICE_ACCEPTED);
+    if (timeQueueState_ == Q::Paused) return tr(STR_WEREAD_SERVICE_RETRY);
+  }
+  if (timeIssue_ == WeReadTime::TimeTransaction::Issue::LowSpace) return tr(STR_WEREAD_TIME_LOW_SPACE);
+  if (timeIssue_ == WeReadTime::TimeTransaction::Issue::BaselineIncomplete)
+    return tr(STR_WEREAD_TIME_BASELINE_MISSING);
+  using Q = WeReadTime::TimeQueue::State;
+  switch (timeQueueState_) {
+    case Q::Complete: return tr(STR_WEREAD_TIME_QUEUE_DONE);
+    case Q::Paused: return timeDiagnosticText_[0] ? timeDiagnosticText_ : tr(STR_WEREAD_TIME_QUEUE_PAUSED);
+    case Q::Uncertain:
+      switch (timeIssue_) {
+        case WeReadTime::TimeTransaction::Issue::Expired: return tr(STR_WEREAD_TIME_EXPIRED);
+        case WeReadTime::TimeTransaction::Issue::ClockInvalid: return tr(STR_WEREAD_TIME_CLOCK_INVALID);
+        case WeReadTime::TimeTransaction::Issue::ReadbackFailed: return tr(STR_WEREAD_TIME_READ_FAILED);
+        case WeReadTime::TimeTransaction::Issue::Mismatch: return tr(STR_WEREAD_TIME_MISMATCH);
+        case WeReadTime::TimeTransaction::Issue::None:
+        case WeReadTime::TimeTransaction::Issue::BaselineIncomplete:
+        case WeReadTime::TimeTransaction::Issue::LowSpace:
+        case WeReadTime::TimeTransaction::Issue::UnknownWrite: return tr(STR_WEREAD_TIME_UNCERTAIN);
+      }
+      return tr(STR_WEREAD_TIME_UNCERTAIN);
+    case Q::StorageError: return tr(STR_WEREAD_TIME_STORAGE_ERROR);
+    case Q::Selecting: return tr(STR_WEREAD_TIME_QUEUE_AUDIT);
+    case Q::Idle: case Q::Running: break;
+  }
+  using T = WeReadTime::TimeTransaction::State;
+  const auto phase = timeResult_;
+  switch (phase) {
+    case T::Idle: case T::Preparing: return tr(STR_WEREAD_TIME_PREPARING);
+    case T::Waiting: return tr(STR_WEREAD_TIME_WAITING);
+    case T::RetryWait: return tr(STR_WEREAD_TIME_PREPARING);
+    case T::Baseline: return tr(STR_WEREAD_TIME_FETCH_STATS);
+    case T::Reserving: return tr(STR_WEREAD_TIME_RESERVING);
+    case T::Entering: case T::Sending: return tr(STR_WEREAD_TIME_SENDING);
+    case T::ReadbackWait: case T::ReadingBack: return tr(STR_WEREAD_TIME_VERIFYING);
+    case T::Confirmed: return tr(STR_WEREAD_TIME_CONFIRMED);
+    case T::NotSent: case T::Cancelled: return tr(STR_WEREAD_TIME_NO_REQUEST);
+    case T::Uncertain: return tr(STR_WEREAD_TIME_UNCERTAIN);
+    case T::StorageError: return tr(STR_WEREAD_TIME_STORAGE_ERROR);
+  }
+  return tr(STR_WEREAD_TIME_REVIEW);
+}
 
 void WeReadProgressSyncActivity::launchWifiSelection() {
   state_ = State::WifiSelection;
@@ -177,6 +407,14 @@ void WeReadProgressSyncActivity::launchWifiSelection() {
 }
 
 void WeReadProgressSyncActivity::onWifiSelectionComplete(const bool connected) {
+  if (resumeTimeAfterWifi_) {
+    resumeTimeAfterWifi_ = false;
+    state_ = connected ? State::TimeConfirm : State::TimeResult;
+    timeInputBarrier_ = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+    requestUpdate();
+    return;
+  }
+
   if (!connected || WiFi.status() != WL_CONNECTED) {
     returnToReader();
     return;
@@ -194,6 +432,36 @@ void WeReadProgressSyncActivity::startSync() {
     requestUpdate();
     return;
   }
+  if (!timeChecked_) {
+    timeChecked_ = true;
+    // Fixed <7 KiB scratch: heap-scoped so TLS does not share it with the task
+    // stack. Released before position synchronization; no history-sized data.
+    timeQuery_ = makeUniqueNoThrow<WeReadTimeCloud::Query>();
+    if (!timeQuery_) LOG_ERR("WRTime", "OOM: cloud query (%u bytes)",
+                             static_cast<unsigned>(sizeof(WeReadTimeCloud::Query)));
+    struct LoginScratch {
+      WeReadStore::Session session;
+      char cookie[896] = {};
+      ~LoginScratch() {
+        session.clear();
+        auto* p = static_cast<volatile char*>(cookie);
+        for (size_t i = 0; i < sizeof(cookie); ++i) p[i] = 0;
+      }
+    };
+    // 1728 bytes, once per entry, freed before any TLS call. Avoids a large
+    // frame on the small main-task stack; no persistent duplicate credentials.
+    auto login = makeUniqueNoThrow<LoginScratch>();
+    if (!login) LOG_ERR("WRTime", "OOM: login scratch (%u bytes)", static_cast<unsigned>(sizeof(LoginScratch)));
+    if (timeQuery_ && login && WeReadStore::loadSession(login->session) && login->session.valid() &&
+        login->session.cookieHeader(login->cookie, sizeof(login->cookie)) &&
+        timeQuery_->begin(login->cookie, time(nullptr))) {
+      state_ = State::CheckingTime;
+      requestUpdate();
+      return;
+    }
+    cloudTimeResult_ = timeQuery_ ? timeQuery_->result() : WeReadTimeCloud::Result::Unavailable;
+    timeQuery_.reset();
+  }
   if (!operation_.beginProgressSync(bookId_, input_, syncMode_)) {
     error_ = operation_.error();
     state_ = error_ == WeReadClient::Error::SessionExpired ? State::LoginRequired : State::Failed;
@@ -201,6 +469,28 @@ void WeReadProgressSyncActivity::startSync() {
     return;
   }
   state_ = State::Syncing;
+  requestUpdate();
+}
+
+void WeReadProgressSyncActivity::advanceTimeQuery() {
+  // Paint feedback before synchronous HTTPS (20 s timeout per read). Back is
+  // handled between requests, not claimed to interrupt a blocking TLS call.
+  requestUpdateAndWait();
+  {
+    RenderLock renderBarrier(*this);
+    if (auto* fontCache = renderer.getFontCacheManager()) fontCache->clearCache();
+    cloudTimeResult_ = timeQuery_->step();
+  }
+  if (cloudTimeResult_ == WeReadTimeCloud::Result::Pending) {
+    requestUpdate();
+    return;
+  }
+  if (cloudTimeResult_ == WeReadTimeCloud::Result::Ready) cloudTime_ = timeQuery_->snapshot();
+  LOG_INF("WRTime", "Cloud preflight result=%u month=%llu today=%llu present=%u; no timed request sent",
+          static_cast<unsigned>(cloudTimeResult_), static_cast<unsigned long long>(cloudTime_.monthSeconds),
+          static_cast<unsigned long long>(cloudTime_.daySeconds), static_cast<unsigned>(cloudTime_.hasDay));
+  timeQuery_.reset();
+  state_ = State::Starting;
   requestUpdate();
 }
 
@@ -394,11 +684,91 @@ const char* WeReadProgressSyncActivity::errorMessage() const {
 }
 
 void WeReadProgressSyncActivity::loop() {
+  if (timeInputBarrier_) {
+    if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) timeInputBarrier_ = false;
+    return;
+  }
   switch (state_) {
+    case State::TimeConfirm: {
+      if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+        state_ = State::Success;
+        requestUpdate();
+        return;
+      }
+      const auto& metrics = UITheme::getInstance().getMetrics();
+      const auto content =
+          SubpageLayout::contentRect(UITheme::getInstance().getScreenSafeArea(renderer, true, false), metrics);
+      int row = -1;
+      const bool tapped = mappedInput.rowTouch(row, content.y + content.height - metrics.menuRowHeight,
+                                               metrics.menuRowHeight, 1, content.x, content.x + content.width,
+                                               metrics.menuRowHeight) == MappedInputManager::RowTouch::Tap;
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || tapped) startTimeUpload();
+      return;
+    }
+    case State::TimeUploading: {
+      const auto& metrics = UITheme::getInstance().getMetrics();
+      const auto content =
+          SubpageLayout::contentRect(UITheme::getInstance().getScreenSafeArea(renderer, true, false), metrics);
+      for (int action = 0; action < 2; ++action) {
+        const auto rect = timeActionRect(content, metrics.menuRowHeight, action);
+        int row = -1;
+        if (mappedInput.rowTouch(row, rect.y, rect.height, 1, rect.x, rect.x + rect.width, rect.height) ==
+            MappedInputManager::RowTouch::Tap) {
+          if (action == 0)
+            returnToReader();
+          else
+            WeReadTimeSync::pause();
+          return;
+        }
+      }
+      if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+        returnToReader();
+        return;
+      }
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) WeReadTimeSync::pause();
+      advanceTimeUpload();
+      return;
+    }
+    case State::TimeResult: {
+      const auto& metrics = UITheme::getInstance().getMetrics();
+      const auto content =
+          SubpageLayout::contentRect(UITheme::getInstance().getScreenSafeArea(renderer, true, false), metrics);
+      int row = -1;
+      const bool tapped = mappedInput.rowTouch(row, content.y + content.height - metrics.menuRowHeight,
+                                               metrics.menuRowHeight, 1, content.x, content.x + content.width,
+                                               metrics.menuRowHeight) == MappedInputManager::RowTouch::Tap;
+      if (!timeCollectionFailed_ && selectedTimeDay_ &&
+          (mappedInput.wasReleased(MappedInputManager::Button::NavNext) || tapped)) {
+        timeBatchUsed_ = false;
+        if (WiFi.status() != WL_CONNECTED) {
+          resumeTimeAfterWifi_ = true;
+          wifiActivated_ = true;
+          launchWifiSelection();
+          return;
+        }
+        state_ = State::TimeConfirm;
+        timeInputBarrier_ = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+        requestUpdate();
+        return;
+      }
+      int x = 0, y = 0;
+      if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+          mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y))
+        returnToReader();
+      return;
+    }
     case State::WifiSelection:
       return;
     case State::Starting:
       startSync();
+      return;
+    case State::CheckingTime:
+      if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+        timeQuery_.reset();
+        returnToReader();
+        return;
+      }
+      advanceTimeQuery();
       return;
     case State::Syncing:
       if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -440,7 +810,25 @@ void WeReadProgressSyncActivity::loop() {
       }
       return;
     }
-    case State::Success:
+    case State::Success: {
+      if (!timeCollectionFailed_ && selectedTimeDay_ && !timeBatchUsed_) {
+        const auto& metrics = UITheme::getInstance().getMetrics();
+        const auto content = SubpageLayout::contentRect(UITheme::getInstance().getScreenSafeArea(renderer, true, false), metrics);
+        int row = -1;
+        const bool tapped = mappedInput.rowTouch(row, content.y + content.height - metrics.menuRowHeight,
+            metrics.menuRowHeight, 1, content.x, content.x + content.width, metrics.menuRowHeight) ==
+            MappedInputManager::RowTouch::Tap;
+        if (mappedInput.wasReleased(MappedInputManager::Button::NavNext) || tapped) {
+          state_ = State::TimeConfirm;
+          timeInputBarrier_ = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+          requestUpdate(); return;
+        }
+      }
+      int x = 0, y = 0;
+      if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+          mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) returnToReader();
+      return;
+    }
     case State::LoginRequired: {
       int x = 0;
       int y = 0;
@@ -480,6 +868,71 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
   const int titleHeight = renderer.getLineHeight(UI_12_FONT_ID);
 
   switch (state_) {
+    case State::TimeConfirm:
+    case State::TimeUploading:
+    case State::TimeResult: {
+      const int top = content.y + SubpageLayout::sectionGap(metrics);
+      const int rowTop = top + titleHeight + 12;
+      const int rowStep = renderer.getLineHeight(UI_10_FONT_ID) + 6;
+      // Fixed stack text; existing UI layout and font metrics remain unchanged.
+      char waitingTitle[96];
+      const char* title = state_ == State::TimeConfirm
+                              ? (serviceMode_ ? tr(STR_WEREAD_SERVICE_CONFIRM) : tr(STR_WEREAD_TIME_CONFIRM_ALL))
+                              : timeMessage();
+      if (state_ == State::TimeUploading && timeResult_ == WeReadTime::TimeTransaction::State::Waiting) {
+        snprintf(waitingTitle, sizeof(waitingTitle), tr(STR_WEREAD_TIME_WAITING_FMT), unsigned(timeWaitSeconds_));
+        title = waitingTitle;
+      }
+      if (state_ == State::TimeUploading && timeResult_ == WeReadTime::TimeTransaction::State::RetryWait) {
+        snprintf(waitingTitle, sizeof(waitingTitle), tr(STR_WEREAD_TIME_READ_RETRY_FMT),
+                 unsigned(timePreparationRetries_), unsigned(timeWaitSeconds_));
+        title = waitingTitle;
+      }
+      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, top,
+          title, true, EpdFontFamily::BOLD);
+      char line[112];
+      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_PENDING_FMT),
+          static_cast<unsigned long long>(pendingTimeSeconds_ / 60), unsigned(pendingTimeSeconds_ % 60));
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop, line);
+      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_DEVICE_FMT),
+          static_cast<unsigned long long>(deviceConfirmedSeconds_), static_cast<unsigned long long>(deviceUnknownSeconds_));
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep, line);
+      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_EXTERNAL_FMT),
+          static_cast<unsigned long long>(externalConfirmedSeconds_), static_cast<unsigned long long>(externalUnknownSeconds_));
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 2, line);
+      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_RUN_FMT),
+          static_cast<unsigned long long>(timeRunConfirmed_ / 60), unsigned(timeRunConfirmed_ % 60));
+      if (serviceMode_) snprintf(line, sizeof(line), tr(STR_WEREAD_SERVICE_TOTALS),
+          static_cast<unsigned long long>(servicePendingSeconds_), static_cast<unsigned long long>(serviceConfirmedSeconds_));
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 3,
+          line);
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 4,
+          tr(STR_WEREAD_TIME_TODAY_NOTICE));
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 5,
+          tr(STR_WEREAD_TIME_OTHER_CLIENTS));
+      if (state_ == State::TimeConfirm) {
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID,
+            content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_UPLOAD_30), true, EpdFontFamily::BOLD);
+      } else if (state_ == State::TimeUploading) {
+        for (int action = 0; action < 2; ++action) {
+          const auto rect = timeActionRect(content, metrics.menuRowHeight, action);
+          UITheme::drawCenteredText(
+              renderer, rect, UI_10_FONT_ID, rect.y,
+              action == 0 ? tr(STR_WEREAD_TIME_BACKGROUND_READ) : tr(STR_WEREAD_TIME_BACKGROUND_PAUSE), true,
+              EpdFontFamily::BOLD);
+        }
+      } else if (state_ == State::TimeResult && !timeCollectionFailed_ && selectedTimeDay_) {
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID,
+            content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_RESUME), true, EpdFontFamily::BOLD);
+      }
+      break;
+    }
+    case State::CheckingTime:
+      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, SubpageLayout::centeredTop(content, titleHeight),
+                                timeQuery_ && timeQuery_->readingStats() ? tr(STR_WEREAD_TIME_FETCH_STATS)
+                                                                        : tr(STR_WEREAD_TIME_FETCH_KEY),
+                                true, EpdFontFamily::BOLD);
+      break;
     case State::WifiSelection:
     case State::Starting:
     case State::Syncing:
@@ -524,17 +977,49 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
       break;
     }
     case State::Success: {
-      const int resultY = SubpageLayout::centeredTop(content, titleHeight) - titleHeight;
+      const int resultY = content.y + SubpageLayout::sectionGap(metrics);
+      const int rowTop = resultY + titleHeight + 12;
+      const int rowStep = renderer.getLineHeight(UI_10_FONT_ID) + 6;
       UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, resultY, resultMessage(), true,
                                 EpdFontFamily::BOLD);
       char pending[96];
-      snprintf(pending, sizeof(pending), tr(STR_WEREAD_TIME_PENDING_FMT),
-               static_cast<unsigned long long>(pendingTimeSeconds_ / 60),
-               static_cast<unsigned>(pendingTimeSeconds_ % 60));
-      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, resultY + titleHeight * 3, pending, true);
-      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, resultY + titleHeight * 4,
-                                timeCollectionFailed_ ? tr(STR_WEREAD_TIME_REVIEW) : tr(STR_WEREAD_TIME_NOT_SENT),
-                                true);
+      if (timeCollectionFailed_) {
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop,
+            timeHostPaused_ ? tr(STR_WEREAD_TIME_HOST_PAUSED) : tr(STR_WEREAD_TIME_REVIEW), true);
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep,
+            tr(STR_WEREAD_TIME_COUNTERS_UNAVAILABLE), true);
+      } else {
+        snprintf(pending, sizeof(pending), tr(STR_WEREAD_TIME_PENDING_FMT),
+                 static_cast<unsigned long long>(pendingTimeSeconds_ / 60),
+                 static_cast<unsigned>(pendingTimeSeconds_ % 60));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep, pending, true);
+        snprintf(pending, sizeof(pending), tr(STR_WEREAD_TIME_EXTERNAL_FMT),
+                 static_cast<unsigned long long>(externalConfirmedSeconds_),
+                 static_cast<unsigned long long>(externalUnknownSeconds_));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop, pending, true);
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 2,
+                                 tr(STR_WEREAD_TIME_NOT_SENT), true);
+        snprintf(pending, sizeof(pending), tr(STR_WEREAD_TIME_DEVICE_FMT),
+                 static_cast<unsigned long long>(deviceConfirmedSeconds_),
+                 static_cast<unsigned long long>(deviceUnknownSeconds_));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 4, pending);
+      }
+      if (!timeCollectionFailed_ && selectedTimeDay_ && !timeBatchUsed_) {
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID,
+            content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_UPLOAD_30), true, EpdFontFamily::BOLD);
+      }
+      const char* cloudStatus = tr(STR_WEREAD_TIME_CLOUD_UNAVAILABLE);
+      if (cloudTimeResult_ == WeReadTimeCloud::Result::Ready) {
+        if (cloudTime_.hasDay) {
+          snprintf(pending, sizeof(pending), tr(STR_WEREAD_TIME_CLOUD_TODAY_FMT),
+                   static_cast<unsigned long long>(cloudTime_.daySeconds / 60),
+                   static_cast<unsigned>(cloudTime_.daySeconds % 60));
+          cloudStatus = pending;
+        } else cloudStatus = tr(STR_WEREAD_TIME_CLOUD_NO_DAY);
+      } else if (cloudTimeResult_ == WeReadTimeCloud::Result::LoginRequired) {
+        cloudStatus = tr(STR_WEREAD_TIME_CLOUD_AUTH);
+      }
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 3, cloudStatus, true);
       break;
     }
     case State::LoginRequired:
@@ -547,14 +1032,23 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
       break;
   }
 
-  if (state_ == State::ChoosingDirection) {
+  if (state_ == State::TimeConfirm) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CONFIRM), "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  } else if (state_ == State::TimeUploading || state_ == State::TimeResult) {
+    const bool resumable = state_ == State::TimeResult && !timeCollectionFailed_ && selectedTimeDay_;
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), state_ == State::TimeUploading ? tr(STR_WEREAD_TIME_BACKGROUND_PAUSE) : "", "", resumable ? tr(STR_WEREAD_TIME_RESUME) : "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  } else if (state_ == State::ChoosingDirection) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state_ == State::Success || state_ == State::LoginRequired || state_ == State::Failed) {
     const bool retryable =
         state_ == State::Failed && (error_ == WeReadClient::Error::Network || error_ == WeReadClient::Error::Clock ||
                                     error_ == WeReadClient::Error::Unavailable);
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", retryable ? tr(STR_RETRY) : "");
+    const bool timeAvailable = state_ == State::Success && !timeCollectionFailed_ && selectedTimeDay_ && !timeBatchUsed_;
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "",
+        timeAvailable ? tr(STR_SELECT) : retryable ? tr(STR_RETRY) : "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
   renderer.displayBuffer();

@@ -24,6 +24,7 @@
 #endif
 #ifdef ENABLE_CHINESE_VERSION
 #include "apps/weread/WeReadActivity.h"
+#include "apps/weread/webapi/WeReadTimeSync.h"
 #endif
 #include "apps/gomoku/GomokuMenuActivity.h"
 #include "apps/minesweeper/MinesweeperMenuActivity.h"
@@ -112,6 +113,16 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
+#ifdef ENABLE_CHINESE_VERSION
+  WeReadTimeSync::poll();
+  static bool syncIndicatorVisible = false;
+  const bool syncIndicatorNow = WeReadTimeSync::showSyncIndicator();
+  if (syncIndicatorNow != syncIndicatorVisible) {
+    syncIndicatorVisible = syncIndicatorNow;
+    // One refresh per start/stop, never for batch progress or a countdown.
+    if (currentActivity && currentActivity->isReaderActivity()) requestUpdate();
+  }
+#endif
   if (mappedInput.consumeSuppressedRelease()) return;
 
   if (currentActivity && currentActivity->requiresExclusiveStorageLoop()) {
@@ -159,6 +170,17 @@ void ActivityManager::loop() {
   }
 
   while (pendingAction.load() != PendingAction::None) {
+#ifdef ENABLE_CHINESE_VERSION
+    const Activity* destination = pendingActivity.get();
+    if (pendingAction.load() == PendingAction::Pop && !stackActivities.empty())
+      destination = stackActivities.back().get();
+    // Reading and its local menus may coexist with the immutable time snapshot.
+    // Other screens can change credentials, take over Wi-Fi/raw SD or reboot.
+    const bool readingDestination =
+        destination && WeReadTimeSync::canContinueIn(destination->name.c_str(), destination->isReaderActivity(),
+                                                     destination->isHomeActivity());
+    if (!readingDestination && !WeReadTimeSync::prepareToLeaveReading()) break;
+#endif
     if (pendingAction.load() == PendingAction::Pop) {
       if (RenderLock::peek()) break;
       RenderLock lock;
@@ -544,7 +566,12 @@ void ActivityManager::popActivity() {
   pendingAction = PendingAction::Pop;
 }
 
-bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
+bool ActivityManager::preventAutoSleep() const {
+#ifdef ENABLE_CHINESE_VERSION
+  if (WeReadTimeSync::active()) return true;
+#endif
+  return currentActivity && currentActivity->preventAutoSleep();
+}
 
 bool ActivityManager::requiresExclusiveStorageLoop() const {
   return currentActivity && currentActivity->requiresExclusiveStorageLoop();
@@ -563,6 +590,9 @@ bool ActivityManager::keepsBluetoothAlive() const {
 }
 
 bool ActivityManager::deferBluetoothStart() const {
+#ifdef ENABLE_CHINESE_VERSION
+  if (WeReadTimeSync::active()) return true;
+#endif
   return std::any_of(stackActivities.begin(), stackActivities.end(),
                      [](const auto& activity) { return activity->deferBluetoothStart(); }) ||
          (currentActivity && currentActivity->deferBluetoothStart());

@@ -13,6 +13,9 @@ class ByteLog {
   virtual ReadState size(uint64_t& length) = 0;
   virtual bool read(uint64_t offset, uint8_t* out, size_t count) = 0;
   virtual bool appendAndSync(const uint8_t* data, size_t count) = 0;
+  // Pre-send budget only. Acknowledgement/verification must still be allowed
+  // to use reserved space after a network write has already happened.
+  virtual bool canReserve(size_t) { return true; }
 };
 
 // Append-only checkpoints: a torn tail blocks reporting instead of silently

@@ -11,9 +11,9 @@
 #include <strings.h>
 
 #include <limits>
-#else
-#include <esp_crt_bundle.h>
 #endif
+#include <esp_crt_bundle.h>
+#include <esp_http_client.h>
 
 namespace {
 
@@ -404,7 +404,7 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   return WeReadHttpClient::Result::Ok;
 }
-#else
+#endif
 constexpr int HTTP_RX_BUF = 2048;
 constexpr int HTTP_TX_BUF = 1024;
 
@@ -436,13 +436,27 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
                                     esp_http_client_handle_t& client, char* sessionHost, const size_t sessionHostSize,
                                     uint32_t& newConnections, uint32_t& reusedRequests) {
   status = -1;
+  using Stage = WeReadHttpClient::NetworkDiagnostic::Stage;
+  const auto stage = [&](Stage value) { if (options.diagnostic) options.diagnostic->stage = value; };
+  const auto failure = [&](int code) {
+    if (options.diagnostic) {
+      options.diagnostic->error = code;
+      if (client) {
+        options.diagnostic->socket = esp_http_client_get_errno(client);
+        esp_http_client_get_and_clear_last_tls_error(client, &options.diagnostic->tls, &options.diagnostic->verify);
+      }
+    }
+    cleanupClient(client);
+    return WeReadHttpClient::Result::NetworkError;
+  };
+  stage(Stage::Input);
   char host[128];
   const char* path = nullptr;
   if (!url || !options.method || (strcmp(options.method, "GET") != 0 && strcmp(options.method, "POST") != 0) ||
       (options.bodySize > 0 && !options.body) || (options.headerCount > 0 && !options.headers) ||
       options.timeoutMs <= 0 || !options.readBuffer || options.readBufferSize == 0 ||
       !copyHttpsUrlParts(url, host, sizeof(host), path) || !sessionHost || sessionHostSize < sizeof(host)) {
-    return WeReadHttpClient::Result::NetworkError;
+    return failure(ESP_ERR_INVALID_ARG);
   }
 
   if (client && strcmp(sessionHost, host) != 0) {
@@ -455,13 +469,13 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   RequestEventContext eventContext{&onHeader};
   const esp_http_client_method_t method = strcmp(options.method, "POST") == 0 ? HTTP_METHOD_POST : HTTP_METHOD_GET;
+  stage(Stage::Setup);
   if (client) {
     if (esp_http_client_set_url(client, url) != ESP_OK || esp_http_client_set_method(client, method) != ESP_OK ||
         esp_http_client_set_timeout_ms(client, options.timeoutMs) != ESP_OK ||
         esp_http_client_set_user_data(client, &eventContext) != ESP_OK) {
       LOG_ERR("HTTP", "verified request reuse setup failed");
-      cleanupClient(client);
-      return WeReadHttpClient::Result::NetworkError;
+      return failure(ESP_FAIL);
     }
   } else {
     esp_http_client_config_t config = {};
@@ -475,10 +489,11 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
     config.event_handler = onRequestEvent;
     config.user_data = &eventContext;
 
+    stage(Stage::Init);
     client = esp_http_client_init(&config);
     if (!client) {
       LOG_ERR("HTTP", "verified request init failed");
-      return WeReadHttpClient::Result::NetworkError;
+      return failure(ESP_ERR_NO_MEM);
     }
   }
   if (reused) {
@@ -488,51 +503,51 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
   }
   memcpy(sessionHost, host, strlen(host) + 1);
 
+  stage(Stage::Setup);
   if (esp_http_client_set_header(client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION) != ESP_OK) {
-    cleanupClient(client);
-    return WeReadHttpClient::Result::NetworkError;
+    return failure(ESP_FAIL);
   }
   for (size_t i = 0; i < options.headerCount; ++i) {
     const auto& header = options.headers[i];
     if (header.name && header.value && esp_http_client_set_header(client, header.name, header.value) != ESP_OK) {
-      cleanupClient(client);
-      return WeReadHttpClient::Result::NetworkError;
+      return failure(ESP_FAIL);
     }
   }
 
+  stage(Stage::Open);
   esp_err_t err = esp_http_client_open(client, static_cast<int>(options.bodySize));
   if (err != ESP_OK) {
     LOG_ERR("HTTP", "verified request open failed: %s", esp_err_to_name(err));
-    cleanupClient(client);
-    return WeReadHttpClient::Result::NetworkError;
+    return failure(err);
   }
 
   size_t sent = 0;
+  stage(Stage::Write);
   while (sent < options.bodySize) {
     const int written = esp_http_client_write(client, reinterpret_cast<const char*>(options.body + sent),
                                               static_cast<int>(options.bodySize - sent));
     if (written <= 0) {
       LOG_ERR("HTTP", "verified request body write failed after %u bytes", static_cast<unsigned>(sent));
-      cleanupClient(client);
-      return WeReadHttpClient::Result::NetworkError;
+      return failure(written);
     }
     sent += static_cast<size_t>(written);
   }
 
-  if (esp_http_client_fetch_headers(client) < 0) {
+  stage(Stage::Headers);
+  const int64_t headerResult = esp_http_client_fetch_headers(client);
+  if (headerResult < 0) {
     LOG_ERR("HTTP", "verified request header read failed");
-    cleanupClient(client);
-    return WeReadHttpClient::Result::NetworkError;
+    return failure(static_cast<int>(headerResult));
   }
   status = esp_http_client_get_status_code(client);
 
+  stage(Stage::Body);
   while (true) {
     const int got = esp_http_client_read(client, reinterpret_cast<char*>(options.readBuffer),
                                          static_cast<int>(options.readBufferSize));
     if (got < 0) {
       LOG_ERR("HTTP", "verified request read failed");
-      cleanupClient(client);
-      return WeReadHttpClient::Result::NetworkError;
+      return failure(got);
     }
     if (got == 0) break;
     if (onData && !onData(options.readBuffer, static_cast<size_t>(got))) {
@@ -542,6 +557,11 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
   }
 
   const bool complete = esp_http_client_is_complete_data_received(client);
+  if (!complete) {
+    stage(Stage::Incomplete);
+    return failure(ESP_FAIL);
+  }
+  stage(Stage::Complete);
   const bool persistent = complete && esp_http_client_is_persistent_connection(client);
   esp_http_client_set_user_data(client, nullptr);
   if (!persistent) {
@@ -553,7 +573,6 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   return complete ? WeReadHttpClient::Result::Ok : WeReadHttpClient::Result::NetworkError;
 }
-#endif
 
 }  // namespace
 
@@ -628,6 +647,25 @@ Result request(const char* url, const RequestOptions& options, const DataCallbac
   }
   Session session;
   return request(session, url, options, onData, onHeader, status);
+}
+
+Result requestVerified(const char* url, const RequestOptions& options, const DataCallback& onData,
+                       const HeaderCallback& onHeader, int& status) {
+  if (options.diagnostic) *options.diagnostic = {};
+  if (!networkReady()) {
+    if (options.diagnostic) options.diagnostic->stage = NetworkDiagnostic::Stage::Network;
+    status = -1;
+    return Result::NetworkError;
+  }
+  esp_http_client_handle_t client = nullptr;
+  char host[128] = {};
+  uint32_t connections = 0, reused = 0;
+  const uint32_t started = millis();
+  const Result result = runRequest(url, options, onData, onHeader, status, client, host, sizeof(host),
+                                   connections, reused);
+  if (options.diagnostic) options.diagnostic->elapsedMs = uint32_t(millis() - started);
+  cleanupClient(client);
+  return result;
 }
 
 Result request(Session& session, const char* url, const RequestOptions& options, const DataCallback& onData,

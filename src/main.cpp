@@ -18,6 +18,9 @@
 #include <Memory.h>
 #include <SPI.h>
 #include <WiFi.h>
+#ifdef ENABLE_CHINESE_VERSION
+#include "activities/apps/weread/webapi/WeReadTimeSync.h"
+#endif
 #if FREEINK_CAP_TOUCH
 #include <esp_sntp.h>
 #endif
@@ -185,6 +188,9 @@ enum class BootResume : uint8_t {
 // device back up against the user's sleep gesture. Never cleared:
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
+#ifdef ENABLE_CHINESE_VERSION
+static bool timeSyncSleepPending = false;
+#endif
 
 #if FREEINK_CAP_TOUCH
 static bool finishWifiSessionWithoutRestart() {
@@ -310,6 +316,14 @@ static bool loadSleepFrameBuffer() {
 
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
+#ifdef ENABLE_CHINESE_VERSION
+  // Drain one in-flight request before sleep tears down Wi-Fi and storage.
+  if (!WeReadTimeSync::prepareToLeaveReading()) {
+    timeSyncSleepPending = true;
+    return;
+  }
+  timeSyncSleepPending = false;
+#endif
   bleinput::stop();
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
@@ -795,6 +809,14 @@ void setup() {
 }
 
 void loop() {
+#ifdef ENABLE_CHINESE_VERSION
+  if (timeSyncSleepPending) {
+    WeReadTimeSync::poll();
+    enterDeepSleep(false);
+    delay(10);
+    return;
+  }
+#endif
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;

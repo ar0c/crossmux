@@ -1,4 +1,6 @@
 #include "WeReadClient.h"
+#include "WeReadDeviceTimeTransport.h"
+#include "WeReadTimeAck.h"
 
 #ifdef ENABLE_CHINESE_VERSION
 
@@ -305,7 +307,8 @@ bool absorbSetCookie(WeReadStore::Session* session, const char* headerName, cons
 Error requestOnce(const char* method, const char* path, const uint8_t* body, const size_t bodySize,
                   WeReadStore::Session* session, const char* referer, ResponseSink& sink, int& status, char* cookie,
                   const size_t cookieSize, char* url, const size_t urlSize, uint8_t* readBuffer,
-                  const size_t readBufferSize, WeReadHttpClient::Session* reusableSession = nullptr) {
+                  const size_t readBufferSize, WeReadHttpClient::Session* reusableSession = nullptr,
+                  const bool verifiedTls = false, WeReadHttpClient::NetworkDiagnostic* network = nullptr) {
   if (!method || !path || !cookie || cookieSize == 0 || !url || urlSize == 0 || !readBuffer || readBufferSize == 0) {
     return Error::Protocol;
   }
@@ -328,6 +331,7 @@ Error requestOnce(const char* method, const char* path, const uint8_t* body, con
   options.timeoutMs = kRequestTimeoutMs;
   options.readBuffer = readBuffer;
   options.readBufferSize = readBufferSize;
+  options.diagnostic = network;
 
   if (!sink.reset(sink.ctx)) return Error::SdCard;
   const int urlLength = snprintf(url, urlSize, "%s%s", kHost, path);
@@ -337,7 +341,9 @@ Error requestOnce(const char* method, const char* path, const uint8_t* body, con
   const auto onHeader = [session, cookie, cookieSize, &cookiesOk](const char* name, const char* value) {
     cookiesOk = absorbSetCookie(session, name, value, cookie, cookieSize) && cookiesOk;
   };
-  const auto result = reusableSession
+  const auto result = verifiedTls
+                          ? WeReadHttpClient::requestVerified(url, options, onData, onHeader, status)
+                          : reusableSession
                           ? WeReadHttpClient::request(*reusableSession, url, options, onData, onHeader, status)
                           : WeReadHttpClient::request(url, options, onData, onHeader, status);
   if (result == WeReadHttpClient::Result::Ok) {
@@ -1346,7 +1352,7 @@ bool appendEncodedId(char* out, const size_t outSize, size_t& position, char* wo
 bool appendProgressQuery(char* out, const size_t outSize, char* work, const size_t workSize, const char* bookId,
                          const WeReadStore::TocRecord& chapter, const uint32_t chapterOffset, const uint32_t progress,
                          const uint32_t now, const char* psvts, const char* pclts, const char* token, const bool report,
-                         const uint64_t timestampMs, const uint32_t randomNumber) {
+                         const uint64_t timestampMs, const uint32_t randomNumber, const uint32_t seconds = 0) {
   size_t position = 0;
   out[0] = '\0';
   if (!makeWebAppId(work, workSize) || !appendText(out, outSize, position, "appId=") ||
@@ -1372,6 +1378,7 @@ bool appendProgressQuery(char* out, const size_t outSize, char* work, const size
   }
   if (report) {
     if (!appendText(out, outSize, position, "&rn=") || !appendUnsigned(out, outSize, position, randomNumber) ||
+        (seconds && (!appendText(out, outSize, position, "&rt=") || !appendUnsigned(out, outSize, position, seconds))) ||
         !appendText(out, outSize, position, "&sg=")) {
       return false;
     }
@@ -1392,7 +1399,7 @@ bool appendProgressQuery(char* out, const size_t outSize, char* work, const size
 bool makeProgressBody(const char* bookId, const WeReadStore::TocRecord& chapter, const uint32_t chapterOffset,
                       const float localFraction, const char* psvts, const char* pclts, const char* readerToken,
                       const bool report, char* body, const size_t bodySize, char* work, const size_t workSize,
-                      size_t& written) {
+                      size_t& written, const uint32_t seconds = 0, const uint32_t exactProgress = UINT32_MAX) {
   static constexpr char kDefaultReaderToken[] = "3c5c8717f3daf09iop3423zafeqoi";
   const uint32_t now = TimeUtils::getCurrentValidTimestamp();
   if (now == 0 || !isSafeProtocolToken(bookId) || !isSafeProtocolToken(chapter.chapterUid) ||
@@ -1400,15 +1407,17 @@ bool makeProgressBody(const char* bookId, const WeReadStore::TocRecord& chapter,
     return false;
   }
   const char* token = readerToken && readerToken[0] ? readerToken : kDefaultReaderToken;
+  if (seconds && (!report || !readerToken || !readerToken[0])) return false;
   if (!isSafeProtocolToken(token) || (pclts && pclts[0] && !isSafeProtocolToken(pclts))) return false;
   const float clampedFraction = std::max(0.0f, std::min(1.0f, localFraction));
-  const uint32_t progress = static_cast<uint32_t>(clampedFraction * 100.0f);
+  const uint32_t progress = exactProgress == UINT32_MAX ? static_cast<uint32_t>(clampedFraction * 100.0f) : exactProgress;
+  if (progress > 100) return false;
   const uint32_t randomNumber = report ? static_cast<uint32_t>(random(0, 1000)) : 0;
   const uint64_t timestampMs =
       report ? static_cast<uint64_t>(now) * 1000ULL + static_cast<uint32_t>(random(0, 1000)) : 0;
 
   if (!appendProgressQuery(body, bodySize, work, workSize, bookId, chapter, chapterOffset, progress, now, psvts, pclts,
-                           token, report, timestampMs, randomNumber)) {
+                           token, report, timestampMs, randomNumber, seconds)) {
     return false;
   }
   char signature[24];
@@ -1442,7 +1451,8 @@ bool makeProgressBody(const char* bookId, const WeReadStore::TocRecord& chapter,
   if (!appendText(body, bodySize, position, "\"")) return false;
   if (report) {
     if (!appendText(body, bodySize, position, ",\"ts\":") || !appendUnsigned(body, bodySize, position, timestampMs) ||
-        !appendText(body, bodySize, position, ",\"rn\":") || !appendUnsigned(body, bodySize, position, randomNumber)) {
+        !appendText(body, bodySize, position, ",\"rn\":") || !appendUnsigned(body, bodySize, position, randomNumber) ||
+        (seconds && (!appendText(body, bodySize, position, ",\"rt\":") || !appendUnsigned(body, bodySize, position, seconds)))) {
       return false;
     }
     const int sourceLength = snprintf(work, workSize, "%llu%u%s", static_cast<unsigned long long>(timestampMs),
@@ -4183,6 +4193,251 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
     }
   }
   return fail(Error::Protocol);
+}
+
+DeviceTimeTransport::~DeviceTimeTransport() { reset(); }
+void DeviceTimeTransport::reset() {
+  diagnostic_ = {};
+  session_.clear();
+  const auto wipe = [](void* data, size_t length) {
+    auto* p = static_cast<volatile uint8_t*>(data);
+    while (length--) *p++ = 0;
+  };
+  wipe(cookie_, sizeof(cookie_)); wipe(ps_, sizeof(ps_)); wipe(pc_, sizeof(pc_));
+  wipe(token_, sizeof(token_)); wipe(body_, sizeof(body_)); wipe(io_, sizeof(io_));
+  query_.clear();
+  querying_ = false;
+  identity_ = {}; remote_ = {}; chapter_ = {};
+  preparedAt_ = 0; preparedMs_ = 0;
+  enteredAtMs_ = 0;
+  reportEvidence_ = {};
+  referer_.clear();
+  phase_ = Phase::Login;
+}
+
+uint64_t DeviceTimeTransport::epochSeconds() const { return TimeUtils::getCurrentValidTimestamp(); }
+uint32_t DeviceTimeTransport::monotonicMs() const { return millis(); }
+bool DeviceTimeTransport::fresh() const {
+  const auto now = epochSeconds();
+  return preparedAt_ && now >= preparedAt_ && now - preparedAt_ <= 30 &&
+         uint32_t(monotonicMs() - preparedMs_) <= 30000 &&
+         !strcmp(session_.vid, identity_.account);
+}
+
+bool DeviceTimeTransport::retryablePreparation() const {
+  using D = WeReadTime::Diagnostic::Stage;
+  return phase_ == Phase::Failed && !reportEvidence_.attempted &&
+      (diagnostic_.stage == D::ReaderRequest || diagnostic_.stage == D::ProgressRequest) &&
+      diagnostic_.error == static_cast<int>(Error::Network) && diagnostic_.network.transientReadFailure();
+}
+
+WeReadTime::TimeTransport::Read DeviceTimeTransport::prepare(const WeReadTime::Identity& identity) {
+  using D = WeReadTime::Diagnostic::Stage;
+  if (phase_ != Phase::Login && (strcmp(identity.account, identity_.account) ||
+      strcmp(identity.book, identity_.book) || strcmp(identity.source, identity_.source) ||
+      identity.day != identity_.day)) { diagnostic_ = {D::Identity}; phase_ = Phase::Failed; return Read::Failed; }
+  switch (phase_) {
+    case Phase::Login: {
+      diagnostic_ = {D::Login};
+      WeReadTime::Ledger validation;
+      if (!validation.bind(identity.account, identity.book, identity.source, identity.day) ||
+          !WeReadStore::loadSession(session_) || !session_.valid() || strcmp(session_.vid, identity.account)) {
+        phase_ = Phase::Failed; return Read::Failed;
+      }
+      identity_ = identity;
+      if (!WeReadProtocol::encodeId(identity.book, md5Hex, url_, sizeof(url_))) {
+        diagnostic_ = {D::ReaderId};
+        phase_ = Phase::Failed; return Read::Failed;
+      }
+      referer_.reserve(256);
+      referer_ = kHost; referer_ += "/web/reader/"; referer_ += url_;
+      phase_ = Phase::Reader;
+      return Read::Pending;
+    }
+    case Phase::Reader: {
+      ReaderContextSink context(ps_, sizeof(ps_), pc_, sizeof(pc_), token_, sizeof(token_));
+      ResponseSink sink{&context, resetReaderContext, extractReaderContext, noOpFinish, Error::Protocol};
+      int status = 0;
+      WeReadHttpClient::NetworkDiagnostic network;
+      const auto error = requestOnce("GET", referer_.c_str() + strlen(kHost), nullptr, 0, &session_,
+                                    referer_.c_str(), sink, status, cookie_, sizeof(cookie_), url_, sizeof(url_),
+                                    io_, sizeof(io_), nullptr, true, &network);
+      // Unlike position-only sync there is NO guessed signing-token fallback.
+      diagnostic_ = {D::ReaderRequest, static_cast<int>(error), status};
+      diagnostic_.network = network;
+      if (error == Error::Ok && status == 200) {
+        diagnostic_ = {D::ReaderSignature, 0, status,
+          (context.psvts.complete() ? 1 : 0) | (context.token.complete() ? 2 : 0) |
+          (isSafeProtocolToken(ps_) ? 4 : 0) | (isSafeProtocolToken(token_) ? 8 : 0)};
+      }
+      if (error != Error::Ok || status != 200 || strcmp(session_.vid, identity_.account) ||
+          !context.psvts.complete() || !context.token.complete() || !isSafeProtocolToken(ps_) ||
+          !isSafeProtocolToken(token_) || (pc_[0] && !isSafeProtocolToken(pc_))) {
+        phase_ = Phase::Failed; return Read::Failed;
+      }
+      phase_ = Phase::Progress;
+      return Read::Pending;
+    }
+    case Phase::Progress: {
+      // One fallible parser per preparation, not per render/loop. Its bounded
+      // candidate stack is too large for the main task's call stack.
+      auto parser = makeUniqueNoThrow<WeReadProtocol::RemoteProgressParser>(identity_.book);
+      if (!parser) {
+        diagnostic_ = {D::ProgressMemory};
+        LOG_ERR("WRTime", "OOM: progress parser (%u bytes)", static_cast<unsigned>(sizeof(*parser)));
+        phase_ = Phase::Failed; return Read::Failed;
+      }
+      const int n = snprintf(body_, sizeof(body_), "/web/book/getProgress?bookId=%s&_=%llu", identity_.book,
+                             static_cast<unsigned long long>(epochSeconds()));
+      if (n <= 0 || size_t(n) >= sizeof(body_)) { phase_ = Phase::Failed; return Read::Failed; }
+      ResponseSink sink{parser.get(), resetRemoteProgress, feedRemoteProgress, noOpFinish, Error::Protocol};
+      int status = 0;
+      WeReadHttpClient::NetworkDiagnostic network;
+      const auto error = requestOnce("GET", body_, nullptr, 0, &session_, referer_.c_str(), sink, status,
+                                    cookie_, sizeof(cookie_), url_, sizeof(url_), io_, sizeof(io_), nullptr, true, &network);
+      diagnostic_ = {D::ProgressRequest, static_cast<int>(error), status};
+      diagnostic_.network = network;
+      if (error == Error::Ok && status == 200)
+        diagnostic_ = {D::ProgressPayload, parser->errorCode(), status};
+      if (error != Error::Ok || status != 200 || strcmp(session_.vid, identity_.account) ||
+          parser->errorCode() || !parser->complete() || !parser->progress().hasChapterOffset ||
+          !std::isfinite(parser->progress().percent)) {
+        phase_ = Phase::Failed; return Read::Failed;
+      }
+      remote_ = parser->progress();
+      parser.reset();
+      HalFile toc;
+      uint32_t count = 0;
+      if (!WeReadStore::openToc(WeReadStore::tocPath(identity_.book), toc, count)) {
+        diagnostic_ = {D::TocOpen};
+        phase_ = Phase::Failed; return Read::Failed;
+      }
+      bool found = false;
+      // Scan into the reusable chapter workspace; no vector of chapter records.
+      for (uint32_t i = 0; i < count; ++i) {
+        if (!WeReadStore::readTocRecord(toc, i, chapter_)) { diagnostic_ = {D::TocRead}; phase_ = Phase::Failed; return Read::Failed; }
+        if (!strcmp(chapter_.chapterUid, remote_.chapterUid)) { found = true; break; }
+      }
+      if (!found) { diagnostic_ = {D::ChapterMissing}; phase_ = Phase::Failed; return Read::Failed; }
+      if (remote_.percent < 0 || remote_.percent > 100) { diagnostic_ = {D::ProgressRange}; phase_ = Phase::Failed; return Read::Failed; }
+      if (std::fabs(remote_.percent - std::round(remote_.percent)) > 0.0001f) {
+        diagnostic_ = {D::ProgressFraction}; phase_ = Phase::Failed; return Read::Failed;
+      }
+      if (!WeReadStore::saveSession(session_)) { diagnostic_ = {D::SessionSave}; phase_ = Phase::Failed; return Read::Failed; }
+      // No local approximate chapter/offset is substituted for the cloud anchor.
+      preparedAt_ = epochSeconds(); preparedMs_ = monotonicMs();
+      phase_ = preparedAt_ ? Phase::Ready : Phase::Failed;
+      diagnostic_ = {preparedAt_ ? D::None : D::Clock};
+      return phase_ == Phase::Ready ? Read::Ready : Read::Failed;
+    }
+    case Phase::Ready: return Read::Ready;
+    case Phase::Entered: case Phase::Reported: case Phase::Failed: return Read::Failed;
+  }
+  return Read::Failed;
+}
+
+WeReadTime::TimeTransport::Read DeviceTimeTransport::snapshot(WeReadTime::AccountSnapshot& result) {
+  using D = WeReadTime::Diagnostic::Stage;
+  diagnostic_ = {querying_ && query_.readingStats() ? D::CloudStats : D::CloudKey};
+  if (phase_ != Phase::Ready && phase_ != Phase::Reported) return Read::Failed;
+  if (!querying_) {
+    if (strcmp(session_.vid, identity_.account) || !session_.cookieHeader(cookie_, sizeof(cookie_)) ||
+        !query_.begin(cookie_, epochSeconds())) { diagnostic_.error = static_cast<int>(query_.result()); return Read::Failed; }
+    querying_ = true;
+  }
+  const auto state = query_.step();
+  diagnostic_.error = static_cast<int>(state);
+  diagnostic_.http = query_.httpStatus();
+  if (state == WeReadTimeCloud::Result::Pending) return Read::Pending;
+  querying_ = false;
+  if (state != WeReadTimeCloud::Result::Ready) return Read::Failed;
+  const auto& cloud = query_.snapshot();
+  result = WeReadTime::cloudBaseline(cloud, identity_, epochSeconds());
+  diagnostic_.detail = cloud.hasDay ? 1 : 0;
+  return Read::Ready;
+}
+
+WeReadTime::TimeTransport::Write DeviceTimeTransport::enter() { return post(false); }
+WeReadTime::TimeTransport::Write DeviceTimeTransport::report(uint32_t seconds) { return post(true, seconds); }
+WeReadTime::TimeTransport::Write DeviceTimeTransport::post(bool timed, uint32_t seconds) {
+  diagnostic_ = {timed ? WeReadTime::Diagnostic::Stage::Report : WeReadTime::Diagnostic::Stage::Enter};
+  using Guard = WeReadTime::ReportEvidence::Guard;
+  if (timed) {
+    reportEvidence_ = {};
+    reportEvidence_.seconds = seconds;
+  }
+  if (timed ? phase_ != Phase::Entered || !seconds : phase_ != Phase::Ready) {
+    if (timed) reportEvidence_.guard = Guard::Phase;
+    return Write::Unknown;
+  }
+  if (!fresh()) {
+    if (timed) reportEvidence_.guard = Guard::StaleContext;
+    return Write::Unknown;
+  }
+  // Consume this phase before ANY HTTP work. No retry or reauthentication path.
+  phase_ = Phase::Failed;
+  // A missing reader pclts is a session value, not a per-request timestamp.
+  // Pin it before entry so crossing a second cannot change pc in the report.
+  if (!WeReadProtocol::hasUsablePclts(pc_)) {
+    if (timed) {
+      reportEvidence_.guard = Guard::Body;
+      return Write::Unknown;
+    }
+    char contextTime[24];
+    const int n = snprintf(contextTime, sizeof(contextTime), "%llu", static_cast<unsigned long long>(preparedAt_));
+    if (n <= 0 || size_t(n) >= sizeof(contextTime) ||
+        !WeReadProtocol::encodeId(contextTime, md5Hex, pc_, sizeof(pc_))) {
+      return Write::Unknown;
+    }
+  }
+  size_t length = 0;
+  if (!makeProgressBody(identity_.book, chapter_, remote_.chapterOffset, remote_.percent / 100.0f,
+                        ps_, pc_, token_, timed, body_, sizeof(body_), url_, sizeof(url_), length,
+                        timed ? seconds : 0, static_cast<uint32_t>(std::round(remote_.percent)))) {
+    if (timed) reportEvidence_.guard = Guard::Body;
+    return Write::Unknown;
+  }
+  struct AckSink { char* bytes; size_t size; } ack{acknowledgement_, 0};
+  ResponseSink sink{
+      &ack, [](void* raw) { static_cast<AckSink*>(raw)->size = 0; return true; },
+      [](void* raw, const uint8_t* data, size_t size) {
+        auto& out = *static_cast<AckSink*>(raw);
+        if (size > 512 - out.size) return false;
+        memcpy(out.bytes + out.size, data, size); out.size += size; return true;
+      }, noOpFinish, Error::Protocol};
+  int status = 0;
+  const uint32_t requestStartMs = monotonicMs();
+  if (timed) {
+    reportEvidence_.attempted = true;
+    reportEvidence_.prepareAgeMs = uint32_t(requestStartMs - preparedMs_);
+    reportEvidence_.entryGapMs = uint32_t(requestStartMs - enteredAtMs_);
+    reportEvidence_.hasPrevious = hasLastReport_;
+    reportEvidence_.previousGapMs = hasLastReport_ ? uint32_t(requestStartMs - lastReportStartMs_) : 0;
+    lastReportStartMs_ = requestStartMs;
+    hasLastReport_ = true;
+  }
+  const auto error = requestOnce("POST", "/web/book/read", reinterpret_cast<const uint8_t*>(body_), length,
+                                &session_, referer_.c_str(), sink, status, cookie_, sizeof(cookie_),
+                                url_, sizeof(url_), io_, sizeof(io_), nullptr, true);
+  WeReadTime::AckObservation observation;
+  const bool bodyAccepted = WeReadTime::acceptedTimeAck(ack.bytes, ack.size, !timed, &observation);
+  const bool accepted = error == Error::Ok && status == 200 && !strcmp(session_.vid, identity_.account) && bodyAccepted;
+  if (timed) {
+    reportEvidence_.elapsedMs = uint32_t(monotonicMs() - requestStartMs);
+    reportEvidence_.responseBytes = static_cast<uint32_t>(ack.size);
+    reportEvidence_.http = status;
+    reportEvidence_.error = static_cast<int>(error);
+    reportEvidence_.accepted = accepted;
+    reportEvidence_.ack = observation;
+  }
+  diagnostic_.error = static_cast<int>(error);
+  diagnostic_.http = status;
+  diagnostic_.detail = accepted ? 1 : 0;
+  LOG_INF("WRTime", "Timed transport phase=%s http=%d accepted=%u; no retry, credit unverified",
+          timed ? "report" : "entry", status, static_cast<unsigned>(accepted));
+  if (timed) phase_ = Phase::Reported;
+  else if (accepted) { phase_ = Phase::Entered; enteredAtMs_ = monotonicMs(); }
+  return accepted ? Write::Accepted : Write::Unknown;
 }
 
 }  // namespace WeReadClient

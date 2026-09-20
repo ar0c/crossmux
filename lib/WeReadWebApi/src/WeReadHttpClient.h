@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include "WeReadNetworkDiagnostic.h"
 
 #if defined(FREEINK_NET_WOLFSSL) && !defined(CROSSPOINT_EMULATED)
 #include <SecureClient.h>
@@ -35,6 +36,7 @@ struct RequestOptions {
   int timeoutMs = 60000;
   uint8_t* readBuffer = nullptr;
   size_t readBufferSize = 0;
+  NetworkDiagnostic* diagnostic = nullptr;
 };
 
 struct HttpsUrlView {
@@ -72,6 +74,10 @@ class Session {
 bool parseHttpsUrl(const char* url, HttpsUrlView& view);
 bool extractHttpsHost(const char* url, char* host, size_t hostSize);
 bool networkReady();
+// Always use the CA-bundle-verifying transport, even in wolfSSL builds.
+// One connection per request; never fall back to an unverified connection.
+Result requestVerified(const char* url, const RequestOptions& options, const DataCallback& onData,
+                       const HeaderCallback& onHeader, int& status);
 Result request(const char* url, const RequestOptions& options, const DataCallback& onData,
                const HeaderCallback& onHeader, int& status);
 Result request(Session& session, const char* url, const RequestOptions& options, const DataCallback& onData,
