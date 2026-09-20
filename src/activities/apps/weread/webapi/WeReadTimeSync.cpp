@@ -15,9 +15,9 @@
 #include "ReadingStatsStore.h"
 #include "WeReadDeviceTimeTransport.h"
 #include "WeReadHandoverManifest.h"
-#include "WeReadTimeStorage.h"
-#include "WeReadServiceJournal.h"
 #include "WeReadServiceClient.h"
+#include "WeReadServiceJournal.h"
+#include "WeReadTimeStorage.h"
 
 namespace WeReadTimeSync {
 struct Accounting::Scratch {
@@ -44,6 +44,7 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
   totals.pending = totals.externalConfirmed = totals.externalUnknown = 0;
   totals.deviceConfirmed = totals.deviceUnknown = 0;
   totals.servicePending = totals.serviceConfirmed = 0;
+  totals.serviceCheckedAt = 0;
   totals.serviceMode = WeReadTime::ServiceClient::configured();
   if (!source.days || !source.count || source.count > 4096) return false;
   static_assert(sizeof(Scratch) < 6 * 1024, "Handover audit must stay bounded");
@@ -56,6 +57,7 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
   }
   if (!work->external.organizeManifest()) return false;
   bool blocked = false;
+  bool serviceObserved = false;
   for (unsigned pass = 0; pass < 2; ++pass) {
     HalFile manifest;
     if (!Storage.openFileForRead("WRTime", WeReadTime::kTimeManifest, manifest)) return false;
@@ -120,23 +122,31 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
       const auto& ledger = work->paced.ledger();
       totals.serviceMode = WeReadTime::ServiceClient::configured();
       if (!work->serviceLog.configure(account, source.book, source.source, day.dayOrdinal,
-                                     WeReadTime::SdByteLog::Format::Service)) return false;
+                                      WeReadTime::SdByteLog::Format::Service))
+        return false;
       const uint64_t consumed = ledger.measuredMs() / 1000 - ledger.remaining();
       if (!work->service.open(ledger.identity(), consumed, ledger.measuredMs() / 1000)) return false;
       // Losing configuration never gives an already delegated range back to the
       // direct sender. Changed direct counters invalidate the service journal.
-      if (work->service.owned() && (!totals.serviceMode || ledger.state() != WeReadTime::PacedLedger::State::Idle)) return false;
+      if (work->service.owned() && (!totals.serviceMode || ledger.state() != WeReadTime::PacedLedger::State::Idle))
+        return false;
       if (work->service.owned() > ledger.remaining()) return false;
       const uint64_t remaining = ledger.remaining() - work->service.owned();
-      totals.pending += remaining;
-      totals.servicePending += work->service.pending();
+      totals.pending += remaining + work->service.unacknowledged();
+      totals.servicePending += work->service.pending() - work->service.unacknowledged();
       totals.serviceConfirmed += work->service.confirmed();
+      if (work->service.owned()) {
+        const auto checked = work->service.checkedAt();
+        totals.serviceCheckedAt = serviceObserved ? std::min(totals.serviceCheckedAt, checked) : checked;
+        serviceObserved = true;
+      }
       totals.externalConfirmed += confirmed;
       totals.externalUnknown += unknown;
       totals.deviceConfirmed += ledger.verified();
       totals.deviceUnknown += ledger.quarantinedSeconds();
       const bool unresolved = ledger.state() != WeReadTime::PacedLedger::State::Idle;
-      const bool choose = (unresolved && !blocked) || (!blocked && !totals.selectedDay && (remaining >= 1 || work->service.pending()));
+      const bool choose =
+          (unresolved && !blocked) || (!blocked && !totals.selectedDay && (remaining >= 1 || work->service.pending()));
       if (choose) {
         totals.selectedDay = day.dayOrdinal;
         if (selected) *selected = receipt;
@@ -232,7 +242,10 @@ struct Job final : WeReadTime::TimeQueueSource {
     current.diagnostic = transport.diagnostic();
   }
   void run() {
-    if (WeReadTime::ServiceClient::configured()) { runService(); return; }
+    if (WeReadTime::ServiceClient::configured()) {
+      runService();
+      return;
+    }
     current.available = current.running = true;
     queue.begin();
     sample();
@@ -295,48 +308,116 @@ struct Job final : WeReadTime::TimeQueueSource {
     current.phase = WeReadTime::TimeTransaction::State::Sending;
     publish(current);
     // Reuse the existing fallibly allocated job/source snapshot. These bounded
-    // service-only stack objects are below 2 KiB; no full-history allocation.
+    // service-only stack objects are below 4 KiB; no full-history allocation.
     WeReadTime::ServiceClient client;
     WeReadTime::SdByteLog serviceLog;
     WeReadTime::ServiceJournal service(serviceLog);
     const auto finish = [&](Q result) {
       current.auditFailed = !accounting.audit(source(), account, current.totals);
-      current.queue = result; current.running = false;
+      current.queue = current.auditFailed ? Q::StorageError : result;
+      current.running = false;
       current.confirmed = current.totals.serviceConfirmed;
       publish(current);
     };
-    if (!accounting.audit(source(), account, current.totals)) { finish(Q::StorageError); return; }
-    if (!client.connect(account)) { finish(Q::Paused); return; }
+    if (!accounting.audit(source(), account, current.totals)) {
+      finish(Q::StorageError);
+      return;
+    }
+    if (!client.connect(account)) {
+      finish(Q::Paused);
+      return;
+    }
+    bool review = false;
     for (size_t index = 0; index < dayCount; ++index) {
-      if (stopping.load()) { finish(Q::Paused); return; }
+      if (stopping.load()) {
+        finish(Q::Paused);
+        return;
+      }
       const auto day = days[index].dayOrdinal;
       // The complete audit above has validated handover and created WRP2 state.
-      if (!log.configure(account, book, sourceId, day, WeReadTime::SdByteLog::Format::Paced30)) { finish(Q::StorageError); return; }
-      uint64_t length=0;
+      if (!log.configure(account, book, sourceId, day, WeReadTime::SdByteLog::Format::Paced30)) {
+        finish(Q::StorageError);
+        return;
+      }
+      uint64_t length = 0;
       uint8_t frame[WeReadTime::PacedLedger::kSize];
       WeReadTime::PacedLedger ledger;
-      if (log.size(length)!=WeReadTime::ByteLog::ReadState::Ready || length<sizeof(frame) ||
-          !log.read(length-sizeof(frame),frame,sizeof(frame)) || !ledger.decode(frame) ||
-          ledger.state()!=WeReadTime::PacedLedger::State::Idle ||
-          !serviceLog.configure(account,book,sourceId,day,WeReadTime::SdByteLog::Format::Service) ||
-          !service.open(ledger.identity(),ledger.measuredMs()/1000-ledger.remaining(),ledger.measuredMs()/1000) ||
-          !service.matchesDevice(client.device())) { finish(Q::StorageError); return; }
-      if (service.pending()) {
-        const auto result=client.exchange(ledger.identity(),service);
-        if(result==WeReadTime::ServiceClient::Result::Failed){finish(Q::Paused);return;}
-        if(result==WeReadTime::ServiceClient::Result::Review){finish(Q::Uncertain);return;}
+      if (log.size(length) != WeReadTime::ByteLog::ReadState::Ready || length < sizeof(frame) ||
+          !log.read(length - sizeof(frame), frame, sizeof(frame)) || !ledger.decode(frame) ||
+          ledger.state() != WeReadTime::PacedLedger::State::Idle ||
+          !serviceLog.configure(account, book, sourceId, day, WeReadTime::SdByteLog::Format::Service) ||
+          !service.open(ledger.identity(), ledger.measuredMs() / 1000 - ledger.remaining(),
+                        ledger.measuredMs() / 1000) ||
+          !service.matchesDevice(client.device())) {
+        finish(Q::StorageError);
+        return;
       }
-      if (stopping.load()) { finish(Q::Paused); return; }
-      if (!service.pending() && ledger.remaining()>service.owned()) {
-        if(!service.reserve(client.device())){finish(Q::StorageError);return;}
-        const auto result=client.exchange(ledger.identity(),service);
-        if(result==WeReadTime::ServiceClient::Result::Failed){finish(Q::Paused);return;}
-        if(result==WeReadTime::ServiceClient::Result::Review){finish(Q::Uncertain);return;}
+      // Recover the immutable unacknowledged tail first. Earlier accepted
+      // tasks need only readback; they do not gate the next measured range.
+      uint64_t queryUntil = UINT64_MAX;
+      if (service.selectReserved()) {
+        queryUntil = service.start();
+        const auto result = client.exchange(ledger.identity(), service);
+        if (result == WeReadTime::ServiceClient::Result::Full) {
+          current.serviceQueueFull = true;
+          finish(Q::Paused);
+          return;
+        }
+        if (result == WeReadTime::ServiceClient::Result::Failed) {
+          finish(Q::Paused);
+          return;
+        }
+        review |= result == WeReadTime::ServiceClient::Result::Review;
+      }
+      // At most four cached receipts per day per explicit run. The oldest
+      // accepted tasks are queried first, matching the server's FIFO worker.
+      uint64_t cursor = 0;
+      for (unsigned queries = 0; queries < 4 && service.selectAccepted(cursor); ++queries) {
+        if (service.start() >= queryUntil) break;
+        if (stopping.load()) {
+          finish(Q::Paused);
+          return;
+        }
+        cursor = service.end();
+        const auto result = client.exchange(ledger.identity(), service);
+        // A missing or regressed receipt may mean a restored server DB. Stop
+        // new handoffs instead of guessing ownership or recreating the task.
+        if (result == WeReadTime::ServiceClient::Result::Failed) {
+          finish(Q::Paused);
+          return;
+        }
+        review |= result == WeReadTime::ServiceClient::Result::Review;
+      }
+      if (stopping.load()) {
+        finish(Q::Paused);
+        return;
+      }
+      if (!service.unacknowledged() && ledger.remaining() > service.owned()) {
+        if (!service.capacity()) {
+          current.serviceQueueFull = true;
+          finish(Q::Paused);
+          return;
+        }
+        if (!service.reserve(client.device())) {
+          finish(Q::StorageError);
+          return;
+        }
+        const auto result = client.exchange(ledger.identity(), service);
+        if (result == WeReadTime::ServiceClient::Result::Full) {
+          current.serviceQueueFull = true;
+          finish(Q::Paused);
+          return;
+        }
+        if (result == WeReadTime::ServiceClient::Result::Failed) {
+          finish(Q::Paused);
+          return;
+        }
+        review |= result == WeReadTime::ServiceClient::Result::Review;
       }
       vTaskDelay(1);
     }
     // Acceptance ends the device network task; cloud work continues on server.
-    finish(Q::Complete);
+    finish(review ? Q::Uncertain : Q::Complete);
   }
 };
 static_assert(sizeof(Job) < 21 * 1024, "Background job exceeds fixed workspace budget");
@@ -450,11 +531,12 @@ bool start(const Source& source, const char* account) {
     // startup evidence separate from the last transaction/cloud receipt.
     char record[384];
     const int n = std::snprintf(record, sizeof(record),
-        "{\"schema\":1,\"reason\":%u,\"free_heap\":%u,\"largest_block\":%u,"
-        "\"budget\":%u,\"contiguous\":%u,\"free_reserve\":98304,\"block_reserve\":32768,"
-        "\"wifi_connected\":%u,\"days\":%u,\"uptime_ms\":%lu}\n",
-        unsigned(reason), freeHeap, largestBlock, unsigned(budget), unsigned(contiguous),
-        unsigned(WiFi.status() == WL_CONNECTED), unsigned(source.count), static_cast<unsigned long>(millis()));
+                                "{\"schema\":1,\"reason\":%u,\"free_heap\":%u,\"largest_block\":%u,"
+                                "\"budget\":%u,\"contiguous\":%u,\"free_reserve\":98304,\"block_reserve\":32768,"
+                                "\"wifi_connected\":%u,\"days\":%u,\"uptime_ms\":%lu}\n",
+                                unsigned(reason), freeHeap, largestBlock, unsigned(budget), unsigned(contiguous),
+                                unsigned(WiFi.status() == WL_CONNECTED), unsigned(source.count),
+                                static_cast<unsigned long>(millis()));
     HalFile file;
     if (n > 0 && size_t(n) < sizeof(record) && Storage.ensureDirectoryExists("/WeReadSync") &&
         Storage.openFileForWrite("WRTime", "/WeReadSync/last-start-diagnostic.json", file)) {
@@ -462,8 +544,8 @@ bool start(const Source& source, const char* account) {
         LOG_ERR("WRTime", "Startup diagnostic write failed");
       file.flush();
     }
-    LOG_ERR("WRTime", "Startup rejected reason=%u free=%u largest=%u budget=%u contiguous=%u",
-            unsigned(reason), freeHeap, largestBlock, unsigned(budget), unsigned(contiguous));
+    LOG_ERR("WRTime", "Startup rejected reason=%u free=%u largest=%u budget=%u contiguous=%u", unsigned(reason),
+            freeHeap, largestBlock, unsigned(budget), unsigned(contiguous));
     return false;
   };
   if (!account || !*account || strlen(account) >= 32 || !source.book || !*source.book || strlen(source.book) >= 64 ||
@@ -489,9 +571,7 @@ bool start(const Source& source, const char* account) {
 #if !defined(SIMULATOR)
   budget = internalJobBytes + source.count * sizeof(ReadingDayStats) + stackBytes + 6 * 1024 + 1024;
   contiguous = std::max({internalJobBytes, source.count * sizeof(ReadingDayStats), stackBytes});
-  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget,
-                                     contiguous, 96 * 1024,
-                                     32 * 1024)) {
+  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, 96 * 1024, 32 * 1024)) {
     LOG_ERR("WRTime", "Insufficient heap for background sync and reader (%u bytes)", unsigned(budget));
     return fail(StartFailure::Headroom);
   }

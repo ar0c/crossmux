@@ -9,9 +9,9 @@
 
 #include "ReadingStatsStore.h"
 #include "WeReadDeviceTimeTransport.h"
+#include "WeReadServiceClient.h"
 #include "WeReadTimeStorage.h"
 #include "WeReadTimeSync.h"
-#include "WeReadServiceClient.h"
 #include "WiFi.h"
 using namespace WeReadTime;
 namespace Sync = WeReadTimeSync;
@@ -209,21 +209,81 @@ int main() {
   assert(s.totals.pending == 65 && s.totals.deviceUnknown == 60);
   fixture(day.readingMs);
   fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
-  fakeService::requests=0;fakeService::confirmed=false;fakeService::fail=true;
-  assert(Sync::start(source,"a"));s=finish();
-  assert(s.queue==TimeQueue::State::Paused && s.totals.servicePending==125 && fakeTransport::reports==0);
-  fakeService::fail=false;WiFi.connected=true;
-  assert(Sync::start(source,"a"));s=finish();
-  assert(s.queue==TimeQueue::State::Complete && s.totals.servicePending==125 && s.totals.serviceConfirmed==0);
-  assert(fakeService::requests==2 && fakeTransport::reports==0 && s.totals.pending==0);
-  fakeStorage::files.erase("/WeReadSync/service.conf");WiFi.connected=true;
-  assert(Sync::start(source,"a"));s=finish();
-  assert(s.auditFailed && fakeTransport::reports==0); // Config removal cannot enable direct fallback.
-  fakeStorage::files["/WeReadSync/service.conf"]={'x'};
-  fakeService::confirmed=true;WiFi.connected=true;
-  assert(Sync::start(source,"a"));s=finish();
-  assert(s.totals.serviceConfirmed==125 && s.totals.servicePending==0 && s.confirmed==125);
-  assert(fakeTransport::reports==0 && fakeService::requests==3);
+  fakeService::requests = 0;
+  fakeService::confirmed = false;
+  fakeService::fail = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Paused && s.totals.servicePending == 0 && s.totals.pending == 125 &&
+         fakeTransport::reports == 0);
+  fakeService::fail = false;
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Complete && s.totals.servicePending == 125 && s.totals.serviceConfirmed == 0);
+  assert(fakeService::requests == 2 && fakeTransport::reports == 0 && s.totals.pending == 0);
+  fakeStorage::files.erase("/WeReadSync/service.conf");
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.auditFailed && fakeTransport::reports == 0);  // Config removal cannot enable direct fallback.
+  fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
+  fakeService::confirmed = true;
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.totals.serviceConfirmed == 125 && s.totals.servicePending == 0 && s.confirmed == 125);
+  assert(fakeTransport::reports == 0 && fakeService::requests == 3);
+  // 50-minute task remains accepted but uncredited when another 10 minutes arrive.
+  day.readingMs = 3000000;
+  source.totalMs = day.readingMs;
+  fixture(day.readingMs);
+  fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
+  fakeService::confirmed = false;
+  fakeService::posts = fakeService::gets = 0;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.totals.servicePending == 3000 && s.totals.pending == 0 && fakeService::posts == 1);
+  day.readingMs = 3600000;
+  source.totalMs = day.readingMs;
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Complete && s.totals.pending == 0 && s.totals.servicePending == 3600);
+  assert(fakeService::posts == 2 && fakeService::lastStart == 3000 && fakeService::lastEnd == 3600);
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(fakeService::posts == 2 && s.totals.serviceConfirmed == 0);  // Repeated click is GET only.
+  // Review on the old task holds cloud execution, not admission of new measured time.
+  day.readingMs = 4200000;
+  source.totalMs = day.readingMs;
+  fakeService::review = true;
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(fakeService::posts == 3 && s.queue == TimeQueue::State::Uncertain && s.totals.pending == 0);
+  fakeService::review = false;
+  fakeService::full = true;
+  day.readingMs = 4800000;
+  source.totalMs = day.readingMs;
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.serviceQueueFull && s.queue == TimeQueue::State::Paused && s.totals.pending == 600 &&
+         s.totals.servicePending == 4200);
+  fakeService::full = false;
+  fakeService::fail = true;
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.totals.pending == 600);  // Lost receipt retains the reserved 600s tail.
+  fakeService::fail = false;
+  fakeService::confirmed = true;
+  WiFi.connected = true;
+  assert(Sync::start(source, "a"));
+  s = finish();
+  assert(s.totals.serviceConfirmed == 4800 && fakeTransport::reports == 0);
   std::cout << "Service handoff: lost receipt retry, no ACK credit, config removal fail closed, readback PASS\n";
   std::cout << "Background lifetime, immutable source, concurrent snapshots, duplicate start, OOM, cooperative pause, "
                "Wi-Fi release and no replay PASS\n";

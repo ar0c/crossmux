@@ -708,3 +708,38 @@ initialized the display and physically rendered its startup verification page.
 Only after confirmation cancels rollback may the old firmware slot be erased
 and rebuilt as a font cache. If that copy is interrupted or fails, the
 uncommitted header remains invalid and the selected font loads from SD.
+
+## WeRead service ownership journal (`.wrs1`, frame version 2)
+
+`/.crosspoint/weread/time/<account>/<source>/<day>.wrs1` is append-only.
+Every 256-byte frame retains the WRS1 magic; byte 4 is the frame version
+(1 or 2), byte 5 is Reserved=1 / Accepted=2 / Confirmed=3, bytes 6..7 are zero.
+All integers below are little-endian uint64. Identity strings are fixed-size,
+zero-terminated arrays and include their padding in the identity comparison.
+
+| Offset | Size | Field |
+|---|---|---|
+| 8 | 32 | Account |
+| 40 | 64 | Book |
+| 104 | 64 | Immutable source epoch |
+| 168 | 8 | Original day ordinal |
+| 176 | 32 | Bound service device |
+| 208 | 8 | Fixed direct-consumed prefix |
+| 216 | 8 | Immutable task start seconds |
+| 224 | 8 | Immutable task end seconds |
+| 232 | 8 | Per-task confirmed seconds (v2; v1 zero) |
+| 240 | 8 | Local receipt observation Unix seconds (v2; v1 zero) |
+| 248 | 8 | Existing ExternalTime checksum over bytes 0..247 |
+
+Version 1 has one outstanding task and zero reserved fields. Version 2 permits
+one Reserved tail plus multiple Accepted tasks, up to 24 outstanding slots per
+source day. Reservations are contiguous; accepted/confirmed events address the
+original task range and may arrive out of order. Confirmed seconds never regress.
+Fully confirmed slots may be reused, but their events and summed credit remain.
+The log is capped at 4 MiB and is never silently pruned or reset.
+
+Upgrade validates the complete v1 prefix and appends v2 without rewriting it.
+Version 1 after version 2 is invalid. The original v1 reader rejects v2; firmware
+predating service ownership must not be used as a rollback. Partial frames,
+checksum errors, changed bindings and illegal transitions block all sending.
+See [service handoff](engineering/weread-service-handoff.md) for recovery rules.

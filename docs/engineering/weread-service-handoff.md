@@ -29,16 +29,41 @@ service range. No historical upload or uncertain direct batch is replayed.
 
 `/.crosspoint/weread/time/<account>/<source>/<day>.wrs1` stores append-only
 256-byte WRS1 frames: identity, fixed direct prefix, bound service device,
-range, and Reserved/Accepted/Confirmed state. Every frame has a checksum and
+range, and Reserved/Accepted/Confirmed state. Version 2 also records per-task
+confirmed seconds and observation time. Every frame has a checksum and
 must follow a legal monotonic transition. A torn tail or changed binding blocks
 the run. Original reading records and legacy journals remain untouched.
 
 The device posts only Reserved records, with a deterministic task ID and the
 same immutable body on every retry. Accepted records use GET only. A missing
 server receipt is an error, not permission to submit again. Only exact matching
-identity/range and a confirmed full duration advance local cloud credit. A day
-with an unfinished handoff keeps later reading on the device until that handoff
-has been confirmed. Other audited days can be accepted independently.
+identity/range and monotonic confirmed seconds advance cached cloud credit.
+A source day allows one unacknowledged Reserved tail and up to 24 outstanding
+tasks. Once the tail is Accepted, a new measured range can be reserved without
+waiting for cloud completion. A 50-minute `[0,3000)` handoff and a later 10-minute
+`[3000,3600)` handoff remain distinct jobs. Their IDs never change with progress.
+Partial/out-of-order receipts are summed per task, never inferred as a prefix.
+Reserved time stays in the local-unhanded UI count, not the server-pending count.
+
+Each explicit run recovers the Reserved tail first, reads at most four oldest
+accepted receipts per day, and submits new measured ranges. A valid uncertain
+receipt does not prevent new handoff; the server still freezes cloud execution.
+A missing/malformed/regressed receipt stops the run. A full queue retains records
+locally. Cached credit shows its oldest outstanding observation time; the device
+does not continuously poll offline. The run uses a frozen source snapshot:
+reading done after it began requires another explicit handoff.
+
+Migration is append-only: validate every existing v1 frame and retain it exactly,
+then append v2 frames with the same account/device/source/date/range IDs. No file
+rename, prefix copy, deletion or history reset is needed. A torn v2 append blocks
+all sending. A v1 service-journal reader rejects version 2; older firmware without
+any service ownership support is still unsafe to downgrade to.
+
+The active-task array is fixed (24 entries, no per-task heap allocation), keeping
+the accounting scratch below 6 KiB and the journal below 2 KiB. Slots are reused
+only after full confirmation. The existing 8 KiB worker stack, fallible job
+allocation and C3/internal-memory reserves remain. The journal is capped at
+4 MiB; a full journal stops new reservations rather than deleting ownership.
 
 Do not downgrade to firmware that does not understand WRS1 after delegating
 time. Such firmware cannot see service ownership and might resend it. Preserve

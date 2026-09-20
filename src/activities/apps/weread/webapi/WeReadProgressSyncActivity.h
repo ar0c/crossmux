@@ -3,14 +3,14 @@
 #include <cstdint>
 #include <string>
 
+#include "WeReadTimeCloud.h"
+#include "WeReadTimeDiagnostic.h"
+#include "WeReadTimeQueue.h"
+#include "WeReadTimeSync.h"
+#include "WeReadTimeTransaction.h"
 #include "activities/Activity.h"
 #include "activities/apps/weread/WeReadBackend.h"
 #include "activities/apps/weread/WeReadProgressContext.h"
-#include "WeReadTimeCloud.h"
-#include "WeReadTimeTransaction.h"
-#include "WeReadTimeQueue.h"
-#include "WeReadTimeDiagnostic.h"
-#include "WeReadTimeSync.h"
 
 class Epub;
 struct CrossPointPosition;
@@ -83,6 +83,8 @@ class WeReadProgressSyncActivity final : public Activity {
   uint64_t deviceConfirmedSeconds_ = 0;
   uint64_t deviceUnknownSeconds_ = 0;
   uint64_t servicePendingSeconds_ = 0, serviceConfirmedSeconds_ = 0;
+  uint64_t serviceCheckedAt_ = 0;
+  bool serviceQueueFull_ = false;
   bool serviceMode_ = false;
   bool timeBatchUsed_ = false;
   bool timeInputBarrier_ = false;

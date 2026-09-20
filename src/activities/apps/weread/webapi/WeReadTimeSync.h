@@ -20,6 +20,7 @@ struct Source {
 
 struct Totals {
   uint64_t servicePending = 0, serviceConfirmed = 0;
+  uint64_t serviceCheckedAt = 0;
   bool serviceMode = false;
   uint64_t pending = 0, externalConfirmed = 0, externalUnknown = 0;
   uint64_t deviceConfirmed = 0, deviceUnknown = 0;
@@ -43,6 +44,7 @@ class Accounting {
 
 struct Status {
   bool available = false, running = false, auditFailed = false;
+  bool serviceQueueFull = false;
   uint32_t revision = 0;
   Totals totals;
   WeReadTime::TimeQueue::State queue = WeReadTime::TimeQueue::State::Idle;

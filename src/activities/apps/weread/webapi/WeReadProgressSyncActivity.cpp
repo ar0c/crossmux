@@ -184,7 +184,7 @@ void WeReadProgressSyncActivity::collectReadingTime(const char* account) {
       continue;
     }
     uint64_t pending = 0, confirmed = 0, unknown = 0;
-    if (!work->external.reconcile(work->journal.ledger(),pending,confirmed,unknown)) {
+    if (!work->external.reconcile(work->journal.ledger(), pending, confirmed, unknown)) {
       timeCollectionFailed_ = true;
       LOG_ERR("WRTime", "External accounting requires reconciliation; no sendable balance exposed");
       continue;
@@ -237,6 +237,7 @@ bool WeReadProgressSyncActivity::auditTime(const char* account, WeReadTime::Exte
   deviceUnknownSeconds_ = totals.deviceUnknown;
   servicePendingSeconds_ = totals.servicePending;
   serviceConfirmedSeconds_ = totals.serviceConfirmed;
+  serviceCheckedAt_ = totals.serviceCheckedAt;
   serviceMode_ = totals.serviceMode;
   selectedTimeDay_ = totals.selectedDay;
   timeHostPaused_ = totals.hostPaused;
@@ -324,6 +325,8 @@ void WeReadProgressSyncActivity::advanceTimeUpload() {
   deviceUnknownSeconds_ = status.totals.deviceUnknown;
   servicePendingSeconds_ = status.totals.servicePending;
   serviceConfirmedSeconds_ = status.totals.serviceConfirmed;
+  serviceCheckedAt_ = status.totals.serviceCheckedAt;
+  serviceQueueFull_ = status.serviceQueueFull;
   serviceMode_ = status.totals.serviceMode;
   selectedTimeDay_ = status.totals.selectedDay;
   timeHostPaused_ = status.totals.hostPaused;
@@ -347,46 +350,75 @@ void WeReadProgressSyncActivity::advanceTimeUpload() {
 const char* WeReadProgressSyncActivity::timeMessage() const {
   if (serviceMode_) {
     using Q = WeReadTime::TimeQueue::State;
-    if (timeQueueState_ == Q::Complete) return tr(STR_WEREAD_SERVICE_ACCEPTED);
+    if (serviceQueueFull_) return tr(STR_WEREAD_SERVICE_FULL);
+    if (timeQueueState_ == Q::Complete)
+      return !pendingTimeSeconds_ && !timeCollectionFailed_ ? tr(STR_WEREAD_SERVICE_ACCEPTED)
+                                                            : tr(STR_WEREAD_SERVICE_RETRY);
     if (timeQueueState_ == Q::Paused) return tr(STR_WEREAD_SERVICE_RETRY);
+    if (timeQueueState_ == Q::Uncertain) return tr(STR_WEREAD_SERVICE_REVIEW);
   }
   if (timeIssue_ == WeReadTime::TimeTransaction::Issue::LowSpace) return tr(STR_WEREAD_TIME_LOW_SPACE);
-  if (timeIssue_ == WeReadTime::TimeTransaction::Issue::BaselineIncomplete)
-    return tr(STR_WEREAD_TIME_BASELINE_MISSING);
+  if (timeIssue_ == WeReadTime::TimeTransaction::Issue::BaselineIncomplete) return tr(STR_WEREAD_TIME_BASELINE_MISSING);
   using Q = WeReadTime::TimeQueue::State;
   switch (timeQueueState_) {
-    case Q::Complete: return tr(STR_WEREAD_TIME_QUEUE_DONE);
-    case Q::Paused: return timeDiagnosticText_[0] ? timeDiagnosticText_ : tr(STR_WEREAD_TIME_QUEUE_PAUSED);
+    case Q::Complete:
+      return tr(STR_WEREAD_TIME_QUEUE_DONE);
+    case Q::Paused:
+      return timeDiagnosticText_[0] ? timeDiagnosticText_ : tr(STR_WEREAD_TIME_QUEUE_PAUSED);
     case Q::Uncertain:
       switch (timeIssue_) {
-        case WeReadTime::TimeTransaction::Issue::Expired: return tr(STR_WEREAD_TIME_EXPIRED);
-        case WeReadTime::TimeTransaction::Issue::ClockInvalid: return tr(STR_WEREAD_TIME_CLOCK_INVALID);
-        case WeReadTime::TimeTransaction::Issue::ReadbackFailed: return tr(STR_WEREAD_TIME_READ_FAILED);
-        case WeReadTime::TimeTransaction::Issue::Mismatch: return tr(STR_WEREAD_TIME_MISMATCH);
+        case WeReadTime::TimeTransaction::Issue::Expired:
+          return tr(STR_WEREAD_TIME_EXPIRED);
+        case WeReadTime::TimeTransaction::Issue::ClockInvalid:
+          return tr(STR_WEREAD_TIME_CLOCK_INVALID);
+        case WeReadTime::TimeTransaction::Issue::ReadbackFailed:
+          return tr(STR_WEREAD_TIME_READ_FAILED);
+        case WeReadTime::TimeTransaction::Issue::Mismatch:
+          return tr(STR_WEREAD_TIME_MISMATCH);
         case WeReadTime::TimeTransaction::Issue::None:
         case WeReadTime::TimeTransaction::Issue::BaselineIncomplete:
         case WeReadTime::TimeTransaction::Issue::LowSpace:
-        case WeReadTime::TimeTransaction::Issue::UnknownWrite: return tr(STR_WEREAD_TIME_UNCERTAIN);
+        case WeReadTime::TimeTransaction::Issue::UnknownWrite:
+          return tr(STR_WEREAD_TIME_UNCERTAIN);
       }
       return tr(STR_WEREAD_TIME_UNCERTAIN);
-    case Q::StorageError: return tr(STR_WEREAD_TIME_STORAGE_ERROR);
-    case Q::Selecting: return tr(STR_WEREAD_TIME_QUEUE_AUDIT);
-    case Q::Idle: case Q::Running: break;
+    case Q::StorageError:
+      return tr(STR_WEREAD_TIME_STORAGE_ERROR);
+    case Q::Selecting:
+      return tr(STR_WEREAD_TIME_QUEUE_AUDIT);
+    case Q::Idle:
+    case Q::Running:
+      break;
   }
   using T = WeReadTime::TimeTransaction::State;
   const auto phase = timeResult_;
   switch (phase) {
-    case T::Idle: case T::Preparing: return tr(STR_WEREAD_TIME_PREPARING);
-    case T::Waiting: return tr(STR_WEREAD_TIME_WAITING);
-    case T::RetryWait: return tr(STR_WEREAD_TIME_PREPARING);
-    case T::Baseline: return tr(STR_WEREAD_TIME_FETCH_STATS);
-    case T::Reserving: return tr(STR_WEREAD_TIME_RESERVING);
-    case T::Entering: case T::Sending: return tr(STR_WEREAD_TIME_SENDING);
-    case T::ReadbackWait: case T::ReadingBack: return tr(STR_WEREAD_TIME_VERIFYING);
-    case T::Confirmed: return tr(STR_WEREAD_TIME_CONFIRMED);
-    case T::NotSent: case T::Cancelled: return tr(STR_WEREAD_TIME_NO_REQUEST);
-    case T::Uncertain: return tr(STR_WEREAD_TIME_UNCERTAIN);
-    case T::StorageError: return tr(STR_WEREAD_TIME_STORAGE_ERROR);
+    case T::Idle:
+    case T::Preparing:
+      return tr(STR_WEREAD_TIME_PREPARING);
+    case T::Waiting:
+      return tr(STR_WEREAD_TIME_WAITING);
+    case T::RetryWait:
+      return tr(STR_WEREAD_TIME_PREPARING);
+    case T::Baseline:
+      return tr(STR_WEREAD_TIME_FETCH_STATS);
+    case T::Reserving:
+      return tr(STR_WEREAD_TIME_RESERVING);
+    case T::Entering:
+    case T::Sending:
+      return tr(STR_WEREAD_TIME_SENDING);
+    case T::ReadbackWait:
+    case T::ReadingBack:
+      return tr(STR_WEREAD_TIME_VERIFYING);
+    case T::Confirmed:
+      return tr(STR_WEREAD_TIME_CONFIRMED);
+    case T::NotSent:
+    case T::Cancelled:
+      return tr(STR_WEREAD_TIME_NO_REQUEST);
+    case T::Uncertain:
+      return tr(STR_WEREAD_TIME_UNCERTAIN);
+    case T::StorageError:
+      return tr(STR_WEREAD_TIME_STORAGE_ERROR);
   }
   return tr(STR_WEREAD_TIME_REVIEW);
 }
@@ -437,8 +469,8 @@ void WeReadProgressSyncActivity::startSync() {
     // Fixed <7 KiB scratch: heap-scoped so TLS does not share it with the task
     // stack. Released before position synchronization; no history-sized data.
     timeQuery_ = makeUniqueNoThrow<WeReadTimeCloud::Query>();
-    if (!timeQuery_) LOG_ERR("WRTime", "OOM: cloud query (%u bytes)",
-                             static_cast<unsigned>(sizeof(WeReadTimeCloud::Query)));
+    if (!timeQuery_)
+      LOG_ERR("WRTime", "OOM: cloud query (%u bytes)", static_cast<unsigned>(sizeof(WeReadTimeCloud::Query)));
     struct LoginScratch {
       WeReadStore::Session session;
       char cookie[896] = {};
@@ -813,20 +845,23 @@ void WeReadProgressSyncActivity::loop() {
     case State::Success: {
       if (!timeCollectionFailed_ && selectedTimeDay_ && !timeBatchUsed_) {
         const auto& metrics = UITheme::getInstance().getMetrics();
-        const auto content = SubpageLayout::contentRect(UITheme::getInstance().getScreenSafeArea(renderer, true, false), metrics);
+        const auto content =
+            SubpageLayout::contentRect(UITheme::getInstance().getScreenSafeArea(renderer, true, false), metrics);
         int row = -1;
         const bool tapped = mappedInput.rowTouch(row, content.y + content.height - metrics.menuRowHeight,
-            metrics.menuRowHeight, 1, content.x, content.x + content.width, metrics.menuRowHeight) ==
-            MappedInputManager::RowTouch::Tap;
+                                                 metrics.menuRowHeight, 1, content.x, content.x + content.width,
+                                                 metrics.menuRowHeight) == MappedInputManager::RowTouch::Tap;
         if (mappedInput.wasReleased(MappedInputManager::Button::NavNext) || tapped) {
           state_ = State::TimeConfirm;
           timeInputBarrier_ = mappedInput.isPressed(MappedInputManager::Button::Confirm);
-          requestUpdate(); return;
+          requestUpdate();
+          return;
         }
       }
       int x = 0, y = 0;
       if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-          mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) returnToReader();
+          mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y))
+        returnToReader();
       return;
     }
     case State::LoginRequired: {
@@ -888,31 +923,46 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
                  unsigned(timePreparationRetries_), unsigned(timeWaitSeconds_));
         title = waitingTitle;
       }
-      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, top,
-          title, true, EpdFontFamily::BOLD);
+      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, top, title, true, EpdFontFamily::BOLD);
       char line[112];
-      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_PENDING_FMT),
-          static_cast<unsigned long long>(pendingTimeSeconds_ / 60), unsigned(pendingTimeSeconds_ % 60));
+      snprintf(line, sizeof(line), serviceMode_ ? tr(STR_WEREAD_SERVICE_LOCAL) : tr(STR_WEREAD_TIME_PENDING_FMT),
+               static_cast<unsigned long long>(pendingTimeSeconds_ / 60), unsigned(pendingTimeSeconds_ % 60));
       UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop, line);
       snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_DEVICE_FMT),
-          static_cast<unsigned long long>(deviceConfirmedSeconds_), static_cast<unsigned long long>(deviceUnknownSeconds_));
+               static_cast<unsigned long long>(deviceConfirmedSeconds_),
+               static_cast<unsigned long long>(deviceUnknownSeconds_));
       UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep, line);
       snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_EXTERNAL_FMT),
-          static_cast<unsigned long long>(externalConfirmedSeconds_), static_cast<unsigned long long>(externalUnknownSeconds_));
+               static_cast<unsigned long long>(externalConfirmedSeconds_),
+               static_cast<unsigned long long>(externalUnknownSeconds_));
       UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 2, line);
-      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_RUN_FMT),
-          static_cast<unsigned long long>(timeRunConfirmed_ / 60), unsigned(timeRunConfirmed_ % 60));
-      if (serviceMode_) snprintf(line, sizeof(line), tr(STR_WEREAD_SERVICE_TOTALS),
-          static_cast<unsigned long long>(servicePendingSeconds_), static_cast<unsigned long long>(serviceConfirmedSeconds_));
-      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 3,
-          line);
-      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 4,
-          tr(STR_WEREAD_TIME_TODAY_NOTICE));
+      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_RUN_FMT), static_cast<unsigned long long>(timeRunConfirmed_ / 60),
+               unsigned(timeRunConfirmed_ % 60));
+      if (serviceMode_)
+        snprintf(line, sizeof(line), tr(STR_WEREAD_SERVICE_TOTALS),
+                 static_cast<unsigned long long>(servicePendingSeconds_),
+                 static_cast<unsigned long long>(serviceConfirmedSeconds_));
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 3, line);
+      const char* notice = tr(STR_WEREAD_TIME_TODAY_NOTICE);
+      if (serviceMode_) {
+        notice = tr(STR_WEREAD_SERVICE_UNCHECKED);
+        if (serviceCheckedAt_) {
+          const std::time_t at = static_cast<std::time_t>(serviceCheckedAt_);
+          std::tm value{};
+          char when[24]{};
+          if (localtime_r(&at, &value) && std::strftime(when, sizeof(when), "%m-%d %H:%M", &value)) {
+            snprintf(line, sizeof(line), tr(STR_WEREAD_SERVICE_CHECKED), when);
+            notice = line;
+          }
+        }
+      }
+      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 4, notice);
       UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 5,
-          tr(STR_WEREAD_TIME_OTHER_CLIENTS));
+                                tr(STR_WEREAD_TIME_OTHER_CLIENTS));
       if (state_ == State::TimeConfirm) {
         UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID,
-            content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_UPLOAD_30), true, EpdFontFamily::BOLD);
+                                  content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_UPLOAD_30),
+                                  true, EpdFontFamily::BOLD);
       } else if (state_ == State::TimeUploading) {
         for (int action = 0; action < 2; ++action) {
           const auto rect = timeActionRect(content, metrics.menuRowHeight, action);
@@ -923,15 +973,16 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
         }
       } else if (state_ == State::TimeResult && !timeCollectionFailed_ && selectedTimeDay_) {
         UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID,
-            content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_RESUME), true, EpdFontFamily::BOLD);
+                                  content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_RESUME), true,
+                                  EpdFontFamily::BOLD);
       }
       break;
     }
     case State::CheckingTime:
-      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, SubpageLayout::centeredTop(content, titleHeight),
-                                timeQuery_ && timeQuery_->readingStats() ? tr(STR_WEREAD_TIME_FETCH_STATS)
-                                                                        : tr(STR_WEREAD_TIME_FETCH_KEY),
-                                true, EpdFontFamily::BOLD);
+      UITheme::drawCenteredText(
+          renderer, textBounds, UI_12_FONT_ID, SubpageLayout::centeredTop(content, titleHeight),
+          timeQuery_ && timeQuery_->readingStats() ? tr(STR_WEREAD_TIME_FETCH_STATS) : tr(STR_WEREAD_TIME_FETCH_KEY),
+          true, EpdFontFamily::BOLD);
       break;
     case State::WifiSelection:
     case State::Starting:
@@ -985,9 +1036,9 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
       char pending[96];
       if (timeCollectionFailed_) {
         UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop,
-            timeHostPaused_ ? tr(STR_WEREAD_TIME_HOST_PAUSED) : tr(STR_WEREAD_TIME_REVIEW), true);
+                                  timeHostPaused_ ? tr(STR_WEREAD_TIME_HOST_PAUSED) : tr(STR_WEREAD_TIME_REVIEW), true);
         UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep,
-            tr(STR_WEREAD_TIME_COUNTERS_UNAVAILABLE), true);
+                                  tr(STR_WEREAD_TIME_COUNTERS_UNAVAILABLE), true);
       } else {
         snprintf(pending, sizeof(pending), tr(STR_WEREAD_TIME_PENDING_FMT),
                  static_cast<unsigned long long>(pendingTimeSeconds_ / 60),
@@ -998,7 +1049,7 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
                  static_cast<unsigned long long>(externalUnknownSeconds_));
         UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop, pending, true);
         UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 2,
-                                 tr(STR_WEREAD_TIME_NOT_SENT), true);
+                                  tr(STR_WEREAD_TIME_NOT_SENT), true);
         snprintf(pending, sizeof(pending), tr(STR_WEREAD_TIME_DEVICE_FMT),
                  static_cast<unsigned long long>(deviceConfirmedSeconds_),
                  static_cast<unsigned long long>(deviceUnknownSeconds_));
@@ -1006,7 +1057,8 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
       }
       if (!timeCollectionFailed_ && selectedTimeDay_ && !timeBatchUsed_) {
         UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID,
-            content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_UPLOAD_30), true, EpdFontFamily::BOLD);
+                                  content.y + content.height - metrics.menuRowHeight, tr(STR_WEREAD_TIME_UPLOAD_30),
+                                  true, EpdFontFamily::BOLD);
       }
       const char* cloudStatus = tr(STR_WEREAD_TIME_CLOUD_UNAVAILABLE);
       if (cloudTimeResult_ == WeReadTimeCloud::Result::Ready) {
@@ -1015,7 +1067,8 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
                    static_cast<unsigned long long>(cloudTime_.daySeconds / 60),
                    static_cast<unsigned>(cloudTime_.daySeconds % 60));
           cloudStatus = pending;
-        } else cloudStatus = tr(STR_WEREAD_TIME_CLOUD_NO_DAY);
+        } else
+          cloudStatus = tr(STR_WEREAD_TIME_CLOUD_NO_DAY);
       } else if (cloudTimeResult_ == WeReadTimeCloud::Result::LoginRequired) {
         cloudStatus = tr(STR_WEREAD_TIME_CLOUD_AUTH);
       }
@@ -1037,7 +1090,9 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state_ == State::TimeUploading || state_ == State::TimeResult) {
     const bool resumable = state_ == State::TimeResult && !timeCollectionFailed_ && selectedTimeDay_;
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), state_ == State::TimeUploading ? tr(STR_WEREAD_TIME_BACKGROUND_PAUSE) : "", "", resumable ? tr(STR_WEREAD_TIME_RESUME) : "");
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), state_ == State::TimeUploading ? tr(STR_WEREAD_TIME_BACKGROUND_PAUSE) : "",
+                              "", resumable ? tr(STR_WEREAD_TIME_RESUME) : "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state_ == State::ChoosingDirection) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
@@ -1046,9 +1101,12 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
     const bool retryable =
         state_ == State::Failed && (error_ == WeReadClient::Error::Network || error_ == WeReadClient::Error::Clock ||
                                     error_ == WeReadClient::Error::Unavailable);
-    const bool timeAvailable = state_ == State::Success && !timeCollectionFailed_ && selectedTimeDay_ && !timeBatchUsed_;
+    const bool timeAvailable =
+        state_ == State::Success && !timeCollectionFailed_ && selectedTimeDay_ && !timeBatchUsed_;
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "",
-        timeAvailable ? tr(STR_SELECT) : retryable ? tr(STR_RETRY) : "");
+                                              timeAvailable ? tr(STR_SELECT)
+                                              : retryable   ? tr(STR_RETRY)
+                                                            : "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
   renderer.displayBuffer();
