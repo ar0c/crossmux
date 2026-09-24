@@ -554,4 +554,17 @@ TEST_F(SectionMemoryTest, CssCacheOomIsReportedAndBasicBuildDoesNotHydrateCss) {
   EXPECT_TRUE(restored.loadSectionFile(spec));
 }
 
+TEST_F(ChapterHtmlSlimParserTest, HiddenAttributeSkipsBlocksAndInlineTextWithoutHidingFollowingContent) {
+  writeHtml("<html><body><p hidden='hidden'>SECRET_P</p><h1 hidden='hidden'>SECRET_H</h1>"
+            "<p>Before <span hidden='hidden'>SECRET_SPAN</span> After</p>"
+            "<div hidden='hidden'><p>SECRET_DIV</p></div><p>Visible</p></body></html>");
+  parser.completePageFn = [](auto, auto, auto, auto) {};
+
+  ASSERT_TRUE(parser.parseAndBuildPages());
+  ASSERT_EQ(laidOutWords.size(), 3U);
+  EXPECT_EQ(laidOutWords[0], "Before");
+  EXPECT_EQ(laidOutWords[1], "After");
+  EXPECT_EQ(laidOutWords[2], "Visible");
+}
+
 }  // namespace
