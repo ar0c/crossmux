@@ -103,8 +103,14 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
           totals.hostPaused = work->manifest.hostPaused(manifest, work->receipt.identity);
           return false;
         }
-        if (mbedtls_sha256(work->external.receiptBytes(), WeReadTime::ExternalTime::kSize, work->digest, 0) != 0)
-          return false;
+        mbedtls_sha256_context digestContext;
+        mbedtls_sha256_init(&digestContext);
+        const bool digestReady = mbedtls_sha256_starts(&digestContext, 0) == 0 &&
+                                 mbedtls_sha256_update(&digestContext, work->external.receiptBytes(),
+                                                       WeReadTime::ExternalTime::kSize) == 0 &&
+                                 mbedtls_sha256_finish(&digestContext, work->digest) == 0;
+        mbedtls_sha256_free(&digestContext);
+        if (!digestReady) return false;
         for (unsigned i = 0; i < 32; ++i) std::snprintf(work->hex + i * 2, 3, "%02x", work->digest[i]);
         if (!work->manifest.receipt(manifest, work->receipt.identity, work->hex)) return false;
         switch (work->manifest.next(manifest)) {
@@ -649,7 +655,7 @@ bool start(const Source& source, const char* account) {
   publish(initial);
   workerDone.store(false, std::memory_order_release);
   TaskHandle_t task = nullptr;
-  if (xTaskCreate(worker, "WeReadTime", stackBytes, job.get(), 1, &task) != pdPASS) {
+  if (xTaskCreate(worker, "WeReadTime", stackBytes, job.get(), 1, &task) != pdTRUE) {
     workerDone.store(true, std::memory_order_release);
     job.reset();
     initial.available = false;  // No run exists; do not retain zero totals as an audit result.
