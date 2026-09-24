@@ -6,6 +6,7 @@ import configparser
 import csv
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -24,11 +25,6 @@ FULL_INSTALL_SEGMENTS = (
     ('bootloader', 'bootloader.bin', 0x0000),
     ('partitions', 'partitions.bin', 0x8000),
     ('boot_app0', 'boot_app0.bin', 0xE000),
-    ('firmware', 'firmware.bin', 0x10000),
-)
-STABLE_C3_SEGMENTS = (
-    ('bootloader', 'bootloader.bin', 0x0000),
-    ('partitions', 'partitions.bin', 0x8000),
     ('firmware', 'firmware.bin', 0x10000),
 )
 OTA_SEGMENT = (('firmware', 'firmware.bin', 0x10000),)
@@ -64,8 +60,12 @@ def verify_partition_csv(root):
         raise SystemExit(f'partitions.csv has an unsupported OTA layout: {found!r}')
 
 
-def find_boot_app0():
-    path = Path.home() / '.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin'
+def find_boot_app0(root):
+    configured = os.environ.get('PLATFORMIO_CORE_DIR')
+    core = Path(configured) if configured else root / '.platformio'
+    if not core.is_absolute():
+        core = root / core
+    path = core / 'packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin'
     if not path.is_file():
         raise SystemExit(f'boot_app0.bin not found at {path}; build the environment first')
     return path
@@ -107,16 +107,10 @@ def package_target(root, target_id, channel, output):
     output.mkdir(parents=True, exist_ok=True)
     verify_partition_csv(root)
 
-    segments = (
-        FULL_INSTALL_SEGMENTS
-        if target['fullInstall']
-        else STABLE_C3_SEGMENTS
-        if channel == 'stable'
-        else OTA_SEGMENT
-    )
+    segments = FULL_INSTALL_SEGMENTS if target['fullInstall'] else OTA_SEGMENT
     assets = []
     for role, source_name, offset in segments:
-        source = find_boot_app0() if role == 'boot_app0' else build / source_name
+        source = find_boot_app0(root) if role == 'boot_app0' else build / source_name
         destination = output / asset_name(target_id, source_name)
         copy_asset(source, destination)
         assets.append({
@@ -133,7 +127,7 @@ def package_target(root, target_id, channel, output):
     verify_firmware(firmware, target['chipId'], target['boardTag'])
 
     config = configparser.ConfigParser()
-    config.read(root / 'platformio.ini')
+    config.read(root / 'platformio.ini', encoding='utf-8')
     short_sha = git_value(root, 'rev-parse', '--short=7', 'HEAD')
     manifest = {
         'schemaVersion': 1,

@@ -5,11 +5,13 @@
 // ip4_addr.h unless seen first. Pin this order; clang-format would otherwise sort
 // the local header last and break the build.
 #include "HttpDownloader.h"
-#include <HalSystem.h>
+#include <ArduinoJson.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <ReleaseJsonParser.h>
 #include <esp_ota_ops.h>
 #include <esp_wifi.h>
+#include <mbedtls/sha256.h>
 // clang-format on
 
 #include <algorithm>
@@ -18,103 +20,159 @@
 #include <string>
 #include <string_view>
 
-#include "CrossMuxEndpoints.h"
+#include "CrossPointSettings.h"
 #include "FirmwareBoardTag.h"
 #include "FirmwareFlasher.h"
 
 namespace {
-constexpr std::string_view nightlyTagPrefix = "nightly-";
-constexpr size_t nightlyShaLength = 7;
+constexpr size_t MAX_RELEASE_JSON = 8192;
+constexpr std::string_view FORK_RELEASE_BASE = "https://github.com/ar0c/crossmux/releases/download/";
 
-constexpr bool isSameNightlyBuild(const std::string_view currentVersion, const std::string_view latestTag) {
-  if (!latestTag.starts_with(nightlyTagPrefix) || latestTag.size() != nightlyTagPrefix.size() + nightlyShaLength) {
-    return false;
-  }
-
-  const std::string_view latestSha = latestTag.substr(nightlyTagPrefix.size());
-  const bool validSha = std::all_of(latestSha.begin(), latestSha.end(), [](const char c) {
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-  });
-  if (!validSha) return false;
-
-  const size_t separator = currentVersion.rfind('+');
-  return separator != std::string_view::npos && currentVersion.substr(separator + 1) == latestSha;
+const char* targetId() {
+#if FREEINK_DEVICE_X4PRO
+  return "xteink_x4_pro";
+#elif FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  return "waveshare_epaper_397";
+#else
+  return nullptr;
+#endif
 }
 
-static_assert(isSameNightlyBuild("1.5.2-rc+5064d90", "nightly-5064d90"));
-static_assert(isSameNightlyBuild("1.5.2-cn-rc+5064d90", "nightly-5064d90"));
-static_assert(!isSameNightlyBuild("1.5.2-rc+5064d90", "nightly-1234567"));
-static_assert(!isSameNightlyBuild("1.5.2", "nightly-5064d90"));
-static_assert(!isSameNightlyBuild("1.5.2-rc+5064d90", "nightly"));
+bool isForkBuildUrl(const std::string_view url, const std::string_view channel) {
+  if (!url.starts_with(FORK_RELEASE_BASE)) return false;
+  const std::string_view path = url.substr(FORK_RELEASE_BASE.size());
+  const std::string prefix = std::string(channel) + "-build-";
+  const size_t slash = path.find('/');
+  return slash != std::string_view::npos && path.starts_with(prefix) && slash > prefix.size() &&
+         slash + 1 < path.size() && path.find('/', slash + 1) == std::string_view::npos &&
+         path.find_first_of("?#\\") == std::string_view::npos;
+}
 
-// The language-selected content profile supplies the OTA host and release asset variant.
-// The web proxy re-exposes it as a minimal
-// GitHub-release-shaped JSON whose single asset is always named "firmware.bin"
-// — that's the literal ReleaseJsonParser matches on.
-//
-// Going through the web instead of api.github.com directly avoids the
-// unauthenticated 60 req/hr/IP rate limit and the unstable mainland-China
-// path to api.github.com.
-constexpr size_t releaseUrlCapacity = 192;
-static_assert(releaseUrlCapacity < 256);
+bool fetchBoundedJson(const std::string& url, uint8_t* buffer, size_t& size) {
+  size = 0;
+  bool overflow = false;
+  const bool fetched = HttpDownloader::fetchUrl(url, [&](const uint8_t* bytes, const size_t length) {
+    if (length > MAX_RELEASE_JSON - size) {
+      overflow = true;
+      return false;
+    }
+    std::memcpy(buffer + size, bytes, length);
+    size += length;
+    return true;
+  });
+  if (overflow) LOG_ERR("OTA", "Fork release JSON exceeds %zu bytes", MAX_RELEASE_JSON);
+  return fetched && !overflow;
+}
+
+bool decodeSha256(const char* hex, std::array<uint8_t, 32>& digest) {
+  if (!hex || std::strlen(hex) != digest.size() * 2) return false;
+  for (size_t i = 0; i < digest.size(); ++i) {
+    unsigned value = 0;
+    if (std::sscanf(hex + i * 2, "%2x", &value) != 1) return false;
+    const auto valid = [](const char c) {
+      return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    };
+    if (!valid(hex[i * 2]) || !valid(hex[i * 2 + 1])) return false;
+    digest[i] = static_cast<uint8_t>(value);
+  }
+  return true;
+}
+
+bool safeAssetName(const std::string_view name) {
+  return name.starts_with("crossmux-ar0c-") && name.ends_with("-firmware.bin") &&
+         std::all_of(name.begin(), name.end(), [](const char c) {
+           return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.';
+         });
+}
+
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
+  updateAvailable = false;
+  latestVersion.clear();
+  otaUrl.clear();
+  otaSize = totalSize = releaseNoteCount = 0;
   channel = requestedChannel;
-  char releaseUrl[releaseUrlCapacity];
-  const char* channelQuery = channel == Channel::Nightly ? "&channel=nightly" : "";
-  const int releaseUrlLength =
-      snprintf(releaseUrl, sizeof(releaseUrl), CrossMuxEndpoints::OTA_MANIFEST_FORMAT, CrossMuxEndpoints::host(),
-               CrossMuxEndpoints::otaVariant(), channelQuery, HalSystem::getDeviceModel());
-  if (releaseUrlLength < 0 || static_cast<size_t>(releaseUrlLength) >= sizeof(releaseUrl)) {
-    LOG_ERR("OTA", "Release URL exceeds %zu bytes", sizeof(releaseUrl));
-    return INTERNAL_UPDATE_ERROR;
-  }
-  LOG_DBG("OTA", "Checking %s channel (current: %s)", channel == Channel::Nightly ? "nightly" : "stable",
-          CROSSPOINT_VERSION);
-
-  // Stream the ~32KB release JSON straight into the parser as it arrives.
-  // Buffering the whole body in a std::string would add a growing allocation
-  // on top of the TLS session's heap during the fetch; with -fno-exceptions an
-  // OOM there aborts. fetchUrl handles the configured secure GET transport,
-  // redirects, and User-Agent (see HttpDownloader).
-  ReleaseJsonParser releaseParser(releaseNotes);
-  const bool ok = HttpDownloader::fetchUrl(releaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
-    releaseParser.feed(reinterpret_cast<const char*>(data), len);
-    return true;
-  });
-  if (!ok) {
-    LOG_ERR("OTA", "Release check fetch failed");
-    return HTTP_ERROR;
-  }
-
-  LOG_DBG("OTA", "Parser results: tag=%s firmware=%s", releaseParser.foundTag() ? "yes" : "no",
-          releaseParser.foundFirmware() ? "yes" : "no");
-
-  if (releaseParser.foundUnsupportedChannel()) {
-    LOG_INF("OTA", "Selected update channel is not supported by this device");
+  const char* target = targetId();
+  if (!target || (requestedChannel == Channel::Stable && std::strcmp(target, "xteink_x4_pro") != 0)) {
     return UNSUPPORTED_CHANNEL;
   }
+  const char* channelName = requestedChannel == Channel::Nightly ? "nightly" : "stable";
+  const char* flavor = SETTINGS.contentProfile == CrossPointSettings::ContentProfile::China ? "zh-CN" : "global";
+  const std::string indexUrl = std::string(FORK_RELEASE_BASE) + channelName + "/release-index.json";
 
-  if (!releaseParser.foundTag()) {
-    LOG_ERR("OTA", "No tag_name in release JSON");
-    return JSON_PARSE_ERROR;
+  // Both S3 targets have PSRAM. A bounded response buffer avoids std::string
+  // growth during TLS and is released before firmware download begins.
+  auto response = memory::makePsramByteBufferNoThrow(MAX_RELEASE_JSON);
+  if (!response) return OOM_ERROR;
+  size_t responseSize = 0;
+  if (!fetchBoundedJson(indexUrl, response.get(), responseSize)) return HTTP_ERROR;
+
+  std::string manifestUrl;
+  std::string indexVersion;
+  std::string indexRevision;
+  {
+    JsonDocument index;
+    if (deserializeJson(index, reinterpret_cast<char*>(response.get()), responseSize) ||
+        index["schemaVersion"].as<int>() != 1 ||
+        std::strcmp(index["channel"] | "", channelName) != 0) return JSON_PARSE_ERROR;
+    JsonVariantConst entry = index["targets"][target];
+    if (std::strcmp(entry["targetId"] | "", target) != 0 ||
+        std::strlen(entry["boardTag"] | "") != board_tag::boardNameLen() ||
+        std::memcmp(entry["boardTag"] | "", board_tag::boardName(), board_tag::boardNameLen()) != 0) {
+      return JSON_PARSE_ERROR;
+    }
+    JsonVariantConst variant = entry["variants"][flavor];
+    manifestUrl = variant["manifestUrl"] | "";
+    indexVersion = variant["version"] | "";
+    indexRevision = variant["crossmuxSha"] | "";
+    if (!isForkBuildUrl(manifestUrl, channelName) || indexVersion.empty() || indexVersion.size() > 63 ||
+        indexRevision.size() != 40) return JSON_PARSE_ERROR;
+
+    JsonArrayConst notes = index["releaseNotes"][flavor].as<JsonArrayConst>();
+    for (JsonVariantConst note : notes) {
+      const char* value = note.as<const char*>();
+      if (!value || releaseNoteCount >= releaseNotes.size()) break;
+      const size_t length = std::strlen(value);
+      if (length == 0 || length >= releaseNotes[0].size()) continue;
+      std::memcpy(releaseNotes[releaseNoteCount].data(), value, length + 1);
+      ++releaseNoteCount;
+    }
   }
 
-  if (!releaseParser.foundFirmware()) {
-    LOG_ERR("OTA", "No firmware.bin asset found");
-    return NO_UPDATE;
+  if (!fetchBoundedJson(manifestUrl, response.get(), responseSize)) return HTTP_ERROR;
+  {
+    JsonDocument manifest;
+    if (deserializeJson(manifest, reinterpret_cast<char*>(response.get()), responseSize) ||
+        manifest["schemaVersion"].as<int>() != 1 ||
+        std::strcmp(manifest["channel"] | "", channelName) != 0 ||
+        std::strcmp(manifest["targetId"] | "", target) != 0 ||
+        std::strcmp(manifest["flavor"] | "", flavor) != 0 ||
+        std::strcmp(manifest["version"] | "", indexVersion.c_str()) != 0 ||
+        std::strcmp(manifest["crossmuxSha"] | "", indexRevision.c_str()) != 0 ||
+        std::strlen(manifest["boardTag"] | "") != board_tag::boardNameLen() ||
+        std::memcmp(manifest["boardTag"] | "", board_tag::boardName(), board_tag::boardNameLen()) != 0) {
+      return JSON_PARSE_ERROR;
+    }
+    bool found = false;
+    for (JsonVariantConst asset : manifest["assets"].as<JsonArrayConst>()) {
+      if (std::strcmp(asset["role"] | "", "firmware") != 0) continue;
+      if (found) return JSON_PARSE_ERROR;
+      const char* name = asset["name"] | "";
+      const size_t size = asset["size"].as<size_t>();
+      if (!safeAssetName(name) || size < 1024 || !decodeSha256(asset["sha256"] | "", otaSha256)) {
+        return JSON_PARSE_ERROR;
+      }
+      const size_t slash = manifestUrl.rfind('/');
+      otaUrl = manifestUrl.substr(0, slash + 1) + name;
+      otaSize = totalSize = size;
+      found = true;
+    }
+    if (!found) return JSON_PARSE_ERROR;
   }
-
-  latestVersion = releaseParser.getTagName();
-  otaUrl = releaseParser.getFirmwareUrl();
-  otaSize = releaseParser.getFirmwareSize();
-  totalSize = otaSize;
+  latestVersion = indexVersion;
   updateAvailable = true;
-  releaseNoteCount = releaseParser.getReleaseNoteCount();
-
-  LOG_DBG("OTA", "Found update: tag=%s size=%zu notes=%zu", latestVersion.c_str(), otaSize, releaseNoteCount);
-  LOG_DBG("OTA", "Firmware URL: %s", otaUrl.c_str());
+  LOG_INF("OTA", "Fork %s update: %s %zu bytes", channelName, latestVersion.c_str(), otaSize);
   return OK;
 }
 
@@ -126,18 +184,28 @@ bool OtaUpdater::isUpdateNewer() const {
     case Channel::Stable:
       break;
     case Channel::Nightly:
-      return !isSameNightlyBuild(CROSSPOINT_VERSION, latestVersion);
+      if (latestVersion == CROSSPOINT_VERSION) return false;
+      // Release builds embed the same seven-character source revision after '+'.
+      // A local timestamped development build has no comparable release SHA.
+      if (const size_t plus = latestVersion.rfind('+'); plus != std::string::npos &&
+          latestVersion.size() - plus == 8) {
+        const std::string_view current = CROSSPOINT_VERSION;
+        const size_t currentPlus = current.rfind('+');
+        if (currentPlus != std::string_view::npos && current.substr(currentPlus + 1) ==
+                                                        std::string_view(latestVersion).substr(plus + 1)) return false;
+      }
+      return true;
   }
   if (latestVersion == CROSSPOINT_VERSION) return false;
 
-  int currentMajor, currentMinor, currentPatch;
-  int latestMajor, latestMinor, latestPatch;
+  int currentMajor = 0, currentMinor = 0, currentPatch = 0;
+  int latestMajor = 0, latestMinor = 0, latestPatch = 0;
 
   const auto currentVersion = CROSSPOINT_VERSION;
 
   // semantic version check (only match on 3 segments)
-  sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch);
-  sscanf(currentVersion, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch);
+  if (sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch) != 3) return false;
+  if (sscanf(currentVersion, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch) != 3) return true;
 
   /*
    * Compare major versions.
@@ -185,6 +253,11 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     LOG_ERR("OTA", "No OTA partition available");
     return INTERNAL_UPDATE_ERROR;
   }
+  if (otaSize == 0 || otaSize > updatePartition->size) {
+    LOG_ERR("OTA", "Fork image does not fit OTA partition: %zu > %u", otaSize,
+            static_cast<unsigned>(updatePartition->size));
+    return INTERNAL_UPDATE_ERROR;
+  }
 
   esp_ota_handle_t otaHandle = 0;
   esp_err_t esp_err = esp_ota_begin(updatePartition, OTA_SIZE_UNKNOWN, &otaHandle);
@@ -207,7 +280,20 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   bool wrongChip = false;
   board_tag::Scanner boardScanner;
   bool wrongBoard = false;
+  mbedtls_sha256_context shaCtx;
+  mbedtls_sha256_init(&shaCtx);
+  if (mbedtls_sha256_starts(&shaCtx, 0) != 0) {
+    mbedtls_sha256_free(&shaCtx);
+    esp_ota_abort(otaHandle);
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    return INTERNAL_UPDATE_ERROR;
+  }
+  bool hashOk = true;
   const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t len) {
+    if (len > otaSize - processedSize) {
+      hashOk = false;
+      return false;
+    }
     if (hdrLen < sizeof(hdr)) {
       const size_t take = std::min(len, sizeof(hdr) - hdrLen);
       std::memcpy(hdr + hdrLen, data, take);
@@ -230,6 +316,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
       wrongBoard = true;
       return false;  // abort before selecting the incomplete image as bootable
     }
+    if (mbedtls_sha256_update(&shaCtx, data, len) != 0) {
+      hashOk = false;
+      return false;
+    }
     if (esp_ota_write(otaHandle, data, len) != ESP_OK) {
       flashOk = false;
       return false;  // abort the transfer
@@ -251,13 +341,18 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   /* Return back to default power saving for WiFi in case of failing */
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
-  if (wrongChip || wrongBoard) {
+  uint8_t actualDigest[32] = {};
+  if (mbedtls_sha256_finish(&shaCtx, actualDigest) != 0 || processedSize != otaSize ||
+      std::memcmp(actualDigest, otaSha256.data(), otaSha256.size()) != 0) hashOk = false;
+  mbedtls_sha256_free(&shaCtx);
+
+  if (wrongChip || wrongBoard || !boardScanner.matched()) {
     LOG_ERR("OTA", "Firmware install aborted: wrong device");
     esp_ota_abort(otaHandle);
     return WRONG_DEVICE_ERROR;
   }
 
-  if (!fetchOk || !flashOk) {
+  if (!fetchOk || !flashOk || !hashOk) {
     LOG_ERR("OTA", "Firmware install failed (%s)", flashOk ? "download" : "flash write");
     esp_ota_abort(otaHandle);
     return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;

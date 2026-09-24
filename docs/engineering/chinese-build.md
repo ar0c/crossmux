@@ -206,12 +206,8 @@ PYTHON=/tmp/cn_font_venv/bin/python3 \
 PYTHON=/tmp/cn_font_venv/bin/python3 \
   bash lib/EpdFont/scripts/build-cn-builtin-fonts.sh
 
-# 5. Build the unified C3 firmware
-pio run -e gh_release
-
-# Build all six unified ESP32-S3 device binaries
-pio run -e sticky -e x4pro -e papermono -e eego_a4 \
-  -e murphy_m4 -e waveshare_epaper_397
+# 5. Build both supported unified ESP32-S3 images
+pio run -e x4pro -e waveshare_epaper_397
 ```
 
 Nightly builds and stores one neutrally named binary set per hardware target.

@@ -1,9 +1,35 @@
 # Firmware Release Architecture
 
-CrossMux has two release channels, `stable` and `nightly`, managed by one
-channel-aware pipeline. Hardware identity is not a release channel. Stable
-contains the shared X3/X4 image and a separate Sticky image. Both targets support
-`stable` and `nightly`; the other six ESP32-S3 release targets remain Nightly-only.
+## Fork firmware name
+
+The firmware's startup/About name and all new exported firmware packages use
+`crossmux-ar0c`. Local `x4pro` builds export
+`crossmux-ar0c-YYMMDD-HHMMSS-<image-sha256-prefix8>-x4pro.bin`. The stamp uses China
+time and is captured once at build setup. The digest is computed from the final
+image, so distinct uncommitted builds cannot silently share a Git-only filename.
+Other development targets export `crossmux-ar0c-<base-version>-<device>-<git-sha>-<image-sha>.bin`.
+PlatformIO keeps its internal `firmware.bin` because the build and package scripts
+consume it. Published install assets use `crossmux-ar0c-<device>-<segment>.bin`;
+manifests record those exact names, while their URLs and board tags still
+identify the matching device.
+The runtime version on subsequent builds is
+`YYMMDD-HHMMSS-ar0c-<base-version>-x4pro`, checked against the 32-byte limit.
+The base upstream version is not artificially incremented. Identity/export tests are in
+`scripts/tests/test_fork_identity.py`.
+
+The previously built full time-sync image (SHA-256 beginning `d9bc65ce`) used
+the historical name `260915-181930-d9bc65ce-ar0c-x4pro.bin`, based on its recorded build output time.
+That historical filename-only change left its embedded runtime version unchanged.
+No rebuild/flash is required merely to rename an SD
+firmware file. Old device packages are backed up on Windows before removal;
+accounting `.bin` receipts, book data and the running application are not firmware
+package cleanup targets.
+
+This fork has two release channels, `stable` and `nightly`, managed by one
+channel-aware pipeline. Hardware identity is not a release channel. Both channels
+contain ESP32-S3 images only: X4 Pro is the stable target, and X4 Pro plus
+Waveshare ePaper 3.97 are in Nightly. Other device build profiles have been
+removed from this fork.
 
 ## Canonical targets
 
@@ -13,11 +39,8 @@ runtime models, artifact slug, embedded board tag, per-channel PlatformIO
 environments, chip, install capability, and supported channels. The workflow,
 packager, index builder, and tests import this table rather than copy it.
 
-The X3/X4 target accepts `xteink_x3` and `xteink_x4` and produces one ESP32-C3
-image. Stable uses `gh_release`; Nightly uses `gh_release_rc`. Sticky Stable uses
-`sticky-gh_release`. Sticky, X4 Pro,
-Paper Mono, EEGO A4, Murphy M4, Waveshare ePaper 3.97, and Metalio E-Ink 4 each produce their own
-ESP32-S3 Nightly image. Each image is aliased by the compatibility `global` and
+X4 Pro stable uses `x4pro-gh_release`. X4 Pro and Waveshare ePaper 3.97 each
+produce a separate ESP32-S3 Nightly image. Each image is aliased by the compatibility `global` and
 `zh-CN` pointers.
 
 ## Publishing
@@ -26,53 +49,33 @@ Each target job builds once and packages one binary set plus two compatibility
 manifests. Packaging checks the ESP image chip ID, required board tag, partition
 layout, app-slot size, and SHA-256 before emitting the manifests.
 
-The global and China publish jobs run independently. Each writes in this order:
+The fork publishes to its GitHub Releases only, in this order:
 
 1. immutable binaries and checksum files;
 2. immutable target manifests;
-3. rolling regional indexes.
+3. rolling channel index.
 
-Every target selected for a channel must build successfully before either region
-publishes. Nightly also requires its previous rolling index because that index
-protects the immediately preceding build during cleanup. Once both regions
-publish, CI resolves every manifest and verifies each distinct asset's size and
-SHA-256. Cleanup then runs for Nightly only; Stable builds are retained.
+Every target selected for a channel must build successfully before publication.
+CI resolves every manifest and verifies each distinct asset's size and SHA-256.
+If a previous Nightly index exists, cleanup protects its referenced builds.
+The first Nightly run has no previous index and skips cleanup. Stable builds are
+retained.
 
-The global index is the `release-index.json` asset of the rolling `stable` or
-`nightly` GitHub Release. Binaries and compatibility manifests live in an
-immutable `<channel>-build-<sha>-<run>-<attempt>` GitHub Release. China indexes
-are `/firmware/releases/<channel>/index.json`; target assets live under
-`/firmware/builds/<channel>-build-<sha>-<run>-<attempt>/<target>/` in COS. Region chooses the storage
-provider; both variant manifests reference the same neutral binary names and
-differing hashes fail publication. After Stable verification, the version tag
-also receives the legacy `firmware.bin`, `firmware-cn.bin`, `bootloader.bin`,
-and `partitions.bin` assets, alongside the neutral binaries, compatibility manifests,
-and checksum files for every Stable target.
+The index is the `release-index.json` asset of the rolling `stable` or
+`nightly` GitHub Release in `ar0c/crossmux`. Binaries and both compatibility
+manifests live in an immutable `<channel>-build-<sha>-<run>-<attempt>` GitHub
+Release. Both variants reference the same binaries. After Stable verification, the version tag
+also receives the board-specific `x4pro` full-install assets. The rolling
+release removes obsolete generic C3 `firmware.bin` and `firmware-cn.bin` assets.
 
-At steady state, GitHub and COS retain the current build and the build or builds
-referenced by the previous index. A scheduled successful Nightly therefore
-keeps roughly 24 hours of rollback data. Failed builds do not publish or clean
-up anything. The first complete run can temporarily retain more than two build
-names when the preceding index contains target-level fallbacks; the next
-complete run converges to exactly the current and previous build.
-
-COS publishing runs only on the H2O self-hosted runner and does not fall back to
-a GitHub-hosted runner. It uses a version-pinned, SHA-256-verified COSCLI binary
-from the runner's temporary directory. The workflow verifies COSCLI before
-writing any immutable COS object and passes credentials directly to each COS
-command instead of persisting a CLI config file. Required repository secrets
-are `COS_SECRET_ID`, `COS_SECRET_KEY`, `COS_BUCKET`, and `COS_REGION`;
-`COS_SESSION_TOKEN` is optional. Gitee is not a firmware release destination.
-The COS identity also needs `cos:GetBucket` for the current-object listing,
-`cos:GetBucketVersioning` to detect the bucket state,
-`cos:GetBucketObjectVersions` for versioned cleanup, `cos:DeleteObject`, and
-`cos:DeleteMultipleObjects`. Cleanup detects versioned buckets and removes every
-version of an obsolete build prefix rather than leaving hidden historical objects.
+At steady state, GitHub retains the current build and any build referenced by
+the previous index. Failed builds do not trigger cleanup. No fork workflow writes
+to `crossmux.cn`, COS, or another release service.
 
 ## Index contract and failure behavior
 
 The schema-v1 index contains `channel`, `updatedAt`, `buildId`, and a `targets`
-map, plus optional regional `releaseNotes`. Each target repeats its identity and
+map, plus optional localized `releaseNotes`. Each target repeats its identity and
 channel capabilities and contains `global` and `zh-CN` pointers with version,
 CrossMux SHA, SDK SHA, publish time, and immutable manifest URL. Stable requires
 both release-note locales.
@@ -81,15 +84,18 @@ Every target advances together only when both compatibility manifests are valid
 and have the same CrossMux revision, SDK revision, version, and assets. A
 missing or malformed manifest prevents the whole channel from publishing.
 Build objects are never overwritten; cleanup runs only after the new rolling
-indexes and their assets pass verification.
+index and its assets pass verification.
 
 ## Consumers and safety
 
-The Web flasher reads the regional catalog and then the selected target's
-install manifests. Device OTA keeps the GitHub-like response with one
-`firmware.bin` asset and selects by exact model, variant, and channel. A target
-that does not support Stable returns `ota_status: unsupported_channel` rather
-than falling back to Nightly or another board.
+The Web flasher remains an upstream service. Device Check Updates reads only
+`ar0c/crossmux` rolling GitHub Releases: `stable` for X4 Pro, `nightly` for
+X4 Pro and Waveshare 3.97. The index selects the exact board and content
+variant, then the immutable manifest supplies the firmware asset, size, and
+SHA-256. The device rejects mismatched board, channel, revision, size, digest,
+or a URL outside this fork's immutable release namespace. Until a channel's
+first release and `release-index.json` are published, checks report a fetch
+error; they never fall back to upstream.
 
 Official packages must contain the board tag. The OTA stream aborts a tagged
 image for another board before selecting the new partition. Untagged historical
@@ -97,5 +103,10 @@ or third-party images remain compatible, so chip and board checks in the
 official packaging path are mandatory.
 
 CI, indexes, and checksum checks do not replace real-device acceptance. Before
-making a Nightly pipeline production-critical, test OTA and reboot on every S3
-target, one X3/X4, both content profiles, and one wrong-board negative case.
+using a Nightly image on hardware, test boot, reading, input, storage, display,
+and sleep/wake on that exact S3 board. In-device OTA also needs a real update,
+reboot, and wrong-board rejection check on each board before claiming hardware
+acceptance. The wolfSSL download path currently uses `setInsecure()`; manifest
+hashes detect transfer corruption but cannot authenticate a forged manifest.
+Treat this as a transport security limitation until certificate validation or
+signed release metadata is implemented.

@@ -36,55 +36,40 @@ default for the isolated cache-switch tests below.
 
 ### ar0c fork identity
 
-The `x4pro` development target uses `1.5.8-ar0c-x4pro+<git-short-sha>`
-(base version read from `platformio.ini`). Startup, About, and `/api/status`
-share `CROSSPOINT_VERSION`. The startup/About product name is `CrossMux ar0c`,
+The `x4pro` development target uses `YYMMDD-HHMMSS-ar0c-<base>-x4pro`
+(China-time build stamp; base version read from `platformio.ini`). Startup, About, and `/api/status`
+share `CROSSPOINT_VERSION`. The startup/About firmware name is `crossmux-ar0c`,
 with English fallback for other UI languages. Hardware model, chip, MAC,
 statistics, partition layout, and USB descriptors are unchanged.
 
-On a successful image build, `scripts/git_branch.py` exports an identical copy
-as `crossmux-ar0c-<base>-x4pro-<sha>.bin` beside `firmware.bin`.
-Commit the intended source before a distributable build so its revision is
-traceable. Other build targets retain their existing version generation;
+On a successful development image build, `scripts/git_branch.py` exports an
+identical `crossmux-ar0c-*.bin` copy beside PlatformIO's internal `firmware.bin`.
+X4 Pro uses `crossmux-ar0c-YYMMDD-HHMMSS-<image-sha256-prefix8>-x4pro.bin`;
+other development targets include the base version, device, Git revision, and
+image digest. The digest distinguishes local uncommitted builds sharing the
+same Git revision; these are local development artifacts, not a tagged release.
+Commit the intended source when explicitly requested for a revision-based release.
+Build targets retain their existing runtime version generation;
 upstream OTA endpoints are not redirected by this branding change.
 
 * **Standard**: C++20 (`-std=c++2a`). No Exceptions, No RTTI.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.
 * **Environments** (in `platformio.ini`):
-  * `default`: Development (LOG_LEVEL=2, serial enabled)
-  * `gh_release`: Production (LOG_LEVEL=0)
-  * `gh_release_rc`: Release candidate (LOG_LEVEL=1)
-  * `slim`: Minimal build (no serial logging)
-  * `sticky`: Seeed Sticky ESP32-S3 development build
-  * `x4pro`: Xteink X4 Pro ESP32-S3 development build
-  * `x4c`: Xteink X4 Classic ESP32-S3 build-only development build
-  * `papermono`: M5Stack PaperMono ESP32-S3 development build
-  * `eego_a4`: eego A4 ESP32-S3 experimental development build
-  * `murphy_m4`: Murphy M4 ESP32-S3 experimental development build
-  * `waveshare_epaper_397`: Waveshare ePaper 3.97 ESP32-S3 experimental development build
-  * `simulator`: Native X4 desktop simulator supplied by the pinned simulator fork
-  * `simulator_x3`: Native X3 desktop simulator
-  * `simulator_eego_a4`: Native 768x552 eego A4 product simulator
-  * `simulator_murphy_m4`: Native 800x480 Murphy M4 product simulator
+  * `x4pro`: Default X4 Pro development build (LOG_LEVEL=2, serial enabled)
+  * `x4pro-gh_release`: X4 Pro stable release build
+  * `x4pro-gh_release_rc`, `x4pro_nightly`: X4 Pro release candidate and Nightly
+  * `waveshare_epaper_397`: Waveshare ePaper 3.97 development build
+  * `waveshare_epaper_397_nightly`: Waveshare Nightly build
+  * `simulator`: Native desktop simulator for UI development
 
-The seven S3 environments are separate hardware binaries, but each is a unified
-language firmware. `bin/ci-check` builds the default C3 target and six S3 release
-targets; X4 Classic is build-only and covered separately by Hardware CI.
+The two S3 environments are separate hardware binaries, each with one unified
+language firmware. Routine CI and Hardware CI build only these boards.
 
-Routine pull-request CI builds only `default` and `x4pro`. `default` remains the
-shared X3/X4 firmware with runtime device detection. The path-filtered Hardware
-CI workflow builds all four simulators and all seven S3 environments when
-hardware-sensitive files change, and can also be started manually.
-
-Bluetooth Page Turner Beta is compiled into every hardware environment,
-including development, Nightly, release-candidate, stable, and slim builds.
+Bluetooth Page Turner Beta is compiled into both hardware targets,
+including development, Nightly, release-candidate, and stable builds.
 The runtime Bluetooth switch defaults to off; native simulators use SDK stubs.
-C3 environments inherit the internal-RAM and Flash-controller configuration
-from `c3_hardware`. S3 hardware profiles inherit the PSRAM and IPC configuration.
-Sticky and eego A4 use the custom-core controller-only NimBLE configuration;
-the other five S3 targets retain their prebuilt `dio_opi` core so the TinyUSB
-MSC component graph remains intact. See [C3 Bluetooth](c3-bluetooth.md) for
-memory gates, validation results, and remaining hardware acceptance work.
+Both S3 hardware profiles inherit the PSRAM and IPC configuration and retain
+their prebuilt `dio_opi` core so the TinyUSB MSC component graph remains intact.
 
 The SDK's obsolete passkey callback is removed only from a generated source copy
 under `$BUILD_DIR/ble-compat`; the SDK and NimBLE dependency sources are never
@@ -118,9 +103,7 @@ export PLATFORMIO_CORE_DIR="$PWD/.platformio/ble-psram"
 export PLATFORMIO_BUILD_DIR="$PWD/.pio/ble-psram-build"
 export PLATFORMIO_BUILD_CACHE_DIR="$PWD/.cache/ble-psram"
 export IDF_COMPONENT_CACHE_PATH="$PWD/.cache/ble-psram-idf-components"
-pio run -e sticky_nightly
-pio run -e waveshare_epaper_397_nightly
-pio run -e eego_a4_nightly
+pio run -e x4pro_nightly
 pio run -e waveshare_epaper_397_nightly
 ```
 
@@ -156,21 +139,15 @@ files under `fs_/books/`, and run:
 
 ```bash
 pio run -e simulator -t run_simulator
-pio run -e simulator_x3 -t run_simulator
-pio run -e simulator_eego_a4 -t run_simulator
-pio run -e simulator_murphy_m4 -t run_simulator
 ```
 
 The simulator implementation and launcher come from the pinned
 [`0x1abin/crosspoint-simulator`](https://github.com/0x1abin/crosspoint-simulator)
 fork; the exact revision is recorded in `platformio.ini`.
 The firmware repository does not carry a second host implementation. Arrow
-keys are Up/Down, `P` is Power,
-mouse input provides touch, and `S` sleeps. A4 additionally maps `H` to a short
-Back or one-shot Home after 700 ms; M4 ignores `H`. Once A4/M4 is asleep, only
-Power wakes it.
+keys are Up/Down, `P` is Power, mouse input provides touch, and `S` sleeps.
 
-This product-level simulator covers UI, input, RTC state, M4 frontlight state,
+This simulator covers UI, input, RTC state,
 and sleep/wake flows. It does not emulate EPD waveforms or ghosting, bus timing,
 SDMMC contention, PSRAM, or power consumption.
 
@@ -202,17 +179,12 @@ These flags in `platformio.ini` fundamentally affect firmware behavior:
 - Must call `renderer.restoreBwBuffer()` to free temporary buffers
 - See [lib/GfxRenderer/GfxRenderer.cpp:439-440](../../lib/GfxRenderer/GfxRenderer.cpp) for malloc usage
 
-**X4 SSD1677 display implications**:
-- The application does not override display-driver configuration. The SDK's
-  active X4 board profile selects the SSD1677 and its in-spec 20 MHz SPI clock.
-- Refresh waveforms come from the SDK's active board config. X4 FAST refreshes
-  use the stock absolute sequence (`0xFC`), which includes the temperature and
-  power sequencing needed to avoid the persistent ghosting seen with the
-  weaker incremental `0x1C` path.
-- X3 is runtime-selected before display initialization and uses its UC81xx
-  driver and SPI configuration unchanged. X4 Pro probes its SSD1677/UC81xx
-  controller once before display initialization. Sticky retains its
-  board-specific SSD1677 waveform config.
+**Supported display implications**:
+- The application uses the SDK board profiles for display initialization and
+  waveform selection.
+- X4 Pro probes its controller before display initialization; a unit may have
+  SSD1677, UC8179, or UC8279 hardware.
+- Waveshare 3.97 uses its own SSD1677 board profile and timing.
 
 ---
 
@@ -231,12 +203,12 @@ These flags in `platformio.ini` fundamentally affect firmware behavior:
 **Example** `platformio.local.ini`:
 ```ini
 # platformio.local.ini (gitignored)
-[env:default]
+[env:x4pro]
 upload_port = COM7              # Windows: COMx, Linux: /dev/ttyUSBx
 monitor_port = COM7
 
 build_flags =
-  ${base.build_flags}
+  ${x4pro_hardware.build_flags}
   -DMY_DEBUG_FLAG=1             # Personal debug flags
   -DTEST_FEATURE_ENABLED=1
 ```

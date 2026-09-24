@@ -18,22 +18,23 @@ FIND_NAMESPACE = {
     storage: re.compile(rf'(?<![a-z0-9-])({pattern})(?![a-z0-9-])')
     for storage, pattern in NAMESPACE_TEXT.items()
 }
-MANIFEST_PATH = {
-    'github': re.compile(
-        rf'^/0x1abin/crossmux/releases/download/({NIGHTLY_BUILD})/[^/]+-manifest\.json$'
-    ),
-    'cos': re.compile(rf'^/firmware/builds/((?:nightly-build-)?{BUILD_ID})/'),
-}
+MANIFEST_PATH = {'cos': re.compile(rf'^/firmware/builds/((?:nightly-build-)?{BUILD_ID})/')}
 HOST = {'github': 'github.com', 'cos': 'assets.crossmux.cn'}
 
 
-def referenced_builds(index, storage):
+def referenced_builds(index, storage, repository='0x1abin/crossmux'):
     if not isinstance(index, dict) or index.get('schemaVersion') != 1 or index.get('channel') != 'nightly':
         raise ValueError('invalid previous Nightly index envelope')
     targets = index.get('targets')
     if not isinstance(targets, dict) or set(targets) != set(TARGETS):
         raise ValueError('previous Nightly index does not contain the canonical target set')
 
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+        raise ValueError('invalid GitHub repository')
+    manifest_path = (
+        re.compile(rf'^/{re.escape(repository)}/releases/download/({NIGHTLY_BUILD})/[^/]+-manifest\.json$')
+        if storage == 'github' else MANIFEST_PATH[storage]
+    )
     builds = set()
     for target_id, entry in targets.items():
         variants = entry.get('variants') if isinstance(entry, dict) else None
@@ -46,33 +47,34 @@ def referenced_builds(index, storage):
             if not isinstance(manifest_url, str):
                 raise ValueError(f'invalid previous {target_id}/{flavor} manifest URL')
             parsed = urlparse(manifest_url)
-            match = MANIFEST_PATH[storage].match(parsed.path)
+            match = manifest_path.match(parsed.path)
             if parsed.scheme != 'https' or parsed.hostname != HOST[storage] or parsed.query or not match:
                 raise ValueError(f'unexpected previous {target_id}/{flavor} manifest URL')
             builds.add(match.group(1))
     return builds
 
 
-def obsolete_builds(storage, current, previous_index, candidates):
+def obsolete_builds(storage, current, previous_index, candidates, repository='0x1abin/crossmux'):
     if not NAMESPACE[storage].fullmatch(current):
         raise ValueError(f'invalid current {storage} build name')
     found = set(FIND_NAMESPACE[storage].findall(candidates))
     if current not in found:
         raise ValueError(f'current {storage} build is missing from the candidate list')
-    keep = referenced_builds(previous_index, storage) | {current}
+    keep = referenced_builds(previous_index, storage, repository) | {current}
     return sorted(found - keep)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--storage', choices=NAMESPACE, required=True)
+    parser.add_argument('--repository', default='0x1abin/crossmux')
     parser.add_argument('--current', required=True)
     parser.add_argument('--previous-index', type=Path, required=True)
     parser.add_argument('--candidates', type=Path, required=True)
     args = parser.parse_args()
     previous_index = json.loads(args.previous_index.read_text())
     candidates = args.candidates.read_text()
-    for build in obsolete_builds(args.storage, args.current, previous_index, candidates):
+    for build in obsolete_builds(args.storage, args.current, previous_index, candidates, args.repository):
         print(build)
 
 

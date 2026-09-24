@@ -47,8 +47,13 @@ def validate_url(url, index_url, channel):
     if parsed.scheme != 'https':
         raise ValueError(f'published URL is not HTTPS: {url}')
     if index_host == 'github.com':
-        valid = parsed.hostname == 'github.com' and parsed.path.startswith(
-            f'/0x1abin/crossmux/releases/download/{channel}-build-'
+        index_path = urlparse(index_url).path
+        repository = re.fullmatch(
+            rf'(/[^/]+/[^/]+)/releases/download/{re.escape(channel)}/release-index\.json',
+            index_path,
+        )
+        valid = bool(repository) and parsed.hostname == 'github.com' and parsed.path.startswith(
+            f'{repository.group(1)}/releases/download/{channel}-build-'
         )
     elif index_host == 'assets.crossmux.cn':
         valid = parsed.hostname == 'assets.crossmux.cn' and parsed.path.startswith('/firmware/builds/')
@@ -59,13 +64,7 @@ def validate_url(url, index_url, channel):
 
 
 def expected_assets(target_id, channel):
-    roles = (
-        tuple(OFFSETS)
-        if TARGETS[target_id]['fullInstall']
-        else ('bootloader', 'partitions', 'firmware')
-        if channel == 'stable'
-        else ('firmware',)
-    )
+    roles = tuple(OFFSETS) if TARGETS[target_id]['fullInstall'] else ('firmware',)
     return [(role, asset_name(target_id, f'{role}.bin'), OFFSETS[role]) for role in roles]
 
 

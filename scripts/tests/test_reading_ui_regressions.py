@@ -89,6 +89,7 @@ int main() {
         callback = method(source, 'void WeReadProgressSyncActivity::onWifiSelectionComplete(')
         render = method(source, 'void WeReadProgressSyncActivity::render(')
         display = render[render.rindex('  renderer.displayBuffer('):render.rindex('}')]
+        self.assertIn('fullRefreshPending_.store(true);', enter)
         run_cpp(r'''
 #include <atomic>
 #include <cassert>
@@ -99,40 +100,32 @@ struct Renderer {
   void displayBuffer(HalDisplay::RefreshMode mode=HalDisplay::FAST_REFRESH) { last=mode; }
 };
 struct Activity { void onEnter() {} };
-namespace ReaderUtils { void applyOrientation(Renderer&, int) {} }
-struct { int orientation=0; } SETTINGS;
-bool loggedIn=true;
-namespace WeReadStore {
-struct Session { bool valid() { return true; } void clear() {} };
-bool loadSession(Session&) { return loggedIn; }
-}
-namespace NetworkStartup { void prepare(Renderer&) {} }
+struct MappedInputManager { enum class Button { Confirm }; bool isPressed(Button) { return false; } };
 constexpr int WL_CONNECTED=1;
 struct { int connected=1; int status() { return connected; } } WiFi;
 struct WeReadProgressSyncActivity : Activity {
-  enum class State { WifiSelection, Starting, LoginRequired };
+  enum class State { WifiSelection, Starting, LoginRequired, TimeConfirm, TimeResult };
   State state_ = State::WifiSelection;
   std::atomic<bool> fullRefreshPending_{true};
   Renderer renderer;
-  bool wifiActivated_=false, returned=false, child=false;
+  MappedInputManager mappedInput;
+  bool resumeTimeAfterWifi_=false, timeInputBarrier_=false, returned=false, child=false;
   void requestUpdate() {}
   void launchWifiSelection() { child=true; }
   void returnToReader() { returned=true; }
-  void onEnter();
+  void onEnter() { fullRefreshPending_.store(true); }
   void onWifiSelectionComplete(bool);
   void renderRefresh() { DISPLAY }
 };
-'''.replace('DISPLAY', display) + enter + callback + r'''
+'''.replace('DISPLAY', display) + callback + r'''
 int main() {
-  for (bool login : {false,true}) for (int connected : {0,1}) {
-    loggedIn=login; WiFi.connected=connected;
+  for (int connected : {0,1}) {
+    WiFi.connected=connected;
     WeReadProgressSyncActivity page;
     page.onEnter();
-    if (page.child) {
-      page.renderer.displayBuffer(); // A child paint cannot consume the parent's flag.
-      WiFi.connected=1;
-      page.onWifiSelectionComplete(true);
-    }
+    page.renderer.displayBuffer(); // A child paint cannot consume the parent's flag.
+    WiFi.connected=1;
+    page.onWifiSelectionComplete(true);
     page.renderRefresh(); assert(page.renderer.last==HalDisplay::FULL_REFRESH);
     page.renderRefresh(); assert(page.renderer.last==HalDisplay::FAST_REFRESH);
     WiFi.connected=1;

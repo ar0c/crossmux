@@ -5,37 +5,12 @@
 #include <cstring>
 
 // The board name derives from the FREEINK_DEVICE_* build flags so every env
-// (and any fork built from this source) is tagged automatically. The combined
-// X3/X4 ESP32-C3 binary is one compatibility class, tagged "x4". Names match
-// the release asset suffixes (firmware-<name>.bin; plain firmware.bin for x4).
+// (and any fork built from this source) is tagged automatically. Names match
+// the supported board identifiers in the release manifest.
 #if FREEINK_DEVICE_X4PRO
 #define CROSSPOINT_BOARD_NAME "x4pro"
-#elif FREEINK_DEVICE_X4CLASSIC
-#define CROSSPOINT_BOARD_NAME "x4c"
-#elif FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3
-#define CROSSPOINT_BOARD_NAME "x4"
-#elif FREEINK_DEVICE_PAPERMONO
-#define CROSSPOINT_BOARD_NAME "papermono"
-#elif FREEINK_DEVICE_STICKY
-#define CROSSPOINT_BOARD_NAME "sticky"
-#elif FREEINK_DEVICE_M5PAPER
-#define CROSSPOINT_BOARD_NAME "m5paper"
-#elif FREEINK_DEVICE_LILYGO
-#define CROSSPOINT_BOARD_NAME "lilygo"
-#elif FREEINK_DEVICE_M5
-#define CROSSPOINT_BOARD_NAME "m5"
-#elif FREEINK_DEVICE_MURPHY_M4
-#define CROSSPOINT_BOARD_NAME "murphy_m4"
-#elif FREEINK_DEVICE_MURPHY
-#define CROSSPOINT_BOARD_NAME "murphy"
-#elif FREEINK_DEVICE_EEGO_A4
-#define CROSSPOINT_BOARD_NAME "eego_a4"
 #elif FREEINK_DEVICE_WAVESHARE_EPAPER_397
 #define CROSSPOINT_BOARD_NAME "waveshare_epaper_397"
-#elif FREEINK_DEVICE_METALIO_EINK4
-#define CROSSPOINT_BOARD_NAME "metalio_eink4"
-#elif FREEINK_DEVICE_DELINK
-#define CROSSPOINT_BOARD_NAME "delink"
 #elif CROSSPOINT_EMULATED
 #define CROSSPOINT_BOARD_NAME "simulator"
 #else
@@ -67,6 +42,7 @@ void Scanner::feed(const uint8_t* data, size_t len) {
           mismatchFound = true;
           return;
         }
+        matchingFound = true;
       } else if (nameLen < MAX_NAME && c > 0x20 && c < 0x7F) {
         captured[nameLen++] = c;
       } else {

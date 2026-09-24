@@ -16,19 +16,16 @@ that matches your task — don't load everything at once.
 | [ui-and-input.md](ui-and-input.md) | Rendering UI, handling orientation, mapping buttons, or using the `GUI`/UITheme macro and `tr()`. |
 | [generated-files.md](generated-files.md) | Editing HTML pages, i18n translations, or fonts (anything produced by a build script). |
 | [testing-and-debugging.md](testing-and-debugging.md) | Building, monitoring, debugging crashes, verifying changes, or reading CI workflows. |
-| [c3-bluetooth.md](c3-bluetooth.md) | Reviewing the C3 BLE profile, reader lifecycle, paged font indexes, build isolation, or X4 validation limits. |
+| [c3-bluetooth.md](c3-bluetooth.md) | Historical C3 BLE investigation; C3 has no build or release target in this fork. |
 | [git-workflow.md](git-workflow.md) | Any git operation: detecting repo context, branching, commit format, or deciding whether to commit. |
 | [cache-management.md](cache-management.md) | Changing a cache binary layout, invalidating caches, or bumping a format version. (Byte-level formats: [../file-formats.md](../file-formats.md).) |
 | [sd-card-font-cache.md](sd-card-font-cache.md) | Reviewing the SD-card reader-font cache, its inactive-OTA-slot backend, rollback boundary, commit protocol, SD fallback, progress UI, or performance logs. |
 | [chinese-build.md](chinese-build.md) | Working on unified-firmware content profiles or embedded CJK fonts. |
 | [firmware-release.md](firmware-release.md) | Changing Nightly targets, packaging, GitHub/COS publishing, regional indexes, rollback, or OTA release contracts. |
-| [device-variants.md](device-variants.md) | Building or flashing for the Xteink X3 vs X4, runtime device detection (one binary, both panels), and the per-device hardware differences. |
-| [eego-a4.md](eego-a4.md) | Building, first-flashing, recovering, or hardware-validating the experimental ESP32-S3 eego A4 target. |
-| [murphy-m4.md](murphy-m4.md) | Building, first-flashing, recovering, or hardware-validating the experimental ESP32-S3 Murphy M4 target. |
+| [device-variants.md](device-variants.md) | Building and flashing the supported X4 Pro and Waveshare 3.97 images. |
 | [waveshare-epaper-397.md](waveshare-epaper-397.md) | Building, flashing, or hardware-validating the experimental Waveshare ESP32-S3 ePaper 3.97 target. |
 | [sdk-upstream-sync.md](sdk-upstream-sync.md) | Reviewing the September 2026 SDK integration, upstream touch-menu behavior, source snapshots, and hardware acceptance limits. |
 | [upstream-merge-policy.md](upstream-merge-policy.md) | Reconciling upstream guide changes with the canonical `AGENTS.md` layout — how to keep the map thin and route upstream changes into these docs. |
-| [Metalio E-Ink 4](metalio-eink4.md) | Metalio BSP, CST816S bezel keys, SDMMC, power sequencing and acceptance |
 
 ## Related docs outside this directory
 

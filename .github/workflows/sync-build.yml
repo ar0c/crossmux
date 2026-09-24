@@ -1,8 +1,8 @@
 name: Sync PR build verify
 
-# Build the unified release for CrossMux candidates created by the
+# Build the X4 Pro release for CrossMux candidates created by the
 # sync-upstream skill. Regular PR CI covers the development build and code
-# checks; this workflow adds gh_release and can also be run manually.
+# checks; this workflow adds the S3 release and can also be run manually.
 
 on:
   pull_request:
@@ -58,7 +58,7 @@ jobs:
           key: pio-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-cache-${{ runner.os }}-
 
-      - name: Build unified release
+      - name: Build X4 Pro release
         run: |
           set -euo pipefail
-          pio run -e gh_release
+          pio run -e x4pro-gh_release

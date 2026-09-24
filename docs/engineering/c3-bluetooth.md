@@ -1,4 +1,7 @@
-# ESP32-C3 BLE page-turner support
+# ESP32-C3 BLE page-turner support (historical)
+
+This document records earlier C3 work. The current fork has no C3 build or
+release target; use the X4 Pro and Waveshare S3 profiles in `platformio.ini`.
 
 All hardware firmware builds include BLE support, including the shared X3/X4
 `default`, release, RC and slim profiles. Compilation makes Bluetooth available
