@@ -80,8 +80,8 @@ pio run --target upload
 ```
 
 The repository pins the pioarduino platform in `platformio.ini`. `pio run` builds
-the X3/X4 development firmware; `pio run -e gh_release` builds its unified-language
-stable profile. Use the matching environment for other devices; see
+the X4 Pro development firmware; `pio run -e x4pro-gh_release` builds its stable
+profile. Use `pio run -e waveshare_epaper_397` for Waveshare 3.97; see
 [build environments and simulator setup](../engineering/build-system.md).
 
 Documentation-only changes need local link, command, and whitespace checks,

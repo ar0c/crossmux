@@ -2,7 +2,7 @@
 
 Project: CrossMux, a community fork of CrossPoint Reader for ESP32 e-ink devices.
 Mission: Keep reading fast and reliable while supporting lightweight apps, reading analytics, standby faces, and on-demand services within the hardware budget.
-Targets: Xteink X3/X4 share an ESP32-C3 image; ESP32-S3 targets have separate images. See [`scripts/nightly_targets.py`](scripts/nightly_targets.py) for release targets and channels.
+Targets: Xteink X4 Pro and Waveshare ePaper 3.97 have separate ESP32-S3 images. See [`scripts/nightly_targets.py`](scripts/nightly_targets.py) for release targets and channels.
 
 > **This file is a map, not a manual.** It holds the identity, the
 > non-negotiable invariants, and a quick reference — then points to the deep
@@ -22,9 +22,9 @@ Targets: Xteink X3/X4 share an ESP32-C3 image; ESP32-S3 targets have separate im
 ## AI Agent Identity and Cognitive Rules
 
 * Role: Senior Embedded Systems Engineer (ESP-IDF/Arduino-ESP32 specialized), preserving CrossMux behavior and the HAL boundary across device targets.
-* Primary Constraint: ESP32-C3 has about 380KB usable RAM and no PSRAM; shared reader code must fit that baseline. S3 budgets and capabilities are target-specific. Stability is non-negotiable.
+* Primary Constraint: X4 Pro and Waveshare 3.97 are separate ESP32-S3 targets. Check each target's RAM, PSRAM, Flash, and power budgets. Stability is non-negotiable.
 * Evidence-Based Reasoning: Before proposing a change, you MUST cite the specific file path and line numbers that justify the modification.
-* Anti-Hallucination: Do not assume the existence of libraries or ESP-IDF functions. If you are unsure of an API's availability for the ESP32-C3 RISC-V target, check the freeink-sdk source or the FreeInk SDK docs (https://freeink.org/llms.txt for an LLM-readable index) first.
+* Anti-Hallucination: Do not assume the existence of libraries or ESP-IDF functions. Check the pinned freeink-sdk source or the FreeInk SDK docs (https://freeink.org/llms.txt for an LLM-readable index) first.
 * No Unfounded Claims: Do not claim performance gains or memory savings without explaining the technical mechanism (e.g., DRAM vs IRAM usage).
 * Resource Justification: You must justify any new heap allocation (new, malloc, std::vector) or explain why a stack/static alternative was rejected.
 * Verification: After suggesting a fix, instruct the user on how to verify it (e.g., monitoring heap via Serial or checking a specific cache file).
@@ -34,7 +34,7 @@ Targets: Xteink X3/X4 share an ESP32-C3 image; ESP32-S3 targets have separate im
 These are the highest-frequency-violation rules. Each links to the doc with the
 full reasoning, examples, and edge cases.
 
-1. **ESP32-C3 sets the shared-code baseline: ~380KB RAM, no PSRAM.** Justify every heap allocation; prefer stack/static; `.reserve()` before `push_back` loops; mark constants `constexpr`. → [hardware-constraints.md](docs/engineering/hardware-constraints.md)
+1. **Both supported ESP32-S3 images must fit their own memory and Flash budgets.** Justify every heap allocation; prefer stack/static; `.reserve()` before `push_back` loops; mark constants `constexpr`. → [hardware-constraints.md](docs/engineering/hardware-constraints.md)
 2. **Never bare `new`.** With `-fno-exceptions` a failed `new` calls `abort()`, not `nullptr`. Use `makeUniqueNoThrow<T>()` from `lib/Memory/Memory.h` (or `new (std::nothrow)` only when a C API takes ownership); always null-check and `LOG_ERR` on OOM. → [memory-and-allocation.md](docs/engineering/memory-and-allocation.md)
 3. **All user-facing text uses `tr()`.** Never hardcode UI strings (logs may be hardcoded). → [ui-and-input.md](docs/engineering/ui-and-input.md)
 4. **Use HAL classes, never the SDK directly** (`Storage`, `HalDisplay`, `HalGPIO`). → [architecture-and-patterns.md](docs/engineering/architecture-and-patterns.md)
@@ -66,8 +66,9 @@ full reasoning, examples, and edge cases.
 ```bash
 pio run                             # Build (default env)
 pio run -t upload                    # Build + flash
-pio run -e gh_release                # Unified-language X3/X4 stable firmware
-pio run -e simulator -t run_simulator # Desktop X4 simulator (SDL2 + curl)
+pio run -e x4pro-gh_release          # X4 Pro stable firmware
+pio run -e waveshare_epaper_397      # Waveshare 3.97 development firmware
+pio run -e simulator -t run_simulator # Desktop simulator (SDL2 + curl)
 pio check                           # Static analysis (cppcheck)
 ./bin/ci-check                      # Full code-change checks (see contributor workflow)
 ./bin/clang-format-fix               # Format (CI uses clang-format 21+)
@@ -80,7 +81,7 @@ python3 scripts/debugging_monitor.py # Enhanced serial monitor
 |---|---|---|
 | Hardware & RAM budget | Allocations, strings/vectors, SPIFFS writes, the Resource Protocol | [docs/engineering/hardware-constraints.md](docs/engineering/hardware-constraints.md) |
 | Memory & allocation | `new`/`malloc`/`makeUniqueNoThrow`, smart pointers, RAII | [docs/engineering/memory-and-allocation.md](docs/engineering/memory-and-allocation.md) |
-| ESP32-C3 pitfalls | ISRs/IRAM, `string_view`, alignment, templates, JSON | [docs/engineering/esp32-pitfalls.md](docs/engineering/esp32-pitfalls.md) |
+| ESP32 pitfalls | ISRs/IRAM, `string_view`, alignment, templates, JSON | [docs/engineering/esp32-pitfalls.md](docs/engineering/esp32-pitfalls.md) |
 | Build system & flags | PlatformIO, build envs, critical flags, local overrides | [docs/engineering/build-system.md](docs/engineering/build-system.md) |
 | Architecture & patterns | HAL, singletons, activity lifecycle, FreeRTOS, fonts | [docs/engineering/architecture-and-patterns.md](docs/engineering/architecture-and-patterns.md) |
 | Coding standards | Naming, header guards, error handling | [docs/engineering/coding-standards.md](docs/engineering/coding-standards.md) |

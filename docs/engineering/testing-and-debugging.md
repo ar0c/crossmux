@@ -17,13 +17,11 @@ pio run
 pio run -t upload
 
 # Build specific environment
-pio run -e gh_release
+pio run -e x4pro-gh_release
+pio run -e waveshare_epaper_397
 
 # Build and run a native device simulator
 pio run -e simulator -t run_simulator
-pio run -e simulator_x3 -t run_simulator
-pio run -e simulator_eego_a4 -t run_simulator
-pio run -e simulator_murphy_m4 -t run_simulator
 
 # Clean build artifacts
 pio run -t clean
@@ -37,6 +35,56 @@ pio run -t uploadfs
 * Or Command Palette: `PlatformIO: Build`, `PlatformIO: Upload`, etc.
 
 ## Monitoring and Debugging
+
+### Manual screen diagnostic export (ar0c)
+
+Settings → System → About → **Export screen diagnostics** writes the latest
+offline report to `/Diagnostics/Screen/latest.html`. Activate the first row with
+Confirm or a touch tap. Up/Down select rows; swipes still change pages. The entry
+shows Exporting, Saved, insufficient-space, or SD-error feedback. Download the
+HTML through Wi-Fi File Transfer or copy it from SD, then open it locally.
+
+The single self-contained HTML contains the current **About-page software
+framebuffer**, orientation/polarity, panel dimensions, firmware/device type,
+refresh setting/capability, uptime, current memory counters, and allowlisted
+numeric fields/stage from the last saved WeRead diagnostic. It does not capture
+an earlier error page, optical ghosting, physical panel faults or full grayscale
+appearance. The saved WeRead diagnostic may be from an earlier attempt/boot;
+compare its recorded uptime with the export's uptime. No cloud request is made.
+No session, cookie, Wi-Fi credentials, raw log or book file is copied. The About
+screenshot may include the visible device MAC address; review before sharing.
+
+The display-controller section copies `BoardConfig::ACTIVE.displayController`
+(numeric enum and driver name), `displayControllerVariant`, and the boot-cached
+`getXteinkDisplayProbeDiag()` fields: `valid`, all `ver[5]` bytes, `flg`, raw
+`verdict` plus its label, `promoted`, `mtpValid`, and all `mtp[48]` bytes.
+Variant, FLG, VER and MTP use hexadecimal. Export never probes/resets the panel
+or reads MTP again. `valid=0` / `NotProbed` means there is no boot probe result
+(also used by the simulator); `PrimaryAssumed` and `Inconclusive` do not confirm
+the default IC. `mtpValid` means bytes were captured, not that they confirm an
+IC. Raw bytes are retained even when their validity flag is false. This allows
+USB-locked X4 Pro units to share their boot evidence through TF card export.
+
+Only one latest report is retained; fixed `latest.tmp`/`latest.bak` paths provide
+bounded staging and recovery, not an ever-growing history. Each report is
+bounded to 512 KiB and export requires 1 MiB free space. The implementation streams
+the 1-bit BMP as embedded base64 with fixed-size row/output buffers; it never
+allocates a second framebuffer. The Activity holds the render lock, waits for
+the previous refresh and yields periodically while exporting. Writes/close and
+reopened size are checked before promotion; a failed promotion attempts to
+restore the old report. Interrupted backup promotion is recovered on the next
+export. It never recursively deletes a directory or touches reading statistics.
+
+Run `python -m unittest discover -s scripts/tests -p test_screen_diagnostic_export.py -v`.
+The compiled production exporter is checked at the SD boundary for image pixels
+in all four rotations/both polarities, high-resolution rows, bounded retention,
+low space, write/close/rename failure, interrupted promotion, filename conflicts,
+and allowlisted diagnostic fields/HTML escaping. Cached display diagnostics are
+checked for full byte preservation, promoted/default/unknown verdicts, and
+unprobed/simulator states without linking any live probe function.
+Physical button/touch behavior,
+SD removal during export and framebuffer-vs-panel appearance require device
+acceptance after installing the new firmware.
 
 ```bash
 # Enhanced monitor with color/logging (recommended)
@@ -139,7 +187,7 @@ lightweight collaborators for no-PSRAM and PSRAM policies. It covers allocation
 failure before a Section exists, one CSS retry, target preservation and repeated
 failures; it is not a full Activity or device-lifecycle integration test.
 Build firmware with
-`pio run -e default -e simulator_x3 -e murphy_m4`.
+`pio run -e x4pro -e waveshare_epaper_397`.
 
 Hardware acceptance still requires **both X3 and X4**: open the reported EPUB
 with a cold section cache using LXGW WenKai size 18, turn across chapters, and

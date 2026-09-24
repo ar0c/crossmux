@@ -4,14 +4,14 @@
 
 **CrossMux** is a community fork of [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) for ESP32 e-ink devices. Reading comes first, with lightweight apps, reading analytics, standby faces, and on-demand services alongside the reader.
 
-[Releases](https://github.com/0x1abin/crossmux/releases) · [User guide](./USER_GUIDE.md) · [Contributing](./docs/contributing/README.md)
+[Fork releases](https://github.com/ar0c/crossmux/releases) · [User guide](./USER_GUIDE.md) · [Contributing](./docs/contributing/README.md)
 
 ![CrossMux running on an Xteink device](./docs/images/cover.jpg)
 
 ## Features
 
 - **Reading and library**: EPUB, TXT, XTC/XTCH and images; chapter navigation, bookmarks, dictionaries, custom fonts, reading backgrounds, and KOReader progress sync.
-- **Wireless workflows**: browser file transfer and settings, Calibre wireless, OPDS downloads, WebDAV, and device OTA updates.
+- **Wireless workflows**: browser file transfer and settings, Calibre wireless, OPDS downloads, and WebDAV.
 - **Apps**: lightweight games and tools including Sudoku, Gomoku, Chinese Chess, Minesweeper, 2048, Electronic Woodfish, and Ugly Avatar. [Apps guide](./src/activities/apps/README.md).
 - **AirPage**: scan to upload content, then display BMP/JPEG images with manual refresh or foreground live delivery; images can become a sleep screen. [Usage and network behavior](./src/activities/apps/README.md#airpage).
 - **WeRead**: QR login, bookshelf browsing, EPUB downloads for offline reading, and progress sync. Available in the China content profile. [WeRead guide (Chinese)](./src/activities/apps/weread/README.md).
@@ -24,29 +24,20 @@
 
 | Device | Chip | Published channels |
 |---|---|---|
-| Xteink X3 / X4 (shared image) | ESP32-C3 | Stable, Nightly |
-| Seeed Sticky | ESP32-S3 | Nightly |
-| Xteink X4 Pro | ESP32-S3 | Nightly |
-| M5Stack Paper Mono | ESP32-S3 | Nightly |
-| eego A4 | ESP32-S3 | Nightly |
-| Murphy M4 | ESP32-S3 | Nightly |
+| Xteink X4 Pro | ESP32-S3 | Stable, Nightly |
 | Waveshare ePaper 3.97 | ESP32-S3 | Nightly |
-| [Metalio E-Ink 4](./docs/engineering/metalio-eink4.md) | ESP32-S3 | Nightly |
 
-This table describes configured release targets, not a claim that every feature has passed hardware acceptance. Each S3 target needs its own image. X4 Classic has a build-only target and is absent from public release/OTA indexes. See [device variants](./docs/engineering/device-variants.md) for target-specific limitations.
+This fork builds and publishes only these two ESP32-S3 devices. Each needs its own board-specific image. This table describes configured release targets, not hardware acceptance. See [device variants](./docs/engineering/device-variants.md) for target-specific limitations.
 
-Use [Stable](https://github.com/0x1abin/crossmux/releases/tag/stable) for the stable X3/X4 channel, or [Nightly](https://github.com/0x1abin/crossmux/releases/tag/nightly) for development builds. The [target table](./scripts/nightly_targets.py) defines channels and artifact names; [release architecture](./docs/engineering/firmware-release.md) explains packaging and OTA. Current source version and build environments live in [platformio.ini](./platformio.ini).
+Use [Stable](https://github.com/ar0c/crossmux/releases/tag/stable) for X4 Pro, or [Nightly](https://github.com/ar0c/crossmux/releases/tag/nightly) for development builds. The [target table](./scripts/nightly_targets.py) defines channels and artifact names; [release architecture](./docs/engineering/firmware-release.md) explains packaging and OTA. Current source version and build environments live in [platformio.ini](./platformio.ini).
 
 ## Install firmware
 
-1. Open [CrossMux Releases](https://github.com/0x1abin/crossmux/releases), choose the channel and exact device, and follow that release's asset links and installation notes. X3/X4 share an image; S3 images are board-specific.
+1. Open [fork releases](https://github.com/ar0c/crossmux/releases), choose the channel and exact device, and follow that release's asset links and installation notes. S3 images are board-specific.
 2. Back up your SD card data before changing firmware. Use the matching installation package; an application-only `firmware.bin` is not a complete first-install image.
-3. For an existing X3/X4 installation, the [upstream CrossPoint web flasher](https://crosspointreader.com/#flash-tools) offers a custom binary upload: select X3/X4 and upload the **CrossMux** application binary. Choosing an upstream release installs CrossPoint instead.
-4. For S3 installation and recovery, follow the matching [device documentation](./docs/engineering/device-variants.md) and release instructions. Do not reuse X3/X4 flash commands or offsets for another board.
+3. For S3 installation and recovery, follow the matching [device documentation](./docs/engineering/device-variants.md) and release instructions.
 
-To build and flash X3/X4 from source, use the [development commands](#development-quick-start) below. For an existing CrossMux installation, device OTA selects the model, content profile, and channel; S3 targets have no Stable channel.
-
-Metalio E-Ink 4 uses the `metalio-eink4` Nightly package and model/board tag `metalio_eink4`. Both language entries point to the same multilingual firmware. Follow the [Metalio guide](./docs/engineering/metalio-eink4.md) for first installation, wiring, and hardware validation status. The [global Web tool](https://crossmux.com) and [China Web tool](https://crossmux.cn) show its install option once Web support is deployed and a matching Nightly package is present in the release catalog.
+To build an S3 image from source, use the [development commands](#development-quick-start) below. Only X4 Pro has a Stable channel in this fork. In-device OTA still uses upstream proxies and is disabled in fork builds; download the board-specific fork release and install it through the documented SD or USB path.
 
 ### USB-locked Xteink devices
 
@@ -65,42 +56,30 @@ Download fonts from **Settings > Reader > Manage Fonts**, or copy converted font
 Install PlatformIO Core (`pio`) and Python 3; the repository pins its pioarduino platform. Full code checks also need clang-format 21+, CMake, and Ninja. See [Getting Started](./docs/contributing/getting-started.md) for setup.
 
 ```bash
-git clone --recursive https://github.com/0x1abin/crossmux.git
+git clone --recursive https://github.com/ar0c/crossmux.git
 cd crossmux
 
 # If submodules were not initialized:
 git submodule update --init --recursive
 
-# X3/X4 development build
-pio run -e default
+# X4 Pro development build (also the default)
+pio run -e x4pro
 
-# X3/X4 unified-language stable build
-pio run -e gh_release
+# X4 Pro stable build
+pio run -e x4pro-gh_release
 
-# Build and flash that image to a connected X3/X4
-pio run -e gh_release -t upload
+# Waveshare 3.97 experimental build
+pio run -e waveshare_epaper_397
 ```
 
-The application binary is `.pio/build/gh_release/firmware.bin`. For other boards, use the matching environment in [build-system.md](./docs/engineering/build-system.md).
-
-For Metalio E-Ink 4:
-
-```bash
-pio run -e metalio_eink4
-CROSSPOINT_RC_HASH=$(git rev-parse --short=7 HEAD) pio run -e metalio_eink4_nightly
-```
-
-The development application is `.pio/build/metalio_eink4/firmware.bin`; first installation also requires the matching bootloader and partition layout described in the [Metalio guide](./docs/engineering/metalio-eink4.md).
+The X4 Pro stable application binary is `.pio/build/x4pro-gh_release/firmware.bin`. For Waveshare, use `waveshare_epaper_397`.
 
 ### Desktop simulator
 
 Install SDL2 and curl (plus OpenSSL development headers on Linux), place EPUBs in `fs_/books/`, then run:
 
 ```bash
-pio run -e simulator -t run_simulator           # X4
-pio run -e simulator_x3 -t run_simulator        # X3
-pio run -e simulator_eego_a4 -t run_simulator   # eego A4
-pio run -e simulator_murphy_m4 -t run_simulator # Murphy M4
+pio run -e simulator -t run_simulator
 ```
 
 The [CrossMux simulator fork](https://github.com/0x1abin/crosspoint-simulator) is pinned in `platformio.ini`. It previews UI and input flows; it does not validate display waveforms, power consumption, or physical hardware timing.

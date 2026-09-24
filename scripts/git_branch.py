@@ -12,16 +12,36 @@ import subprocess
 import sys
 import re
 import shutil
+import hashlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+FIRMWARE_NAME = 'crossmux-ar0c'
 
-def x4pro_identity(base_version, short_sha):
+
+def x4pro_identity(base_version, short_sha, build_stamp):
     if not re.fullmatch(r'\d+\.\d+\.\d+', base_version) or not re.fullmatch(r'[0-9a-f]{7,12}', short_sha):
         raise ValueError('Fork identity requires a numeric base version and a real git revision')
-    version = f'{base_version}-ar0c-x4pro+{short_sha}'
+    if not re.fullmatch(r'\d{6}-\d{6}', build_stamp):
+        raise ValueError('Build stamp must use YYMMDD-HHMMSS')
+    datetime.strptime(build_stamp, '%y%m%d-%H%M%S')
+    version = f'{build_stamp}-ar0c-{base_version}-x4pro'
     if len(version.encode('ascii')) >= 32:
         raise ValueError('Fork version exceeds the ESP application descriptor limit')
-    return version, f'crossmux-ar0c-{base_version}-x4pro-{short_sha}.bin'
+    return version, f'{FIRMWARE_NAME}-{build_stamp}-{short_sha}-x4pro-{base_version}.bin'
+
+
+def x4pro_artifact_name(build_stamp, image):
+    # Image digest distinguishes uncommitted builds sharing the same Git SHA.
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()[:8]
+    return f'{FIRMWARE_NAME}-{build_stamp}-{digest}-x4pro.bin'
+
+
+def dev_artifact_name(base_version, pioenv, short_sha, image):
+    # Keep the image digest so different uncommitted builds never share a name.
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()[:8]
+    device = pioenv.replace('_', '-')
+    return f'{FIRMWARE_NAME}-{base_version}-{device}-{short_sha}-{digest}.bin'
 
 
 def warn(msg):
@@ -92,28 +112,29 @@ def inject_version(env):
     pioenv = env['PIOENV']
     # Only applies to development environments; release envs set the
     # version via build_flags in platformio.ini and are unaffected.
-    if pioenv not in ('default', 'sticky', 'eego_a4', 'murphy_m4', 'waveshare_epaper_397', 'metalio_eink4', 'x4pro'):
+    if pioenv not in ('waveshare_epaper_397', 'x4pro'):
         return
 
     project_dir = env['PROJECT_DIR']
     base_version = get_base_version(project_dir)
     short_sha = get_git_short_sha(project_dir)
+    build_stamp = None
     if pioenv == 'x4pro':
-        version_string, filename = x4pro_identity(base_version, short_sha)
-
-        def export_firmware(target, source, env):
-            image = Path(target[0].get_abspath())
-            destination = image.parent / filename
-            shutil.copyfile(image, destination)
-            print(f'ar0c firmware: {destination}')
-
-        env.AddPostAction('$BUILD_DIR/${PROGNAME}.bin', export_firmware)
-    elif pioenv in ('default', 'sticky'):
-        version_string = f'{base_version}-dev-{get_git_branch(project_dir)}-{short_sha}'
+        build_stamp = datetime.now(timezone(timedelta(hours=8))).strftime('%y%m%d-%H%M%S')
+        version_string, _ = x4pro_identity(base_version, short_sha, build_stamp)
     else:
         device = pioenv.replace('_', '-')
         version_string = f'{base_version}-{device}-rc+{short_sha}'
 
+    def export_firmware(target, source, env):
+        image = Path(target[0].get_abspath())
+        filename = (x4pro_artifact_name(build_stamp, image) if build_stamp else
+                    dev_artifact_name(base_version, pioenv, short_sha, image))
+        destination = image.parent / filename
+        shutil.copyfile(image, destination)
+        print(f'{FIRMWARE_NAME} firmware: {destination}')
+
+    env.AddPostAction('$BUILD_DIR/${PROGNAME}.bin', export_firmware)
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')
 
@@ -127,6 +148,7 @@ try:
 except NameError:
     class _Env(dict):
         def Append(self, **_): pass
+        def AddPostAction(self, *_): pass
 
     _project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     inject_version(_Env({'PIOENV': 'default', 'PROJECT_DIR': _project_dir}))

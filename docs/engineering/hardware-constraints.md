@@ -1,8 +1,8 @@
 # Hardware Constraints & The Resource Protocol
 
-> Deep reference for [AGENTS.md](../../AGENTS.md). The ESP32-C3 baseline is about
-> 380KB usable RAM without PSRAM; shared code must fit it. S3 budgets and
-> capabilities are target-specific.
+> Deep reference for [AGENTS.md](../../AGENTS.md). The supported X4 Pro and
+> Waveshare 3.97 ESP32-S3 builds have separate images. Check RAM, PSRAM,
+> Flash, and power budgets for both.
 
 ## Development Environment Awareness
 
@@ -30,12 +30,10 @@ find src -name "*.cpp" -o -name "*.h" | xargs clang-format -i
 
 ## Platform and Hardware Constraints
 
-### Xteink X4 / ESP32-C3 Baseline
-* MCU: ESP32-C3 (Single-core RISC-V @ 160MHz)
-* RAM: ~380KB usable (VERY LIMITED - primary project constraint)
-  * **ESP32-C3 has no PSRAM** and remains the compatibility baseline
-  * Supported ESP32-S3 N16R8 targets provide 8 MB OPI PSRAM, but every use must
-    retain the normal internal-heap fallback for builds or hardware without it
+### X4 Pro and Waveshare 3.97 / ESP32-S3
+* MCU: ESP32-S3, with separate board-specific images
+* Memory: both configured N16R8 targets provide 8 MB OPI PSRAM; internal RAM
+  remains limited and allocation failures must be handled
   * **Single Buffer Mode**: Only ONE 48KB framebuffer (not double-buffered)
 * Flash: 16MB (Instruction storage and static data)
 * Display: 800x480 E-Ink (Slow refresh, monochrome, 1-2s full update)
@@ -43,7 +41,7 @@ find src -name "*.cpp" -o -name "*.h" | xargs clang-format -i
 * Storage: SD Card (Used for books and aggressive caching)
 
 ### The Resource Protocol
-1. Stack Safety: Limit local function variables to < 256 bytes. The ESP32-C3 default stack is small; use std::unique_ptr or static pools for larger buffers.
+1. Stack Safety: Limit local function variables to < 256 bytes. Task stacks remain bounded; use std::unique_ptr or static pools for larger buffers.
 2. Heap Fragmentation: Avoid repeated new/delete in loops. Allocate buffers once during onEnter() and reuse them.
 3. Flash Persistence: Large constant data (UI strings, lookup tables) MUST be marked static const to stay in Flash (Instruction Bus), freeing DRAM.
 4. String Policy: Prohibit std::string and Arduino String in hot paths. Use std::string_view for read-only access and snprintf with fixed char[] buffers for construction.
