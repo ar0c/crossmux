@@ -1,6 +1,7 @@
-#include "WeReadTimeStorage.h"
 #include <cassert>
 #include <iostream>
+
+#include "WeReadTimeStorage.h"
 using namespace WeReadTime;
 int main() {
   {
@@ -34,12 +35,15 @@ int main() {
   assert(ledger.encode(frame, sizeof(frame)));
   std::memcpy(frame, "WRTX", 4);
   auto put = [&](size_t at, uint64_t value) {
-    for (unsigned i=0; i<8; ++i) frame[at+i] = static_cast<uint8_t>(value >> (8*i));
+    for (unsigned i = 0; i < 8; ++i) frame[at + i] = static_cast<uint8_t>(value >> (8 * i));
   };
-  put(184, 3000); put(192, 2880); put(200, 120); put(232, ExternalTime::checksum(frame, 232));
+  put(184, 3000);
+  put(192, 2880);
+  put(200, 120);
+  put(232, ExternalTime::checksum(frame, 232));
   const char* oldPath = "/weread-external-account-source-20709.bin";
   const char* newPath = "/WeReadSync/weread-external-account-source-20709.bin";
-  const std::vector<uint8_t> original(frame, frame+sizeof(frame));
+  const std::vector<uint8_t> original(frame, frame + sizeof(frame));
   fakeStorage::files[oldPath] = original;
   ExternalTimeStorage external;
   assert(external.reconcile(ledger, pending, confirmed, unknown));
@@ -50,7 +54,10 @@ int main() {
   fakeStorage::files[oldPath] = original;
   assert(!external.reconcile(ledger, pending, confirmed, unknown));
   assert(fakeStorage::files.at(oldPath) == original && fakeStorage::files.at(newPath) == original);
-  fakeStorage::reset(); fakeStorage::files[oldPath] = original; fakeStorage::failRename = true;
+  fakeStorage::reset();
+  fakeStorage::files[oldPath] = original;
+  fakeStorage::failRename = true;
   assert(!external.reconcile(ledger, pending, confirmed, unknown) && Storage.exists(oldPath));
-  std::cout << "HAL time storage: archived reservations stay excluded, exact receipt migration, conflicts and failure PASS\n";
+  std::cout
+      << "HAL time storage: archived reservations stay excluded, exact receipt migration, conflicts and failure PASS\n";
 }

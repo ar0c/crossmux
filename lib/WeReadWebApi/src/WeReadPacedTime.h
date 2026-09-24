@@ -19,6 +19,7 @@ class PacedGate {
     return elapsed < 0x80000000U ? (elapsed >= waitMs ? 0 : waitMs - elapsed) : waitMs;
   }
   void response(uint32_t nowMs) { lastMs_ = nowMs; }
+
  private:
   uint32_t lastMs_;
 };
@@ -32,7 +33,7 @@ struct AccountSnapshot {
   uint64_t daySeconds = 0;
   uint64_t sampledAt = 0;
   bool complete = false;
-  bool monthComplete = false; // Valid monthly response, even when today's bucket is absent.
+  bool monthComplete = false;  // Valid monthly response, even when today's bucket is absent.
 };
 
 class PacedLedger {
@@ -45,9 +46,10 @@ class PacedLedger {
     if (identity_.day) return false;
     Ledger validator;
     if (!validator.bind(external.identity.account, external.identity.book, external.identity.source,
-                        external.identity.day) || external.coveredSeconds > external.sourceMs / 1000 ||
-        external.confirmedSeconds > external.coveredSeconds ||
-        external.unknownSeconds != external.coveredSeconds - external.confirmedSeconds) return false;
+                        external.identity.day) ||
+        external.coveredSeconds > external.sourceMs / 1000 || external.confirmedSeconds > external.coveredSeconds ||
+        external.unknownSeconds != external.coveredSeconds - external.confirmedSeconds)
+      return false;
     identity_ = external.identity;
     measuredMs_ = external.sourceMs;
     external_ = external.coveredSeconds;
@@ -55,8 +57,7 @@ class PacedLedger {
   }
   bool matches(const ExternalTime& external) const {
     return identity_.day == external.identity.day && measuredMs_ >= external.sourceMs &&
-           external_ == external.coveredSeconds &&
-           !std::strcmp(identity_.account, external.identity.account) &&
+           external_ == external.coveredSeconds && !std::strcmp(identity_.account, external.identity.account) &&
            !std::strcmp(identity_.book, external.identity.book) &&
            !std::strcmp(identity_.source, external.identity.source);
   }
@@ -65,14 +66,13 @@ class PacedLedger {
     measuredMs_ = measured;
     return true;
   }
-  bool reserve(const AccountSnapshot& baseline, uint64_t now, bool monotonicPaceReady,
-               uint64_t seconds = kBatch) {
+  bool reserve(const AccountSnapshot& baseline, uint64_t now, bool monotonicPaceReady, uint64_t seconds = kBatch) {
     if (state_ != State::Idle || !seconds || seconds > UINT32_MAX || remaining() < seconds || !monotonicPaceReady ||
         !validSnapshot(baseline, true) || now < baseline.sampledAt || now - baseline.sampledAt > 30 ||
-        baseline.day != (now + 28800) / 86400 * 86400 - 28800 ||
-        identity_.day > (now + 28800) / 86400 ||
+        baseline.day != (now + 28800) / 86400 * 86400 - 28800 || identity_.day > (now + 28800) / 86400 ||
         (responseAt_ && (now < responseAt_ || now - responseAt_ < kBatch)) ||
-        baseline.monthSeconds > UINT64_MAX - seconds || baseline.daySeconds > UINT64_MAX - seconds) return false;
+        baseline.monthSeconds > UINT64_MAX - seconds || baseline.daySeconds > UINT64_MAX - seconds)
+      return false;
     batch_ = static_cast<uint32_t>(seconds);
     month_ = baseline.month;
     day_ = baseline.day;
@@ -94,9 +94,10 @@ class PacedLedger {
     // Statistical confirmation under the single-active-client policy. A missing
     // baseline bucket must APPEAR as exactly this first batch, not merely exist.
     const uint64_t expectedDay = missingDay_ ? batch_ : baselineDay_ + batch_;
-    if (state_ != State::Acknowledged || !validSnapshot(observed) || observed.month != month_ ||
-        observed.day != day_ || observed.sampledAt <= responseAt_ || observed.sampledAt - responseAt_ > 120 ||
-        observed.monthSeconds != baselineMonth_ + batch_ || observed.daySeconds != expectedDay) return false;
+    if (state_ != State::Acknowledged || !validSnapshot(observed) || observed.month != month_ || observed.day != day_ ||
+        observed.sampledAt <= responseAt_ || observed.sampledAt - responseAt_ > 120 ||
+        observed.monthSeconds != baselineMonth_ + batch_ || observed.daySeconds != expectedDay)
+      return false;
     verified_ += batch_;
     batch_ = 0;
     state_ = State::Idle;
@@ -105,16 +106,15 @@ class PacedLedger {
     month_ = day_ = 0;
     return true;
   }
-  uint64_t remaining() const {
-    return measuredMs_ / 1000 - external_ - verified_ - quarantined_ - batch_;
-  }
+  uint64_t remaining() const { return measuredMs_ / 1000 - external_ - verified_ - quarantined_ - batch_; }
   uint32_t quarantinedSeconds() const { return quarantined_; }
   // Explicit new foreground run only. Preserve the old frames and permanently
   // exclude the entire unresolved range, without claiming any cloud credit.
   bool quarantine(uint64_t now) {
     const uint64_t last = responseAt_ ? responseAt_ : reservedAt_;
     if (state_ == State::Idle || !batch_ || now > UINT32_MAX || now < last || now - last <= 120 ||
-        batch_ > UINT32_MAX - quarantined_) return false;
+        batch_ > UINT32_MAX - quarantined_)
+      return false;
     quarantined_ += batch_;
     batch_ = 0;
     state_ = State::Idle;
@@ -156,9 +156,9 @@ class PacedLedger {
     return true;
   }
   bool decode(const uint8_t* bytes) {
-    if (std::memcmp(bytes, "WRP2", 4) || bytes[4] < 1 || bytes[4] > 4 || bytes[5] > 3 ||
-        bytes[6] > 1 || bytes[7] || (bytes[4] == 1 && bytes[6]) ||
-        ExternalTime::number(bytes + 248) != ExternalTime::checksum(bytes, 248)) return false;
+    if (std::memcmp(bytes, "WRP2", 4) || bytes[4] < 1 || bytes[4] > 4 || bytes[5] > 3 || bytes[6] > 1 || bytes[7] ||
+        (bytes[4] == 1 && bytes[6]) || ExternalTime::number(bytes + 248) != ExternalTime::checksum(bytes, 248))
+      return false;
     PacedLedger candidate;
     ExternalTime identity;
     std::memcpy(identity.identity.account, bytes + 8, 32);
@@ -184,19 +184,26 @@ class PacedLedger {
     candidate.reservedAt_ = ExternalTime::number(bytes + 232);
     candidate.responseAt_ = ExternalTime::number(bytes + 240);
     candidate.state_ = static_cast<State>(bytes[5]);
-    candidate.batch_ = bytes[4] >= 3 ? uint32_t(packedMonth >> 32) :
-        (candidate.state_ == State::Idle ? 0 : kBatch);
+    candidate.batch_ = bytes[4] >= 3 ? uint32_t(packedMonth >> 32) : (candidate.state_ == State::Idle ? 0 : kBatch);
     candidate.missingDay_ = bytes[6] != 0;
     if (candidate.verified_ > candidate.measuredMs_ / 1000 - candidate.external_ ||
-        (bytes[4] < 3 && candidate.verified_ % kBatch) || candidate.responseAt_ > UINT32_MAX) return false;
+        (bytes[4] < 3 && candidate.verified_ % kBatch) || candidate.responseAt_ > UINT32_MAX)
+      return false;
     if (candidate.quarantined_ > candidate.measuredMs_ / 1000 - candidate.external_ - candidate.verified_) return false;
     if (candidate.state_ == State::Idle) {
-      if (candidate.batch_ || candidate.missingDay_ || candidate.reservedAt_ || candidate.month_ || candidate.day_ || candidate.baselineMonth_ || candidate.baselineDay_) return false;
+      if (candidate.batch_ || candidate.missingDay_ || candidate.reservedAt_ || candidate.month_ || candidate.day_ ||
+          candidate.baselineMonth_ || candidate.baselineDay_)
+        return false;
     } else {
-      if (!candidate.batch_ || candidate.measuredMs_ / 1000 - candidate.external_ - candidate.verified_ - candidate.quarantined_ < candidate.batch_ ||
+      if (!candidate.batch_ ||
+          candidate.measuredMs_ / 1000 - candidate.external_ - candidate.verified_ - candidate.quarantined_ <
+              candidate.batch_ ||
           !candidate.validSnapshot(candidate.baseline(), true) ||
-          candidate.baselineMonth_ > UINT64_MAX - candidate.batch_ || candidate.baselineDay_ > UINT64_MAX - candidate.batch_ ||
-          (candidate.state_ == State::Reserved ? candidate.responseAt_ != 0 : candidate.responseAt_ < candidate.reservedAt_)) return false;
+          candidate.baselineMonth_ > UINT64_MAX - candidate.batch_ ||
+          candidate.baselineDay_ > UINT64_MAX - candidate.batch_ ||
+          (candidate.state_ == State::Reserved ? candidate.responseAt_ != 0
+                                               : candidate.responseAt_ < candidate.reservedAt_))
+        return false;
     }
     *this = candidate;
     return true;
@@ -209,8 +216,7 @@ class PacedLedger {
     if (state_ != previous.state_) {
       if (previous.state_ == State::Idle && state_ == State::Reserved) {
         if (!expected.reserve(baseline(), reservedAt_, true, batch_)) return false;
-      } else if (previous.state_ == State::Reserved &&
-                 (state_ == State::Acknowledged || state_ == State::Uncertain)) {
+      } else if (previous.state_ == State::Reserved && (state_ == State::Acknowledged || state_ == State::Uncertain)) {
         if (!expected.acknowledge(state_ == State::Acknowledged, responseAt_)) return false;
       } else if (state_ == State::Idle && quarantined_ > previous.quarantined_) {
         if (!expected.quarantine(responseAt_)) return false;
@@ -221,16 +227,20 @@ class PacedLedger {
         observed.monthSeconds += previous.batch_;
         observed.daySeconds += previous.batch_;
         if (!expected.verify(observed)) return false;
-      } else return false;
+      } else
+        return false;
     }
     return equal(expected);
   }
+
  private:
   bool equal(const PacedLedger& other) const {
-    return !std::strcmp(identity_.account, other.identity_.account) && !std::strcmp(identity_.book, other.identity_.book) &&
+    return !std::strcmp(identity_.account, other.identity_.account) &&
+           !std::strcmp(identity_.book, other.identity_.book) &&
            !std::strcmp(identity_.source, other.identity_.source) && identity_.day == other.identity_.day &&
            measuredMs_ == other.measuredMs_ && external_ == other.external_ && verified_ == other.verified_ &&
-           state_ == other.state_ && batch_ == other.batch_ && quarantined_ == other.quarantined_ && missingDay_ == other.missingDay_ && month_ == other.month_ && day_ == other.day_ &&
+           state_ == other.state_ && batch_ == other.batch_ && quarantined_ == other.quarantined_ &&
+           missingDay_ == other.missingDay_ && month_ == other.month_ && day_ == other.day_ &&
            baselineMonth_ == other.baselineMonth_ && baselineDay_ == other.baselineDay_ &&
            reservedAt_ == other.reservedAt_ && responseAt_ == other.responseAt_;
   }
@@ -245,9 +255,13 @@ class PacedLedger {
   AccountSnapshot baseline() const {
     AccountSnapshot result;
     std::memcpy(result.account, identity_.account, sizeof(result.account));
-    result.month = month_; result.day = day_;
-    result.monthSeconds = baselineMonth_; result.daySeconds = baselineDay_;
-    result.sampledAt = reservedAt_; result.complete = !missingDay_; result.monthComplete = true;
+    result.month = month_;
+    result.day = day_;
+    result.monthSeconds = baselineMonth_;
+    result.daySeconds = baselineDay_;
+    result.sampledAt = reservedAt_;
+    result.complete = !missingDay_;
+    result.monthComplete = true;
     return result;
   }
   static void put(uint8_t* out, uint64_t value) {
@@ -277,7 +291,8 @@ class PacedJournal {
     }
     if (state != ByteLog::ReadState::Ready || !size || size % PacedLedger::kSize) return false;
     for (uint64_t at = 0; at < size; at += PacedLedger::kSize) {
-      if (!log_.read(at, buffer_, sizeof(buffer_)) || !candidate.decode(buffer_) || !candidate.matches(receipt)) return false;
+      if (!log_.read(at, buffer_, sizeof(buffer_)) || !candidate.decode(buffer_) || !candidate.matches(receipt))
+        return false;
       if (at && !candidate.follows(ledger_)) return false;
       ledger_ = candidate;
     }
@@ -329,17 +344,17 @@ class PacedJournal {
   // change and activity exit always require full replay again.
   bool continueVerified(const ExternalTime& receipt, uint64_t measured) {
     uint64_t size = 0;
-    if (!ready_ || ledger_.state() != PacedLedger::State::Idle ||
-        ledger_.remaining() < 1 || !ledger_.matches(receipt) ||
-        ledger_.measuredMs() != measured || length_ < sizeof(buffer_) ||
-        log_.size(size) != ByteLog::ReadState::Ready || size != length_ ||
-        !ledger_.encode(expected_) || !log_.read(length_ - sizeof(buffer_), buffer_, sizeof(buffer_)) ||
+    if (!ready_ || ledger_.state() != PacedLedger::State::Idle || ledger_.remaining() < 1 ||
+        !ledger_.matches(receipt) || ledger_.measuredMs() != measured || length_ < sizeof(buffer_) ||
+        log_.size(size) != ByteLog::ReadState::Ready || size != length_ || !ledger_.encode(expected_) ||
+        !log_.read(length_ - sizeof(buffer_), buffer_, sizeof(buffer_)) ||
         std::memcmp(buffer_, expected_, sizeof(buffer_))) {
       ready_ = permit_ = false;
       return false;
     }
     return true;
   }
+
  private:
   bool commit(const PacedLedger& candidate) {
     ready_ = permit_ = false;
@@ -348,7 +363,8 @@ class PacedJournal {
     if (state == ByteLog::ReadState::Error || size != length_ || !candidate.encode(expected_) ||
         !log_.appendAndSync(expected_, sizeof(expected_)) || log_.size(size) != ByteLog::ReadState::Ready ||
         size != length_ + sizeof(expected_) || !log_.read(length_, buffer_, sizeof(buffer_)) ||
-        std::memcmp(buffer_, expected_, sizeof(buffer_))) return false;
+        std::memcmp(buffer_, expected_, sizeof(buffer_)))
+      return false;
     ledger_ = candidate;
     length_ = size;
     ready_ = true;

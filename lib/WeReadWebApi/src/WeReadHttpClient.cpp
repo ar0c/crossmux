@@ -437,7 +437,9 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
                                     uint32_t& newConnections, uint32_t& reusedRequests) {
   status = -1;
   using Stage = WeReadHttpClient::NetworkDiagnostic::Stage;
-  const auto stage = [&](Stage value) { if (options.diagnostic) options.diagnostic->stage = value; };
+  const auto stage = [&](Stage value) {
+    if (options.diagnostic) options.diagnostic->stage = value;
+  };
   const auto failure = [&](int code) {
     if (options.diagnostic) {
       options.diagnostic->error = code;
@@ -661,8 +663,8 @@ Result requestVerified(const char* url, const RequestOptions& options, const Dat
   char host[128] = {};
   uint32_t connections = 0, reused = 0;
   const uint32_t started = millis();
-  const Result result = runRequest(url, options, onData, onHeader, status, client, host, sizeof(host),
-                                   connections, reused);
+  const Result result =
+      runRequest(url, options, onData, onHeader, status, client, host, sizeof(host), connections, reused);
   if (options.diagnostic) options.diagnostic->elapsedMs = uint32_t(millis() - started);
   cleanupClient(client);
   return result;

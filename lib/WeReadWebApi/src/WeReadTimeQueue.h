@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+
 #include "WeReadTimeTransaction.h"
 
 namespace WeReadTime {
@@ -40,9 +41,14 @@ class TimeQueue {
       case State::Selecting: {
         transaction_.reset();
         switch (source_.selectNext()) {
-          case TimeQueueSource::Result::Complete: state_ = State::Complete; return state_;
-          case TimeQueueSource::Result::Error: state_ = State::StorageError; return state_;
-          case TimeQueueSource::Result::Ready: break;
+          case TimeQueueSource::Result::Complete:
+            state_ = State::Complete;
+            return state_;
+          case TimeQueueSource::Result::Error:
+            state_ = State::StorageError;
+            return state_;
+          case TimeQueueSource::Result::Ready:
+            break;
         }
         // Unknown/expired batches stay frozen. Never quarantine automatically
         // to skip past them; recovery is read-only and exact-credit only.
@@ -65,17 +71,35 @@ class TimeQueue {
             transaction_.reset();
             state_ = State::Selecting;
             break;
-          case T::StorageError: state_ = State::StorageError; break;
-          case T::Uncertain: state_ = State::Uncertain; break;
-          case T::NotSent: case T::Cancelled:
+          case T::StorageError:
+            state_ = State::StorageError;
+            break;
+          case T::Uncertain:
+            state_ = State::Uncertain;
+            break;
+          case T::NotSent:
+          case T::Cancelled:
             state_ = journal_.ledger().state() == PacedLedger::State::Idle ? State::Paused : State::Uncertain;
             break;
-          case T::Idle: case T::Waiting: case T::Preparing: case T::Baseline: case T::Reserving:
-          case T::Entering: case T::Sending: case T::ReadbackWait: case T::ReadingBack: case T::RetryWait: break;
+          case T::Idle:
+          case T::Waiting:
+          case T::Preparing:
+          case T::Baseline:
+          case T::Reserving:
+          case T::Entering:
+          case T::Sending:
+          case T::ReadbackWait:
+          case T::ReadingBack:
+          case T::RetryWait:
+            break;
         }
         return state_;
       }
-      case State::Idle: case State::Complete: case State::Paused: case State::Uncertain: case State::StorageError:
+      case State::Idle:
+      case State::Complete:
+      case State::Paused:
+      case State::Uncertain:
+      case State::StorageError:
         return state_;
     }
     return state_;
@@ -86,6 +110,7 @@ class TimeQueue {
   uint64_t confirmed() const { return confirmed_; }
   uint32_t waitingSeconds() const { return transaction_ ? transaction_->waitingSeconds() : 0; }
   uint8_t preparationRetries() const { return transaction_ ? transaction_->preparationRetries() : 0; }
+
  private:
   TimeQueueSource& source_;
   PacedJournal& journal_;
