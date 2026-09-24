@@ -28,6 +28,7 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "components/SubpageLayout.h"
 #include "components/UITheme.h"
+#include "components/UIThemeTokens.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
@@ -1560,12 +1561,16 @@ void WeReadActivity::handleManageInput() {
     }
   };
 
-  const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect content = mainContentBounds();
+  // Hit-test the manage menu with the active theme's drawButtonMenu geometry
+  // (RoundedRaff / Inx derive the row height and page the rows), then map the
+  // visible row back to the true index.
+  const auto geo = GUI.getMenuRowGeometry(renderer, content, manageSelected_, kManageEntryCount);
   int touched = -1;
-  const auto touch = mappedInput.rowTouch(touched, content.y, metrics.menuRowHeight + metrics.menuSpacing,
-                                          kManageEntryCount, content.x, content.x + content.width);
+  const auto touch =
+      mappedInput.rowTouch(touched, geo.firstRowY, geo.rowStep, geo.pageCount, geo.xStart, geo.xEnd, geo.rowHeight);
   if (touch != MappedInputManager::RowTouch::None) {
+    touched += geo.pageStart;
     const bool changed = manageSelected_ != touched || mainFocus_.load() != MainFocus::Content;
     manageSelected_ = touched;
     mainFocus_.store(MainFocus::Content);
@@ -1960,7 +1965,9 @@ bool WeReadActivity::isBusy(const State state) {
 const char* WeReadActivity::errorMessage() const {
   switch (error_) {
     case WeReadClient::Error::SdCard:
-      return tr(STR_WEREAD_CACHE_FAILED);
+      return tr(STR_WEREAD_STORAGE_ERROR);
+    case WeReadClient::Error::OutOfMemory:
+      return tr(STR_WEREAD_MEMORY_ERROR);
     case WeReadClient::Error::Network:
       return WiFi.status() == WL_CONNECTED ? tr(STR_WEREAD_HTTP_ERROR) : tr(STR_WEREAD_NO_WIFI);
     case WeReadClient::Error::Unavailable:
@@ -2059,6 +2066,7 @@ void WeReadActivity::drawDisclaimer(const Rect& content) {
   const int paragraphSpacing = metrics.verticalSpacing;
   const int textWidth = std::max(0, content.width - metrics.contentSidePadding * 2);
   freeink::ui::GfxRendererTarget target(renderer);
+  applyUiTextAlignment(target);
   target.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, UI_10_FONT_ID);
   freeink::ui::TextStyle textStyle;
   textStyle.font = freeink::ui::GfxRendererTarget::FONT_BODY;
@@ -2527,9 +2535,29 @@ void WeReadActivity::render(RenderLock&&) {
                          total, lines, lineCount);
       break;
     }
-    case State::Error:
-      GUI.drawPopup(renderer, errorMessage());
+    case State::Error: {
+      if (error_ != WeReadClient::Error::SdCard && error_ != WeReadClient::Error::OutOfMemory) {
+        GUI.drawPopup(renderer, errorMessage());
+        break;
+      }
+      // Fixed translated lines keep the low-memory error path free of wrapping allocations.
+      const bool storageError = error_ == WeReadClient::Error::SdCard;
+      const char* lines[] = {errorMessage(),
+                             storageError ? tr(STR_WEREAD_CHECK_STORAGE_SPACE) : tr(STR_WEREAD_RESTART_HINT),
+                             storageError ? tr(STR_WEREAD_CHECK_SD_CARD) : nullptr};
+      const int lineCount = storageError ? 3 : 2;
+      const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+      const int gap = SubpageLayout::sectionGap(metrics);
+      int y = SubpageLayout::centeredTop(content, lineCount * lineHeight + (lineCount - 1) * gap);
+      const Rect bounds = SubpageLayout::insetHorizontal(content, metrics.contentSidePadding);
+      const GfxRenderer::ClipScope clip(renderer, bounds.x, bounds.y, bounds.width, bounds.height);
+      for (int index = 0; index < lineCount; ++index) {
+        UITheme::drawCenteredText(renderer, bounds, UI_10_FONT_ID, y, lines[index], true,
+                                  index == 0 ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+        y += lineHeight + gap;
+      }
       break;
+    }
     case State::LogoutError:
       GUI.drawPopup(renderer, tr(STR_WEREAD_LOGOUT_FAILED));
       break;

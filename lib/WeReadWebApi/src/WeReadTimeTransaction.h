@@ -34,6 +34,7 @@ class SendCoordinator {
     if (!responseRecorded_) gate_.response(nowMs);
     owner_ = nullptr;
   }
+
  private:
   PacedGate gate_;
   const void* owner_ = nullptr;
@@ -68,11 +69,32 @@ class TimeTransport {
 class TimeTransaction {
  public:
   enum class BatchMode { Paced30, Bounded60 };
-  enum class Issue { None, UnknownWrite, Expired, ClockInvalid, ReadbackFailed, Mismatch, LowSpace,
-                     BaselineIncomplete };
+  enum class Issue {
+    None,
+    UnknownWrite,
+    Expired,
+    ClockInvalid,
+    ReadbackFailed,
+    Mismatch,
+    LowSpace,
+    BaselineIncomplete
+  };
   enum class State {
-    Idle, Waiting, Preparing, Baseline, Reserving, Entering, Sending,
-    ReadbackWait, ReadingBack, Confirmed, NotSent, Uncertain, StorageError, Cancelled, RetryWait
+    Idle,
+    Waiting,
+    Preparing,
+    Baseline,
+    Reserving,
+    Entering,
+    Sending,
+    ReadbackWait,
+    ReadingBack,
+    Confirmed,
+    NotSent,
+    Uncertain,
+    StorageError,
+    Cancelled,
+    RetryWait
   };
   TimeTransaction(PacedJournal& journal, SendCoordinator& coordinator, TimeTransport& transport,
                   BatchMode mode = BatchMode::Paced30)
@@ -141,7 +163,8 @@ class TimeTransaction {
       case State::Preparing:
         if (expired(tick)) return finish(State::NotSent);
         switch (transport_.prepare(journal_.ledger().identity())) {
-          case TimeTransport::Read::Pending: break;
+          case TimeTransport::Read::Pending:
+            break;
           case TimeTransport::Read::Ready:
             state_ = recovery_ ? State::ReadingBack : State::Baseline;
             break;
@@ -170,17 +193,25 @@ class TimeTransaction {
       case State::Baseline:
         if (expired(tick)) return finish(State::NotSent);
         switch (transport_.snapshot(snapshot_)) {
-          case TimeTransport::Read::Pending: break;
-          case TimeTransport::Read::Ready: state_ = State::Reserving; break;
-          case TimeTransport::Read::Failed: return finish(State::NotSent);
+          case TimeTransport::Read::Pending:
+            break;
+          case TimeTransport::Read::Ready:
+            state_ = State::Reserving;
+            break;
+          case TimeTransport::Read::Failed:
+            return finish(State::NotSent);
         }
         break;
       case State::Reserving: {
         if (expired(tick)) return finish(State::NotSent);
         if (!snapshot_.complete && !snapshot_.monthComplete) {
-          issue_ = Issue::BaselineIncomplete; return finish(State::NotSent);
+          issue_ = Issue::BaselineIncomplete;
+          return finish(State::NotSent);
         }
-        if (!journal_.hasReserveSpace()) { issue_ = Issue::LowSpace; return finish(State::NotSent); }
+        if (!journal_.hasReserveSpace()) {
+          issue_ = Issue::LowSpace;
+          return finish(State::NotSent);
+        }
         auto candidate = journal_.ledger();
         const uint64_t seconds = batchSize(candidate.remaining());
         if (!candidate.reserve(snapshot_, now, true, seconds)) return finish(State::NotSent);
@@ -210,7 +241,10 @@ class TimeTransaction {
         // then wait a full 60 seconds before preparing the next request.
         if (mode_ == BatchMode::Paced30) coordinator_.response(this, responseMs_);
         if (!journal_.acknowledge(accepted, responded)) return finish(State::StorageError);
-        if (!accepted) { issue_ = Issue::UnknownWrite; return finish(State::Uncertain); }
+        if (!accepted) {
+          issue_ = Issue::UnknownWrite;
+          return finish(State::Uncertain);
+        }
         responseAt_ = responded;
         state_ = State::ReadbackWait;
         break;
@@ -225,7 +259,8 @@ class TimeTransaction {
       case State::ReadingBack:
         if (!readbackFresh(now, tick)) return finish(State::Uncertain);
         switch (transport_.snapshot(snapshot_)) {
-          case TimeTransport::Read::Pending: break;
+          case TimeTransport::Read::Pending:
+            break;
           case TimeTransport::Read::Failed:
             issue_ = Issue::ReadbackFailed;
             ++readbacks_;
@@ -261,35 +296,54 @@ class TimeTransaction {
     }
     return state_;
   }
+
  private:
   uint32_t waitMs() const {
     switch (mode_) {
-      case BatchMode::Paced30: return 30000;
-      case BatchMode::Bounded60: return 60000;
+      case BatchMode::Paced30:
+        return 30000;
+      case BatchMode::Bounded60:
+        return 60000;
     }
     return 60000;
   }
   uint32_t readbackDelayMs() const {
     switch (mode_) {
-      case BatchMode::Paced30: return 5000;
-      case BatchMode::Bounded60: return 10000;
+      case BatchMode::Paced30:
+        return 5000;
+      case BatchMode::Bounded60:
+        return 10000;
     }
     return 10000;
   }
   uint64_t batchSize(uint64_t remaining) const {
     switch (mode_) {
-      case BatchMode::Paced30: return 30;
-      case BatchMode::Bounded60: return remaining < 60 ? remaining : 60;
+      case BatchMode::Paced30:
+        return 30;
+      case BatchMode::Bounded60:
+        return remaining < 60 ? remaining : 60;
     }
     return 0;
   }
   bool terminal() const {
     switch (state_) {
-      case State::Confirmed: case State::NotSent: case State::Uncertain:
-      case State::StorageError: case State::Cancelled: return true;
-      case State::Idle: case State::Waiting: case State::Preparing: case State::Baseline:
-      case State::Reserving: case State::Entering: case State::Sending:
-      case State::ReadbackWait: case State::ReadingBack: case State::RetryWait: return false;
+      case State::Confirmed:
+      case State::NotSent:
+      case State::Uncertain:
+      case State::StorageError:
+      case State::Cancelled:
+        return true;
+      case State::Idle:
+      case State::Waiting:
+      case State::Preparing:
+      case State::Baseline:
+      case State::Reserving:
+      case State::Entering:
+      case State::Sending:
+      case State::ReadbackWait:
+      case State::ReadingBack:
+      case State::RetryWait:
+        return false;
     }
     return true;
   }
@@ -299,14 +353,21 @@ class TimeTransaction {
            (now + 28800) / 86400 == (reservedAt_ + 28800) / 86400;
   }
   bool readbackFresh(uint64_t now, uint32_t tick) {
-    if (now < responseAt_) { issue_ = Issue::ClockInvalid; return false; }
+    if (now < responseAt_) {
+      issue_ = Issue::ClockInvalid;
+      return false;
+    }
     if (now - responseAt_ > 120 || uint32_t(tick - responseMs_) > 120000U) {
       issue_ = Issue::Expired;
       return false;
     }
     return true;
   }
-  State finish(State result) { state_ = result; release(); return state_; }
+  State finish(State result) {
+    state_ = result;
+    release();
+    return state_;
+  }
   void release() {
     if (!acquired_) return;
     coordinator_.release(this, transport_.monotonicMs());

@@ -63,6 +63,7 @@ class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
                                0,
                                1.0f,
                                false,
+                               false,
                                0,
                                static_cast<uint16_t>(renderer.getScreenWidth()),
                                static_cast<uint16_t>(renderer.getScreenHeight()),
@@ -82,7 +83,7 @@ class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
     ESP = {};
     collectedFootnotes.clear();
     laidOutWords.clear();
-    parser.currentTextBlock = std::make_unique<ParsedText>(false, false, false, BlockStyle{}, true);
+    parser.currentTextBlock = std::make_unique<ParsedText>(false, false, false, false, BlockStyle{}, true);
   }
   void TearDown() override {
     ESP = {};
@@ -100,7 +101,7 @@ class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
 
 TEST_F(ChapterHtmlSlimParserTest, NoTouchKeepsFootnotesWithoutLinkStorage) {
   parser.collectTouchLinks = false;
-  parser.currentTextBlock = std::make_unique<ParsedText>(false, false, false, BlockStyle{}, false);
+  parser.currentTextBlock = std::make_unique<ParsedText>(false, false, false, false, BlockStyle{}, false);
   const XML_Char* attributes[] = {"href", "#note-target", nullptr};
   ChapterHtmlSlimParser::startElement(&parser, "a", attributes);
   ChapterHtmlSlimParser::characterData(&parser, "1", 1);
@@ -398,6 +399,22 @@ TEST_F(SectionMemoryTest, OomAbandonsBuildAndBasicRetryPreservesBodyAndOffsets) 
   EXPECT_FALSE(restored.loadSectionFile(spec));
 }
 
+// Recognising an image by its content instead of its href extension hands an
+// imageCounter value to entries the old extension gate skipped, so a rebuilt
+// chapter numbers its images differently. The extracted-image namespace is
+// versioned for that reason: a pre-upgrade "img_*" file (and the .pxc beside it)
+// must never be picked up again, because ImageBlock::ensureExtracted() accepts
+// whatever file already sits at the path without checking where it came from.
+// Bump this prefix in lockstep with SECTION_FILE_VERSION.
+TEST_F(SectionMemoryTest, ImageCacheNamespaceIsVersionedSoPreUpgradeFilesAreNotReused) {
+  writeHtml("<html><body><p>plain text</p></body></html>");
+  Section section(epub, 0, renderer);
+  ASSERT_TRUE(section.startBuild(spec));
+  ASSERT_TRUE(section.build_ != nullptr);
+  EXPECT_NE(section.build_->imageBasePath.find("/img2_"), std::string::npos)
+      << "image cache base path was " << section.build_->imageBasePath;
+}
+
 TEST_F(SectionMemoryTest, ReclaimsCachesBeforeStartAndContinuation) {
   std::string html = "<html><body>";
   for (int i = 0; i < 500; ++i) html += "<p>word</p>";
@@ -518,7 +535,11 @@ TEST_F(SectionMemoryTest, MixedChapterCacheMatchesVerifiedLayout) {
   append(bytes);
   for (const auto& word : laidOutWords) append(word);
   for (const auto& href : collectedFootnotes) append(href);
-  EXPECT_EQ(digest, 13330287791149729058ULL);  // Pre-refactor cache, text and footnotes.
+  // Pre-refactor cache, text and footnotes. The expected value tracks
+  // SECTION_FILE_VERSION, whose byte is the first thing in the file: the digest
+  // moved when the version went 64 -> 66 for the versioned image cache prefix,
+  // then 66 -> 68 for first-line indent and 68 -> 70 for paragraph spacing.
+  EXPECT_EQ(digest, 9535508317497758948ULL);  // v71/v70 cache (paragraph spacing levels), text and footnotes.
 }
 
 TEST_F(SectionMemoryTest, CssCacheOomIsReportedAndBasicBuildDoesNotHydrateCss) {
@@ -555,9 +576,10 @@ TEST_F(SectionMemoryTest, CssCacheOomIsReportedAndBasicBuildDoesNotHydrateCss) {
 }
 
 TEST_F(ChapterHtmlSlimParserTest, HiddenAttributeSkipsBlocksAndInlineTextWithoutHidingFollowingContent) {
-  writeHtml("<html><body><p hidden='hidden'>SECRET_P</p><h1 hidden='hidden'>SECRET_H</h1>"
-            "<p>Before <span hidden='hidden'>SECRET_SPAN</span> After</p>"
-            "<div hidden='hidden'><p>SECRET_DIV</p></div><p>Visible</p></body></html>");
+  writeHtml(
+      "<html><body><p hidden='hidden'>SECRET_P</p><h1 hidden='hidden'>SECRET_H</h1>"
+      "<p>Before <span hidden='hidden'>SECRET_SPAN</span> After</p>"
+      "<div hidden='hidden'><p>SECRET_DIV</p></div><p>Visible</p></body></html>");
   parser.completePageFn = [](auto, auto, auto, auto) {};
 
   ASSERT_TRUE(parser.parseAndBuildPages());
@@ -565,6 +587,119 @@ TEST_F(ChapterHtmlSlimParserTest, HiddenAttributeSkipsBlocksAndInlineTextWithout
   EXPECT_EQ(laidOutWords[0], "Before");
   EXPECT_EQ(laidOutWords[1], "After");
   EXPECT_EQ(laidOutWords[2], "Visible");
+}
+
+TEST_F(ChapterHtmlSlimParserTest, FirstLineIndentPreservesCssAndExplicitOverrides) {
+  for (const bool spacing : {false, true}) {
+    for (const int cssIndent : {-16, 0, 24}) {
+      BlockStyle style;
+      style.textIndentDefined = true;
+      style.textIndent = cssIndent;
+      ParsedText text(spacing, FirstLineIndent::Auto, false, false, style);
+      text.isNaturalAlign = true;
+      text.addWord("word", EpdFontFamily::REGULAR);
+      EXPECT_EQ(text.resolveFirstLineIndent(true, renderer, 0), cssIndent);
+      text.firstLineIndent = FirstLineIndent::NoIndent;
+      EXPECT_EQ(text.resolveFirstLineIndent(true, renderer, 0), 0);
+      text.firstLineIndent = FirstLineIndent::Indent;
+      EXPECT_EQ(text.resolveFirstLineIndent(true, renderer, 0), 12);
+      text.addWord("中文", EpdFontFamily::REGULAR);
+      EXPECT_EQ(text.resolveFirstLineIndent(true, renderer, 0),
+                2 * renderer.getTextAdvanceX(0, "我", EpdFontFamily::REGULAR));
+      EXPECT_EQ(text.resolveFirstLineIndent(false, renderer, 0), 0);
+      text.firstLinePending = false;
+      EXPECT_EQ(text.resolveFirstLineIndent(true, renderer, 0), 0);
+    }
+  }
+  ParsedText automatic(false, FirstLineIndent::Auto);
+  automatic.isNaturalAlign = true;
+  EXPECT_EQ(automatic.resolveFirstLineIndent(true, renderer, 0), 0);
+}
+
+TEST_F(SectionMemoryTest, FirstLineIndentRoundTripsAndInvalidatesChangedAndLegacyCaches) {
+  std::string html = "<html><body>";
+  for (int i = 0; i < 400; ++i) html += "<p>word</p>";
+  html += "</body></html>";
+  writeHtml(html);
+  for (const bool partial : {false, true}) {
+    for (const uint8_t mode : {FirstLineIndent::Auto, FirstLineIndent::Indent, FirstLineIndent::NoIndent}) {
+      spec.firstLineIndent = mode;
+      {
+        Section section(epub, 0, renderer);
+        ASSERT_TRUE(section.startBuild(spec));
+        ASSERT_TRUE(section.buildSomeMore(partial ? 1 : 0));
+      }
+      {
+        Section restored(epub, 0, renderer);
+        ASSERT_TRUE(restored.loadSectionFile(spec));
+        EXPECT_EQ(restored.isPartial(), partial);
+      }
+      auto changed = spec;
+      changed.firstLineIndent = (mode + 1) % 3;
+      Section mismatch(epub, 0, renderer);
+      EXPECT_FALSE(mismatch.loadSectionFile(changed));
+    }
+  }
+  for (const char oldVersion : {char{66}, char{68}}) {
+    Section section(epub, 0, renderer);
+    ASSERT_TRUE(section.createSectionFile(spec));
+    section.file.close();
+    const auto cachePath = epub->cachePath + "/sections/0.bin";
+    {
+      std::fstream file(cachePath, std::ios::binary | std::ios::in | std::ios::out);
+      ASSERT_TRUE(file.good());
+      file.write(&oldVersion, 1);
+    }
+    Section legacy(epub, 0, renderer);
+    EXPECT_FALSE(legacy.loadSectionFile(spec));
+    EXPECT_TRUE(legacy.createSectionFile(spec));
+    Section rebuilt(epub, 0, renderer);
+    EXPECT_TRUE(rebuilt.loadSectionFile(spec));
+  }
+}
+
+TEST_F(ChapterHtmlSlimParserTest, ParagraphSpacingLevelsAddToCssMargins) {
+  constexpr int gaps[] = {0, 8, 12, 16, 20, 24};
+  for (uint8_t level = 0; level < std::size(gaps); ++level) {
+    parser.extraParagraphSpacing = level;
+    parser.currentPage.reset();
+    parser.currentPageNextY = 0;
+    BlockStyle style;
+    style.marginTop = 7;
+    style.marginBottom = 3;
+    parser.currentTextBlock = std::make_unique<ParsedText>(level, FirstLineIndent::Auto, false, false, style);
+    parser.currentTextBlock->addWord("word", EpdFontFamily::REGULAR);
+    parser.makePages();
+    ASSERT_FALSE(parser.hasFailed());
+    EXPECT_EQ(parser.currentPageNextY, 16 + 10 + gaps[level]);
+  }
+}
+
+TEST_F(SectionMemoryTest, ParagraphSpacingLevelsRoundTripWithoutCollapsingToBool) {
+  std::string html = "<html><body>";
+  for (int i = 0; i < 400; ++i) html += "<p>word</p>";
+  html += "</body></html>";
+  writeHtml(html);
+  spec.firstLineIndent = FirstLineIndent::NoIndent;
+  for (const bool partial : {false, true}) {
+    for (uint8_t level = 0; level <= 5; ++level) {
+      spec.extraParagraphSpacing = level;
+      {
+        Section section(epub, 0, renderer);
+        ASSERT_TRUE(section.startBuild(spec));
+        ASSERT_TRUE(section.buildSomeMore(partial ? 1 : 0));
+      }
+      {
+        Section restored(epub, 0, renderer);
+        ASSERT_TRUE(restored.loadSectionFile(spec));
+        EXPECT_EQ(restored.isPartial(), partial);
+      }
+      auto changed = spec;
+      changed.extraParagraphSpacing = (level + 1) % 6;
+      Section mismatch(epub, 0, renderer);
+      EXPECT_FALSE(mismatch.loadSectionFile(changed));
+    }
+  }
 }
 
 }  // namespace

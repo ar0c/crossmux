@@ -4,10 +4,10 @@
 
 #include <cstdio>
 
-#include "WeReadTimeJournal.h"
 #include "WeReadExternalTime.h"
 #include "WeReadPacedTime.h"
 #include "WeReadTimeDataLayout.h"
+#include "WeReadTimeJournal.h"
 
 namespace WeReadTime {
 
@@ -53,17 +53,18 @@ class ExternalTimeStorage {
         while (true) {
           auto file = directory.openNextFile();
           if (!file) break;
-          if (!file.getName(path_,sizeof(path_))) return false;
-          if (!std::strncmp(path_,"weread-time-",12) || !std::strncmp(path_,"weread-backlog-",15)) return false;
+          if (!file.getName(path_, sizeof(path_))) return false;
+          if (!std::strncmp(path_, "weread-time-", 12) || !std::strncmp(path_, "weread-backlog-", 15)) return false;
         }
       }
       pending = ledger.pendingSeconds();
       return true;
     }
     HalFile file;
-    if (!Storage.openFileForRead("WRTime",organizedPath_,file) || file.fileSize64() != sizeof(bytes_) ||
-        file.read(bytes_,sizeof(bytes_)) != sizeof(bytes_) || !receipt_.decode(bytes_,sizeof(bytes_)) ||
-        !receipt_.balance(ledger,pending)) return false;
+    if (!Storage.openFileForRead("WRTime", organizedPath_, file) || file.fileSize64() != sizeof(bytes_) ||
+        file.read(bytes_, sizeof(bytes_)) != sizeof(bytes_) || !receipt_.decode(bytes_, sizeof(bytes_)) ||
+        !receipt_.balance(ledger, pending))
+      return false;
     confirmed = receipt_.confirmedSeconds;
     unknown = receipt_.unknownSeconds;
     hasReceipt_ = true;
@@ -71,6 +72,7 @@ class ExternalTimeStorage {
   }
   const ExternalTime* receipt() const { return hasReceipt_ ? &receipt_ : nullptr; }
   const uint8_t* receiptBytes() const { return hasReceipt_ ? bytes_ : nullptr; }
+
  private:
   bool externalPaths(const Identity& id) {
     const int n = std::snprintf(path_, sizeof(path_), "/weread-external-%s-%s-%lu.bin", id.account, id.source,
@@ -137,8 +139,8 @@ class SdByteLog final : public ByteLog {
     constexpr uint64_t kFreeReserve = 1024 * 1024;
     constexpr uint64_t kJournalBudget = 4 * 1024 * 1024;
     uint64_t total = 0, free = 0, length = 0;
-    if (!configured_ || !Storage.getSpace(total, free) || free > total ||
-        bytes > kJournalBudget || free < kFreeReserve + bytes || size(length) == ReadState::Error)
+    if (!configured_ || !Storage.getSpace(total, free) || free > total || bytes > kJournalBudget ||
+        free < kFreeReserve + bytes || size(length) == ReadState::Error)
       return false;
     return length <= kJournalBudget - bytes;
   }

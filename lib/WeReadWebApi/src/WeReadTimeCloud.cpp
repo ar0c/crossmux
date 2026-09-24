@@ -19,8 +19,7 @@ bool cookieValue(const char* cookie, const char* name, char* out, size_t capacit
     while (*start == ' ' || *start == ';') ++start;
     const char* end = strchr(start, ';');
     if (!end) end = start + strlen(start);
-    if (static_cast<size_t>(end - start) > nameSize && memcmp(start, name, nameSize) == 0 &&
-        start[nameSize] == '=') {
+    if (static_cast<size_t>(end - start) > nameSize && memcmp(start, name, nameSize) == 0 && start[nameSize] == '=') {
       const char* value = start + nameSize + 1;
       const size_t length = end - value;
       if (found || !length || length >= capacity) return false;
@@ -32,7 +31,7 @@ bool cookieValue(const char* cookie, const char* name, char* out, size_t capacit
   }
   return found;
 }
-}
+}  // namespace
 
 Query::~Query() { clear(); }
 void Query::clear() {
@@ -69,9 +68,11 @@ bool Query::begin(const char* cookie, uint64_t now) {
   scope_.month = scope_.day - static_cast<uint64_t>(date.tm_mday - 1) * 86400;
   result_ = Result::LoginRequired;
   if (!cookie || !cookie[0] || strlen(cookie) >= sizeof(cookie_)) return false;
-  for (const char* p = cookie; *p; ++p) if (static_cast<unsigned char>(*p) < 32 || *p == 127) return false;
+  for (const char* p = cookie; *p; ++p)
+    if (static_cast<unsigned char>(*p) < 32 || *p == 127) return false;
   if (!cookieValue(cookie, "wr_vid", account_, sizeof(account_)) ||
-      !cookieValue(cookie, "wr_skey", skey_, sizeof(skey_))) return false;
+      !cookieValue(cookie, "wr_skey", skey_, sizeof(skey_)))
+    return false;
   strcpy(cookie_, cookie);
   response_.reset(Response::Mode::Key);
   phase_ = Phase::Key;
@@ -89,13 +90,16 @@ Result Query::step() {
              static_cast<unsigned long long>(scope_.month));
     response_.reset(Response::Mode::Stats, scope_.month, scope_.day);
   }
-  WeReadHttpClient::Header headers[] = {
-      {"Accept", "application/json"}, {"Content-Type", "application/json"},
-      {"Referer", "https://weread.qq.com/r/weread-skills"},
-      {"Origin", "https://weread.qq.com"},
-      {"User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"},
-      {stats ? "Authorization" : "Cookie", stats ? authorization_ : cookie_},
-      {"X-Vid", account_}, {"X-Skey", skey_}};
+  WeReadHttpClient::Header headers[] = {{"Accept", "application/json"},
+                                        {"Content-Type", "application/json"},
+                                        {"Referer", "https://weread.qq.com/r/weread-skills"},
+                                        {"Origin", "https://weread.qq.com"},
+                                        {"User-Agent",
+                                         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, "
+                                         "like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"},
+                                        {stats ? "Authorization" : "Cookie", stats ? authorization_ : cookie_},
+                                        {"X-Vid", account_},
+                                        {"X-Skey", skey_}};
   WeReadHttpClient::RequestOptions options;
   options.method = stats ? "POST" : "GET";
   options.body = stats ? reinterpret_cast<const uint8_t*>(body) : nullptr;
@@ -108,19 +112,23 @@ Result Query::step() {
   int status = 0;
   size_t received = 0;
   const auto result = WeReadHttpClient::requestVerified(
-      stats ? "https://i.weread.qq.com/api/agent/gateway"
-            : "https://weread.qq.com/api/skills/apikeyGet?only_show=1",
+      stats ? "https://i.weread.qq.com/api/agent/gateway" : "https://weread.qq.com/api/skills/apikeyGet?only_show=1",
       options,
       [this, &received](const uint8_t* data, size_t size) {
         if (size > 1024 * 1024 - received) return false;
         received += size;
         return response_.feed(data, size);
-      }, {}, status);
+      },
+      {}, status);
   httpStatus_ = status;
-  if (status == 401 || status == 403) result_ = Result::LoginRequired;
-  else if (result == WeReadHttpClient::Result::NetworkError) result_ = Result::Network;
-  else if (status != 200) result_ = Result::Unavailable;
-  else if (result != WeReadHttpClient::Result::Ok || !response_.complete()) result_ = Result::Protocol;
+  if (status == 401 || status == 403)
+    result_ = Result::LoginRequired;
+  else if (result == WeReadHttpClient::Result::NetworkError)
+    result_ = Result::Network;
+  else if (status != 200)
+    result_ = Result::Unavailable;
+  else if (result != WeReadHttpClient::Result::Ok || !response_.complete())
+    result_ = Result::Protocol;
   else if (!stats) {
     snprintf(authorization_, sizeof(authorization_), "Bearer %s", response_.key());
     wipe(cookie_, sizeof(cookie_));
@@ -129,7 +137,8 @@ Result Query::step() {
     response_.reset(Response::Mode::Stats);
     phase_ = Phase::Stats;
     return Result::Pending;
-  } else result_ = Result::Ready;
+  } else
+    result_ = Result::Ready;
   phase_ = Phase::Done;
   wipe(cookie_, sizeof(cookie_));
   wipe(account_, sizeof(account_));

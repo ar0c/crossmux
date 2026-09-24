@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -101,6 +102,7 @@ class WeReadProgressSyncActivity final : public Activity {
 
   void collectReadingTime(const char* account);
   void advanceTimeQuery();
+  std::atomic<bool> fullRefreshPending_{true};
 
   void launchWifiSelection();
   void onWifiSelectionComplete(bool connected);

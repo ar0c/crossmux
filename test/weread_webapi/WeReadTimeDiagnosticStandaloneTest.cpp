@@ -1,12 +1,13 @@
-#include "WeReadTimeDiagnostic.h"
-#include "WeReadTimeAck.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
+
+#include "WeReadTimeAck.h"
+#include "WeReadTimeDiagnostic.h"
 int main() {
   using D = WeReadTime::Diagnostic;
   char out[768];
-  for (unsigned i=0; i<=static_cast<unsigned>(D::Stage::Report); ++i) {
+  for (unsigned i = 0; i <= static_cast<unsigned>(D::Stage::Report); ++i) {
     D d{static_cast<D::Stage>(i), -123, 403, 7};
     assert(std::strcmp(d.name(), "invalid"));
     const int n = d.encode(out, sizeof(out), 6, 15, 5, 0xffffffffUL);
@@ -22,7 +23,7 @@ int main() {
   };
   assert(inspect("{\"succ\":1}"));
   assert(ack.succ == A::One && ack.synckey == A::Missing);
-  assert(inspect("{\"synckey\":0}")); // Preserve existing ACK semantics, NOT credit.
+  assert(inspect("{\"synckey\":0}"));  // Preserve existing ACK semantics, NOT credit.
   assert(ack.succ == A::Missing && ack.synckey == A::Zero);
   assert(inspect("{\"succ\":true,\"synckey\":987654321}"));
   assert(ack.succ == A::One && ack.synckey == A::Other);
