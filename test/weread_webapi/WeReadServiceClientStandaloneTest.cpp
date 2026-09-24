@@ -19,6 +19,15 @@ Result requestVerified(const char* url, const RequestOptions& o, const DataCallb
     if (!strcmp(o.headers[i].name, "User-Agent")) agent = !strcmp(o.headers[i].value, "weread-sync-device/0.1");
   }
   assert(auth && agent);
+  // Match the production transport's input gate before accepting a request.
+  if (!o.readBuffer || o.readBufferSize < 2) {
+    status = -1;
+    if (o.diagnostic) {
+      o.diagnostic->stage = NetworkDiagnostic::Stage::Input;
+      o.diagnostic->error = 258;  // ESP_ERR_INVALID_ARG
+    }
+    return Result::NetworkError;
+  }
   lastMethod = o.method;
   lastBody = o.body ? std::string(reinterpret_cast<const char*>(o.body), o.bodySize) : "";
   status = responseCode;

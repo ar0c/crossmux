@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -13,6 +14,17 @@ struct ReadingDayStats {
   uint64_t readingMs = 0;
 };
 
+// Only measured time created while this physical device and WeRead account
+// were known is eligible for that device's upload queue. Older book totals
+// remain unowned until a reviewed, one-time migration assigns them.
+struct WeReadOwnedTime {
+  char account[32] = {};
+  char remoteBook[64] = {};
+  char source[64] = {};
+  std::vector<ReadingDayStats> days;
+  uint64_t totalMs = 0;
+};
+
 struct ReadingBookStats {
   std::string bookId;
   std::string path;
@@ -22,6 +34,9 @@ struct ReadingBookStats {
   std::string coverBmpPath;
   std::string chapterTitle;
   std::vector<ReadingDayStats> readingDays;
+  // Allocates entries only for WeRead books actually opened on a device;
+  // multiple sources must survive an SD move without page-turn SD writes.
+  std::vector<WeReadOwnedTime> wereadOwnedTime;
   uint64_t totalReadingMs = 0;
   uint32_t sessions = 0;
   uint32_t lastSessionMs = 0;
@@ -78,6 +93,7 @@ class ReadingStatsStore {
     size_t bookIndex = 0;
     unsigned long lastInteractionMs = 0;
     uint64_t accumulatedMs = 0;
+    size_t wereadOwnedIndex = SIZE_MAX;
     uint8_t startProgressPercent = 0;
     bool startCompleted = false;
   };
@@ -116,7 +132,7 @@ class ReadingStatsStore {
   uint32_t getReferenceTimestamp(uint32_t preferredTimestamp, uint32_t bookTimestamp = 0) const;
   uint32_t getReferenceDayOrdinal() const;
   void updateBookReadTimestamp(ReadingBookStats& book, uint32_t preferredTimestamp);
-  void recordReadingTime(ReadingBookStats& book, uint32_t epochSeconds, uint64_t readingMs);
+  void recordReadingTime(ReadingBookStats& book, uint32_t epochSeconds, uint64_t readingMs, bool authoritativeDay);
   void appendSessionLogEntry(uint32_t dayOrdinal, uint32_t sessionMs);
   bool convertLegacyReadingDaysToUnassigned();
   void rebuildAggregatedReadingDays();
@@ -135,6 +151,7 @@ class ReadingStatsStore {
   void beginSession(const std::string& path, const std::string& title, const std::string& author,
                     const std::string& coverBmpPath, uint8_t progressPercent = 0, const std::string& chapterTitle = "",
                     uint8_t chapterProgressPercent = 0);
+  bool bindWeReadOwnedTime(const char* account, const char* remoteBook, const char* source);
   void noteActivity();
   void tickActiveSession();
   void resumeSession();

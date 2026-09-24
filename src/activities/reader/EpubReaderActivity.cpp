@@ -7,6 +7,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalFrontlight.h>
+#include <HalSystem.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -51,6 +52,7 @@
 #include "util/ReadingGuideLine.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include <WeReadStore.h>
+#include <WeReadDeviceTimeSource.h>
 
 #include "activities/apps/weread/WeReadProgressSyncActivity.h"
 #include "activities/settings/FontDownloadActivity.h"
@@ -397,6 +399,27 @@ bool EpubReaderActivity::loadBook() {
       epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getCoverBmpPath(),
       clampPercent(static_cast<int>(epub->calculateProgress(currentSpineIndex, 0.0f) * 100.0f + 0.5f)),
       getStatsChapterTitle(*epub, currentSpineIndex), 0);
+
+#ifdef ENABLE_CHINESE_VERSION
+  if (wereadBookId_[0]) {
+    // Bind while the account, physical chip and content ID are known. Time
+    // measured on an SD card in another reader remains under that reader's
+    // source; old aggregate statistics are never claimed automatically.
+    const auto* statsBook = READING_STATS.findBook(epub->getPath());
+    // The session contains two large cookie buffers; keep it off the reader
+    // task stack and release it immediately after binding the account ID.
+    auto session = makeUniqueNoThrow<WeReadStore::Session>();
+    HalSystem::DeviceId device{};
+    char source[64] = {};
+    if (!statsBook || !session || !WeReadStore::loadSession(*session) || !session->valid() ||
+        !HalSystem::getDeviceId(device) ||
+        !WeReadTime::deviceSource(device.data(), statsBook->bookId.c_str(), source) ||
+        !READING_STATS.bindWeReadOwnedTime(session->vid, wereadBookId_, source)) {
+      LOG_ERR("WRTime", "Device-owned reading time unavailable for this session");
+    }
+    if (session) session->clear();
+  }
+#endif
 
   loadCachedBookmarks();
   return true;

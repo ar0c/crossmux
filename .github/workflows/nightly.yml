@@ -80,7 +80,7 @@ jobs:
             printf '\n' >> release-body.md
             cat ota-notes.md >> release-body.md
           else
-            printf 'Nightly build `%s` from `main`.\n' "${GITHUB_SHA::7}" > release-body.md
+            printf 'Nightly build `%s` from `%s`.\n' "${GITHUB_SHA::7}" "$GITHUB_REF_NAME" > release-body.md
             if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
               python3 scripts/generate_ota_notes.py \
                 --en-notes="$NOTES_EN" --zh-notes="$NOTES_ZH" --output ota-notes.md

@@ -6,6 +6,7 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalSystem.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -26,6 +27,7 @@
 #include "ReadingStatsStore.h"
 #include "SilentRestart.h"
 #include "WeReadTimeStorage.h"
+#include "WeReadDeviceTimeSource.h"
 #include "WeReadXhtmlCodec.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -145,62 +147,96 @@ void WeReadProgressSyncActivity::collectReadingTime(const char* account) {
   externalConfirmedSeconds_ = externalUnknownSeconds_ = 0;
   timeCollectionFailed_ = false;
   timeHostPaused_ = false;
+  deviceOwnedTime_ = false;
+  deviceTimeSource_[0] = '\0';
+  legacyTimeDays_.reset();
+  legacyTimeDayCount_ = 0;
+  legacyTimeTotalMs_ = 0;
   // The reader ends the measured session before opening this activity. Save
   // its source first; the time journal never rewrites the original statistics.
   if (!READING_STATS.saveToFile()) {
     timeCollectionFailed_ = true;
     return;
   }
-  if (Storage.exists(WeReadTime::kLegacyTimeManifest) || Storage.exists(WeReadTime::kTimeManifest)) {
-    timeCollectionFailed_ = !auditTime(account);
-    return;
-  }
   const auto* book = READING_STATS.findBook(epubPath_);
   if (!book) return;
-  struct Workspace {
-    WeReadTime::SdByteLog log;
-    WeReadTime::Journal journal{log};
-    WeReadTime::ExternalTimeStorage external;
-  };
-  // ~1 KiB, once per sync entry; fixed buffers must not live on the task stack.
-  auto work = makeUniqueNoThrow<Workspace>();
-  if (!work) {
-    LOG_ERR("WRTime", "OOM: journal workspace");
-    timeCollectionFailed_ = true;
-    return;
+  const WeReadOwnedTime* owned = nullptr;
+  HalSystem::DeviceId device{};
+  if (HalSystem::getDeviceId(device) &&
+      WeReadTime::deviceSource(device.data(), book->bookId.c_str(), deviceTimeSource_)) {
+    for (const auto& candidate : book->wereadOwnedTime) {
+      if (!std::strcmp(candidate.account, account) && !std::strcmp(candidate.remoteBook, bookId_) &&
+          !std::strcmp(candidate.source, deviceTimeSource_)) {
+        owned = &candidate;
+        break;
+      }
+    }
   }
-  uint64_t assignedMs = 0;
-  for (const auto& day : book->readingDays) {
-    if (day.readingMs > UINT64_MAX - assignedMs) {
-      timeCollectionFailed_ = true;
+  const bool hasManifest = Storage.exists(WeReadTime::kLegacyTimeManifest) || Storage.exists(WeReadTime::kTimeManifest);
+  if (hasManifest) {
+    const bool prepared = prepareLegacyTimeSource(*book);
+    if (prepared && legacyTimeDayCount_) {
+      const bool audited = auditTime(account);
+      if (audited && selectedTimeDay_) return;
+      if (!audited && !owned) {
+        timeCollectionFailed_ = true;
+        return;
+      }
+    } else if (!owned) {
+      timeCollectionFailed_ = !prepared;
       return;
     }
-    assignedMs += day.readingMs;
-    if (!work->log.configure(account, bookId_, book->bookId.c_str(), day.dayOrdinal) ||
-        !work->journal.open(account, bookId_, book->bookId.c_str(), day.dayOrdinal) ||
-        !work->journal.collect(day.readingMs)) {
-      timeCollectionFailed_ = true;
-      LOG_ERR("WRTime", "History import blocked: day=%lu", static_cast<unsigned long>(day.dayOrdinal));
-      continue;
-    }
-    uint64_t pending = 0, confirmed = 0, unknown = 0;
-    if (!work->external.reconcile(work->journal.ledger(), pending, confirmed, unknown)) {
-      timeCollectionFailed_ = true;
-      LOG_ERR("WRTime", "External accounting requires reconciliation; no sendable balance exposed");
-      continue;
-    }
-    pendingTimeSeconds_ += pending;
-    externalConfirmedSeconds_ += confirmed;
-    externalUnknownSeconds_ += unknown;
   }
-  // Undated legacy time cannot silently become today's measured time.
-  if (assignedMs != book->totalReadingMs) timeCollectionFailed_ = true;
-  LOG_INF("WRTime", "History pending=%llu seconds blocked=%u; no timed request sent",
-          static_cast<unsigned long long>(pendingTimeSeconds_), static_cast<unsigned>(timeCollectionFailed_));
+  if (owned) {
+    deviceOwnedTime_ = true;
+    if (!owned->days.empty()) timeCollectionFailed_ = !auditTime(account);
+    return;
+  }
+  // A moved SD card may hold another reader's source. Never import it here.
+  if (!book->wereadOwnedTime.empty()) return;
+  // Older aggregate days have no physical owner. Preserve them for explicit
+  // review/migration, but do not present them as this reader's sendable time.
+  LOG_INF("WRTime", "Unassigned historical reading time preserved; no timed request sent");
+}
+
+bool WeReadProgressSyncActivity::prepareLegacyTimeSource(const ReadingBookStats& book) {
+  if (book.readingDays.empty() || book.readingDays.size() > 4096) return false;
+  // Only legacy handovers need this snapshot. It excludes every tagged source
+  // so a newly measured minute cannot be offered by both queues.
+  legacyTimeDays_ = makeUniqueNoThrow<ReadingDayStats[]>(book.readingDays.size());
+  if (!legacyTimeDays_) {
+    LOG_ERR("WRTime", "OOM: legacy day snapshot (%u bytes)", unsigned(book.readingDays.size() * sizeof(ReadingDayStats)));
+    return false;
+  }
+  std::copy(book.readingDays.begin(), book.readingDays.end(), legacyTimeDays_.get());
+  uint64_t ownedTotal = 0;
+  for (const auto& owned : book.wereadOwnedTime) {
+    if (owned.totalMs > UINT64_MAX - ownedTotal) return false;
+    ownedTotal += owned.totalMs;
+    for (const auto& day : owned.days) {
+      auto* match = std::lower_bound(legacyTimeDays_.get(), legacyTimeDays_.get() + book.readingDays.size(),
+                                     day.dayOrdinal, [](const ReadingDayStats& item, uint32_t ordinal) {
+                                       return item.dayOrdinal < ordinal;
+                                     });
+      if (match == legacyTimeDays_.get() + book.readingDays.size() || match->dayOrdinal != day.dayOrdinal ||
+          match->readingMs < day.readingMs)
+        return false;
+      match->readingMs -= day.readingMs;
+    }
+  }
+  for (size_t i = 0; i < book.readingDays.size(); ++i) {
+    const auto day = legacyTimeDays_[i];
+    if (!day.readingMs) continue;
+    if (day.readingMs > UINT64_MAX - legacyTimeTotalMs_) return false;
+    legacyTimeTotalMs_ += day.readingMs;
+    legacyTimeDays_[legacyTimeDayCount_++] = day;
+  }
+  return book.totalReadingMs >= ownedTotal && book.totalReadingMs - ownedTotal == legacyTimeTotalMs_;
 }
 
 void WeReadProgressSyncActivity::onExit() {
   if (backgroundView_) WeReadTimeSync::dismiss(bookId_);
+  legacyTimeDays_.reset();
   timeAccounting_.clear();
   timeQuery_.reset();
   operation_.reset();
@@ -226,9 +262,28 @@ bool WeReadProgressSyncActivity::auditTime(const char* account, WeReadTime::Exte
                                            uint64_t* measured) {
   const auto* book = READING_STATS.findBook(epubPath_);
   if (!book) return false;
+  const ReadingDayStats* days = book->readingDays.data();
+  size_t count = book->readingDays.size();
+  uint64_t totalMs = book->totalReadingMs;
+  const char* sourceId = book->bookId.c_str();
+  if (!deviceOwnedTime_ && legacyTimeDays_) {
+    days = legacyTimeDays_.get();
+    count = legacyTimeDayCount_;
+    totalMs = legacyTimeTotalMs_;
+  }
+  if (deviceOwnedTime_) {
+    const auto found = std::find_if(book->wereadOwnedTime.begin(), book->wereadOwnedTime.end(), [&](const auto& owned) {
+      return !std::strcmp(owned.account, account) && !std::strcmp(owned.remoteBook, bookId_) &&
+             !std::strcmp(owned.source, deviceTimeSource_);
+    });
+    if (found == book->wereadOwnedTime.end()) return false;
+    days = found->days.data();
+    count = found->days.size();
+    totalMs = found->totalMs;
+    sourceId = found->source;
+  }
   WeReadTimeSync::Totals totals;
-  const WeReadTimeSync::Source source{bookId_, book->bookId.c_str(), book->readingDays.data(), book->readingDays.size(),
-                                      book->totalReadingMs};
+  const WeReadTimeSync::Source source{bookId_, sourceId, days, count, totalMs, deviceOwnedTime_};
   const bool ok = timeAccounting_.audit(source, account, totals, selected, measured);
   pendingTimeSeconds_ = totals.pending;
   externalConfirmedSeconds_ = totals.externalConfirmed;
@@ -269,9 +324,35 @@ void WeReadProgressSyncActivity::startTimeUpload() {
   const char* startError = session ? tr(STR_WEREAD_LOGIN_REQUIRED) : tr(STR_WEREAD_TIME_START_MEMORY);
   if (!book) startError = tr(STR_WEREAD_TIME_START_SOURCE);
   if (session && book && WeReadStore::loadSession(*session) && session->valid()) {
-    const WeReadTimeSync::Source source{bookId_, book->bookId.c_str(), book->readingDays.data(),
-                                        book->readingDays.size(), book->totalReadingMs};
-    started = WeReadTimeSync::start(source, session->vid);
+    const WeReadOwnedTime* owned = nullptr;
+    if (deviceOwnedTime_) {
+      for (const auto& candidate : book->wereadOwnedTime) {
+        if (!std::strcmp(candidate.account, session->vid) && !std::strcmp(candidate.remoteBook, bookId_) &&
+            !std::strcmp(candidate.source, deviceTimeSource_)) {
+          owned = &candidate;
+          break;
+        }
+      }
+    }
+    if (!deviceOwnedTime_ || owned) {
+      const ReadingDayStats* days = book->readingDays.data();
+      size_t count = book->readingDays.size();
+      uint64_t totalMs = book->totalReadingMs;
+      const char* sourceId = book->bookId.c_str();
+      if (legacyTimeDays_ && !owned) {
+        days = legacyTimeDays_.get();
+        count = legacyTimeDayCount_;
+        totalMs = legacyTimeTotalMs_;
+      }
+      if (owned) {
+        days = owned->days.data();
+        count = owned->days.size();
+        totalMs = owned->totalMs;
+        sourceId = owned->source;
+      }
+      const WeReadTimeSync::Source source{bookId_, sourceId, days, count, totalMs, deviceOwnedTime_};
+      started = WeReadTimeSync::start(source, session->vid);
+    }
     using Failure = WeReadTimeSync::StartFailure;
     switch (WeReadTimeSync::lastStartFailure()) {
       case Failure::Headroom:

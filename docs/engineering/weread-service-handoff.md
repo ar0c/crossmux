@@ -1,4 +1,4 @@
-# WeRead service handoff (X4 Pro)
+# WeRead service handoff (X4 Pro and Waveshare 3.97)
 
 The firmware can delegate measured offline time to the owner's Go service at
 `https://wesync.ar0c.com`. It persists ownership before sending, then returns
@@ -16,6 +16,12 @@ directory; never commit it, share it, or put it in a public firmware archive.
 
 On explicit reading-time sync, the device first checks `/api/v1/device` and
 requires both account and device ID to match the local source/configuration.
+The verified HTTP transport requires a caller-owned receive buffer. The service
+client supplies a 512-byte buffer on the existing worker stack and streams the
+response into its bounded parser. A credential-free phase/result record is saved
+to `/WeReadSync/last-service-diagnostic.json` before device verification and
+each job request, then on transport failure or successful device verification.
+It can locate a reboot within the handoff without USB serial access.
 Missing configuration retains the existing direct mode only for undelegated
 histories. Invalid configuration stops the run. Any existing service ledger
 blocks direct fallback when configuration disappears. An account switch or
@@ -60,9 +66,11 @@ all sending. A v1 service-journal reader rejects version 2; older firmware witho
 any service ownership support is still unsafe to downgrade to.
 
 The active-task array is fixed (24 entries, no per-task heap allocation), keeping
-the accounting scratch below 6 KiB and the journal below 2 KiB. Slots are reused
-only after full confirmation. The existing 8 KiB worker stack, fallible job
-allocation and C3/internal-memory reserves remain. The journal is capped at
+the accounting scratch below 6 KiB and the journal below 2 KiB. The service
+worker allocates that journal fallibly in PSRAM, with a fallible internal-memory
+fallback, rather than leaving it live on its 8 KiB stack during HTTPS calls.
+Slots are reused only after full confirmation. The existing 8 KiB worker stack,
+fallible job allocation and internal-memory reserves remain. The journal is capped at
 4 MiB; a full journal stops new reservations rather than deleting ownership.
 
 Do not downgrade to firmware that does not understand WRS1 after delegating
@@ -74,10 +82,12 @@ blindly replay device records.
 ## Verification and limitations
 
 Run `scripts/test_weread_service.ps1`: pure journal crash/torn-tail checks,
-production client parsing and authenticated HTTPS transport boundary tests,
+production client parsing and authenticated HTTPS transport boundary tests
+(including the required receive-buffer preflight),
 and production worker tests with internal RAM and PSRAM paths. The tests make
 no real network requests or reading-time increments. Build with `pio run -e
-x4pro`; verify the version-first exported image and its SHA-256 before upload.
+x4pro` or `pio run -e waveshare_epaper_397` for the matching board; verify the
+version-first exported image and its SHA-256 before upload.
 
 The local device status is the last explicit readback. To see newer cloud
 credit, open the service management page or initiate another device sync. The

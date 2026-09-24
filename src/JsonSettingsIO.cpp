@@ -78,12 +78,12 @@ bool saveJsonDocumentToFile(const char* moduleName, const char* path, const Json
 }  // namespace
 
 // ---- ReadingStatsStore ----
-// reading_stats.json, format version 6. Written atomically (temp + rename) and
+// reading_stats.json, format version 7. Written atomically (temp + rename) and
 // parsed via a streamed HalFileStream so large histories don't double peak heap.
 
 bool JsonSettingsIO::saveReadingStats(const ReadingStatsStore& store, const char* path) {
   JsonDocument doc;
-  doc["formatVersion"] = 6;
+  doc["formatVersion"] = 7;
 
   JsonArray days = doc["readingDays"].to<JsonArray>();
   for (const auto& day : store.getReadingDays()) {
@@ -134,6 +134,22 @@ bool JsonSettingsIO::saveReadingStats(const ReadingStatsStore& store, const char
       JsonObject dayObj = bookDays.add<JsonObject>();
       dayObj["dayOrdinal"] = day.dayOrdinal;
       dayObj["readingMs"] = day.readingMs;
+    }
+    if (!book.wereadOwnedTime.empty()) {
+      JsonArray ownedTimes = obj["wereadOwnedTime"].to<JsonArray>();
+      for (const auto& owned : book.wereadOwnedTime) {
+        JsonObject ownedObj = ownedTimes.add<JsonObject>();
+        ownedObj["account"] = owned.account;
+        ownedObj["remoteBook"] = owned.remoteBook;
+        ownedObj["source"] = owned.source;
+        ownedObj["totalMs"] = owned.totalMs;
+        JsonArray ownedDays = ownedObj["days"].to<JsonArray>();
+        for (const auto& day : owned.days) {
+          JsonObject dayObj = ownedDays.add<JsonObject>();
+          dayObj["dayOrdinal"] = day.dayOrdinal;
+          dayObj["readingMs"] = day.readingMs;
+        }
+      }
     }
   }
 
@@ -225,6 +241,40 @@ bool JsonSettingsIO::loadReadingStats(ReadingStatsStore& store, const char* json
     book.completed = obj["completed"] | false;
     if (formatVersion >= 2) {
       appendReadingDays(book.readingDays, obj["readingDays"].as<JsonArray>());
+    }
+    if (formatVersion >= 7) {
+      JsonArray ownedTimes = obj["wereadOwnedTime"].as<JsonArray>();
+      if (ownedTimes.size() > 64) return false;
+      book.wereadOwnedTime.reserve(ownedTimes.size());
+      for (JsonObject ownedObj : ownedTimes) {
+        WeReadOwnedTime owned;
+        const char* account = ownedObj["account"] | "";
+        const char* remoteBook = ownedObj["remoteBook"] | "";
+        const char* source = ownedObj["source"] | "";
+        if (!*account || !*remoteBook || !*source || std::strlen(account) >= sizeof(owned.account) ||
+            std::strlen(remoteBook) >= sizeof(owned.remoteBook) || std::strlen(source) >= sizeof(owned.source))
+          return false;
+        std::strcpy(owned.account, account);
+        std::strcpy(owned.remoteBook, remoteBook);
+        std::strcpy(owned.source, source);
+        const uint64_t declared = ownedObj["totalMs"] | static_cast<uint64_t>(0);
+        const JsonArray ownedDays = ownedObj["days"].as<JsonArray>();
+        if (ownedDays.size() > 4096) return false;
+        uint32_t previous = 0;
+        uint64_t total = 0;
+        owned.days.reserve(ownedDays.size());
+        for (JsonObject dayObj : ownedDays) {
+          const uint32_t day = dayObj["dayOrdinal"] | static_cast<uint32_t>(0);
+          const uint64_t value = dayObj["readingMs"] | static_cast<uint64_t>(0);
+          if (day <= previous || !value || value > UINT64_MAX - total) return false;
+          owned.days.push_back({day, value});
+          previous = day;
+          total += value;
+        }
+        if (total != declared) return false;
+        owned.totalMs = total;
+        book.wereadOwnedTime.push_back(std::move(owned));
+      }
     }
     if (formatVersion < 3 || book.bookId.empty()) {
       store.dirty = true;

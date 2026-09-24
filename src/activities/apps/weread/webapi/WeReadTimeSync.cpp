@@ -2,6 +2,7 @@
 #ifdef ENABLE_CHINESE_VERSION
 #include <Arduino.h>
 #include <Logging.h>
+#include <HalSystem.h>
 #include <Memory.h>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
@@ -14,6 +15,7 @@
 
 #include "ReadingStatsStore.h"
 #include "WeReadDeviceTimeTransport.h"
+#include "WeReadDeviceTimeSource.h"
 #include "WeReadHandoverManifest.h"
 #include "WeReadServiceClient.h"
 #include "WeReadServiceJournal.h"
@@ -47,6 +49,10 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
   totals.serviceCheckedAt = 0;
   totals.serviceMode = WeReadTime::ServiceClient::configured();
   if (!source.days || !source.count || source.count > 4096) return false;
+  if (source.deviceOwned) {
+    HalSystem::DeviceId device{};
+    if (!HalSystem::getDeviceId(device) || !WeReadTime::belongsToDevice(source.source, device.data())) return false;
+  }
   static_assert(sizeof(Scratch) < 6 * 1024, "Handover audit must stay bounded");
   // Fixed audit scratch, reused across every batch; too large for the task stack.
   if (!scratch_) scratch_ = makeUniqueNoThrow<Scratch>();
@@ -55,12 +61,12 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
     LOG_ERR("WRTime", "OOM: handover audit (%u bytes)", unsigned(sizeof(Scratch)));
     return false;
   }
-  if (!work->external.organizeManifest()) return false;
+  if (!source.deviceOwned && !work->external.organizeManifest()) return false;
   bool blocked = false;
   bool serviceObserved = false;
   for (unsigned pass = 0; pass < 2; ++pass) {
     HalFile manifest;
-    if (!Storage.openFileForRead("WRTime", WeReadTime::kTimeManifest, manifest)) return false;
+    if (!source.deviceOwned && !Storage.openFileForRead("WRTime", WeReadTime::kTimeManifest, manifest)) return false;
     uint64_t assigned = 0;
     uint32_t previousDay = 0;
     bool sealed = false;
@@ -74,13 +80,22 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
       if (!work->legacyLog.configure(account, source.book, source.source, day.dayOrdinal)) return false;
       uint64_t size = 0;
       const auto legacyState = work->legacyLog.size(size);
-      if ((!sealed && legacyState != WeReadTime::ByteLog::ReadState::Ready) ||
+      if ((!source.deviceOwned && !sealed && legacyState != WeReadTime::ByteLog::ReadState::Ready) ||
           legacyState == WeReadTime::ByteLog::ReadState::Error ||
           !work->legacy.open(account, source.book, source.source, day.dayOrdinal) ||
           !work->legacy.collect(day.readingMs))
         return false;
       uint64_t pending = 0, confirmed = 0, unknown = 0;
-      if (!sealed) {
+      if (source.deviceOwned) {
+        // A device-bound source has no companion-owned prefix. Its original
+        // measured milliseconds come from the same atomic stats document.
+        // Reject any older reservation/credit or external receipt.
+        work->receipt = {};
+        work->receipt.identity = work->legacy.ledger().identity();
+        if (work->external.hasExternal(work->receipt.identity) ||
+            !work->receipt.balance(work->legacy.ledger(), pending))
+          return false;
+      } else if (!sealed) {
         if (!work->external.reconcile(work->legacy.ledger(), pending, confirmed, unknown) || !work->external.receipt())
           return false;
         work->receipt = *work->external.receipt();
@@ -157,7 +172,7 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
         blocked = true;
       }
     }
-    if (!sealed || assigned != source.totalMs) return false;
+    if ((!source.deviceOwned && !sealed) || assigned != source.totalMs) return false;
   }
   return true;  // Unresolved records are selected for read-only recovery, never resends.
 }
@@ -205,6 +220,7 @@ struct Job final : WeReadTime::TimeQueueSource {
   std::unique_ptr<ReadingDayStats[]> days;
   size_t dayCount = 0;
   uint64_t totalMs = 0;
+  bool deviceOwned = false;
   Accounting accounting;
   WeReadTime::SdByteLog log;
   WeReadTime::PacedJournal journal{log};
@@ -216,7 +232,7 @@ struct Job final : WeReadTime::TimeQueueSource {
   std::atomic<bool> stopping{false};
   Status current;
 
-  Source source() const { return {book, sourceId, days.get(), dayCount, totalMs}; }
+  Source source() const { return {book, sourceId, days.get(), dayCount, totalMs, deviceOwned}; }
   Result selectNext() override {
     // Audit a frozen source snapshot. Reading can append live stats concurrently
     // without racing a vector, changing this run's budget or invalidating pointers.
@@ -307,11 +323,11 @@ struct Job final : WeReadTime::TimeQueueSource {
     current.queue = Q::Running;
     current.phase = WeReadTime::TimeTransaction::State::Sending;
     publish(current);
-    // Reuse the existing fallibly allocated job/source snapshot. These bounded
-    // service-only stack objects are below 4 KiB; no full-history allocation.
+    // Keep the service journal off the 8 KiB task stack: the TLS request path
+    // also needs stack while this journal remains live. It is CPU-only state,
+    // so the supported S3 boards can hold it in PSRAM for this explicit run.
     WeReadTime::ServiceClient client;
     WeReadTime::SdByteLog serviceLog;
-    WeReadTime::ServiceJournal service(serviceLog);
     const auto finish = [&](Q result) {
       current.auditFailed = !accounting.audit(source(), account, current.totals);
       current.queue = current.auditFailed ? Q::StorageError : result;
@@ -319,6 +335,25 @@ struct Job final : WeReadTime::TimeQueueSource {
       current.confirmed = current.totals.serviceConfirmed;
       publish(current);
     };
+    memory::ByteBuffer serviceStorage;
+    if (memory::psramHasHeadroom(sizeof(WeReadTime::ServiceJournal), sizeof(WeReadTime::ServiceJournal),
+                                 32 * 1024))
+      serviceStorage = memory::makePsramByteBufferNoThrow(sizeof(WeReadTime::ServiceJournal));
+    // A fallible internal allocation preserves the no-PSRAM build's service
+    // path without putting this journal back on the task stack.
+    std::unique_ptr<WeReadTime::ServiceJournal> internalService;
+    if (!serviceStorage) internalService = makeUniqueNoThrow<WeReadTime::ServiceJournal>(serviceLog);
+    if (!serviceStorage && !internalService) {
+      LOG_ERR("WRTime", "OOM: service journal");
+      finish(Q::Paused);
+      return;
+    }
+    auto* servicePtr = serviceStorage ? new (serviceStorage.get()) WeReadTime::ServiceJournal(serviceLog)
+                                      : internalService.get();
+    auto& service = *servicePtr;
+    ScopedCleanup serviceCleanup{[&] {
+      if (serviceStorage) service.~ServiceJournal();
+    }};
     if (!accounting.audit(source(), account, current.totals)) {
       finish(Q::StorageError);
       return;
@@ -598,6 +633,7 @@ bool start(const Source& source, const char* account) {
   std::copy_n(source.days, source.count, next->days.get());
   next->dayCount = source.count;
   next->totalMs = source.totalMs;
+  next->deviceOwned = source.deviceOwned;
   strcpy(next->account, account);
   strcpy(next->book, source.book);
   strcpy(next->sourceId, source.source);
