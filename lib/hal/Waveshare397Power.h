@@ -4,6 +4,14 @@
 
 namespace Waveshare397Power {
 
+// AXP2101 REG20/REG21 distinguish a PWR-key start after firmware shutdown
+// from USB insertion and other cold boots. Unknown or mixed causes fail closed.
+constexpr bool isSoftwareSleepPowerKeyBoot(uint8_t powerOnSource, uint8_t powerOffSource) {
+  constexpr uint8_t POWER_KEY_ON = 1u << 0;
+  constexpr uint8_t SOFTWARE_OFF = 1u << 1;
+  return powerOnSource == POWER_KEY_ON && powerOffSource == SOFTWARE_OFF;
+}
+
 class PowerKeyState {
  public:
   // AXP2101 PKEY is active-low: the negative edge is press and the
@@ -45,6 +53,7 @@ class PowerKeyState {
 };
 
 bool begin();
+bool wasWokenByPowerKeyAfterSoftwareShutdown();
 bool powerButtonPressed();
 void waitForPowerButtonRelease();
 bool setDisplayPower(bool enabled);

@@ -34,6 +34,13 @@ on; the boot gesture is ignored until its first release, so it may remain held
 until the first screen is visible. A new runtime hold uses the existing 400 ms
 software shutdown threshold (about 10 ms when short Power is set to Sleep),
 while a continuous 4-second hold remains the PMIC hard-power-off fallback.
+After a firmware-initiated shutdown, the PMIC removes ESP power. On the next
+PWR-key start the ESP reports POWERON rather than a deep-sleep GPIO wake. The
+boot path reads AXP2101 power-on source REG20 and power-off source REG21 before
+PMIC configuration; only the unambiguous pair (PWR key, software shutdown)
+qualifies for the one-shot splashless sleep wake. USB insertion, hard power-off,
+mixed/unknown PMIC sources, and missing reads retain the normal startup page.
+The e-paper keeps its sleep frame visible until Home's first physical paint.
 QMI8658 and SHTC3 are deliberately not initialized by this target.
 
 System Settings exposes **Sound Feedback** with Off/Low/Medium/High levels;
@@ -96,6 +103,8 @@ AXP2101 shutdown path then removes system power.
 - Set the RTC, reboot and fully power-cycle, then confirm restored time.
 - Check battery percentage and charging; unplug USB, run on battery, shut down, then hold the side key until the first
   screen is visible before releasing it. Repeat three times and confirm the boot gesture never triggers shutdown.
+- Confirm three software-sleep/PWR-key starts show no startup page, while USB insertion, a four-second PMIC hard
+  power-off, and a fresh flash/reset still show the startup page. Record the logged REG20/REG21 source bytes.
 - Confirm USB Serial/JTAG logging and flashing still work after a normal boot. Open File Transfer > USB Drive and
   verify a host can mount the SD card, copy, rename, delete, and read a large file. Safely eject or disconnect while
   idle, then confirm the device reboots Home, remounts the SD card, and opens a transferred EPUB. Repeat three times.

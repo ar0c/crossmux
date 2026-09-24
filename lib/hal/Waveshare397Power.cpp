@@ -22,6 +22,8 @@ enum class Register : uint8_t {
   VbusCurrent = 0x16,
   ChargeGauge = 0x18,
   LowBattery = 0x1A,
+  PowerOnSource = 0x20,
+  PowerOffSource = 0x21,
   Voff = 0x24,
   Key = 0x27,
   Adc = 0x30,
@@ -55,6 +57,7 @@ constexpr uint8_t PKEY_TIMING_1S_ON_4S_OFF = 0x02;
 constexpr uint8_t PKEY_IRQ_MASK = 0x0F;
 constexpr uint8_t PKEY_EDGE_IRQS = PowerKeyState::PRESS_IRQ | PowerKeyState::RELEASE_IRQ;
 bool ready = false;
+bool softwareSleepPowerKeyBoot = false;
 PowerKeyState powerKeyState;
 
 bool read(Register reg, uint8_t& value) {
@@ -104,7 +107,17 @@ bool begin() {
   Wire.begin(sensors.i2cSda, sensors.i2cScl, sensors.i2cHz);
   pinMode(IRQ_PIN, INPUT_PULLUP);
   uint8_t chipId = 0;
-  if (!read(Register::ChipId, chipId) || chipId != CHIP_ID || !configure()) return false;
+  if (!read(Register::ChipId, chipId) || chipId != CHIP_ID) return false;
+  uint8_t powerOnSource = 0;
+  uint8_t powerOffSource = 0;
+  if (read(Register::PowerOnSource, powerOnSource) && read(Register::PowerOffSource, powerOffSource)) {
+    softwareSleepPowerKeyBoot = isSoftwareSleepPowerKeyBoot(powerOnSource, powerOffSource);
+    LOG_INF("PWR", "AXP2101 power cycle: on=0x%02x off=0x%02x software-key-wake=%u", powerOnSource,
+            powerOffSource, static_cast<unsigned>(softwareSleepPowerKeyBoot));
+  } else {
+    LOG_ERR("PWR", "AXP2101 power-cycle source unavailable; PMIC wake unclassified");
+  }
+  if (!configure()) return false;
   ready = true;
   uint8_t status1 = 0;
   uint8_t status2 = 0;
@@ -117,6 +130,8 @@ bool begin() {
   }
   return true;
 }
+
+bool wasWokenByPowerKeyAfterSoftwareShutdown() { return ready && softwareSleepPowerKeyBoot; }
 
 bool powerButtonPressed() {
   if (!ready || digitalRead(IRQ_PIN) != LOW) return powerKeyState.apply(0);

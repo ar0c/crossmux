@@ -6,6 +6,14 @@
 using freeink::input::FunctionButtonGesture;
 using Waveshare397Power::PowerKeyState;
 
+TEST(WavesharePowerCycle, OnlySoftwareShutdownFollowedByPowerKeySkipsSplash) {
+  EXPECT_TRUE(Waveshare397Power::isSoftwareSleepPowerKeyBoot(0x01, 0x02));
+  EXPECT_FALSE(Waveshare397Power::isSoftwareSleepPowerKeyBoot(0x04, 0x02));  // USB insertion
+  EXPECT_FALSE(Waveshare397Power::isSoftwareSleepPowerKeyBoot(0x05, 0x02));  // Ambiguous sources
+  EXPECT_FALSE(Waveshare397Power::isSoftwareSleepPowerKeyBoot(0x01, 0x01));  // Hard power-off
+  EXPECT_FALSE(Waveshare397Power::isSoftwareSleepPowerKeyBoot(0x00, 0x00));  // Unknown
+}
+
 namespace {
 
 FunctionButtonGesture::State settle(FunctionButtonGesture& gesture, uint8_t raw, uint32_t changedAt) {

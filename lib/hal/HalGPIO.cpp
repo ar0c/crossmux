@@ -402,6 +402,15 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
       (wakeupCause == ESP_SLEEP_WAKEUP_GPIO || wakeupCause == ESP_SLEEP_WAKEUP_EXT1)) {
     return WakeupReason::PowerButton;
   }
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  // The AXP2101 removes ESP power during normal sleep, so a PWR-key return is
+  // ESP_RST_POWERON rather than ESP_RST_DEEPSLEEP. Require both PMIC source
+  // registers to identify the previous firmware shutdown and current key-on.
+  if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON &&
+      Waveshare397Power::wasWokenByPowerKeyAfterSoftwareShutdown()) {
+    return WakeupReason::PowerButton;
+  }
+#endif
   if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnected &&
       coldBootImpliesPowerButton()) {
     return WakeupReason::PowerButton;
