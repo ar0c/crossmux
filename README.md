@@ -11,7 +11,7 @@
 ## Features
 
 - **Reading and library**: EPUB, TXT, XTC/XTCH and images; chapter navigation, bookmarks, dictionaries, custom fonts, reading backgrounds, and KOReader progress sync.
-- **Wireless workflows**: browser file transfer and settings, Calibre wireless, OPDS downloads, and WebDAV.
+- **Wireless workflows**: browser file transfer and settings, Calibre wireless, OPDS downloads, WebDAV, and fork release update checks.
 - **Apps**: lightweight games and tools including Sudoku, Gomoku, Chinese Chess, Minesweeper, 2048, Electronic Woodfish, and Ugly Avatar. [Apps guide](./src/activities/apps/README.md).
 - **AirPage**: scan to upload content, then display BMP/JPEG images with manual refresh or foreground live delivery; images can become a sleep screen. [Usage and network behavior](./src/activities/apps/README.md#airpage).
 - **WeRead**: QR login, bookshelf browsing, EPUB downloads for offline reading, and progress sync. Available in the China content profile. [WeRead guide (Chinese)](./src/activities/apps/weread/README.md).
@@ -37,7 +37,7 @@ Use [Stable](https://github.com/ar0c/crossmux/releases/tag/stable) for X4 Pro, o
 2. Back up your SD card data before changing firmware. Use the matching installation package; an application-only `firmware.bin` is not a complete first-install image.
 3. For S3 installation and recovery, follow the matching [device documentation](./docs/engineering/device-variants.md) and release instructions.
 
-To build an S3 image from source, use the [development commands](#development-quick-start) below. Only X4 Pro has a Stable channel in this fork. In-device OTA still uses upstream proxies and is disabled in fork builds; download the board-specific fork release and install it through the documented SD or USB path.
+To build an S3 image from source, use the [development commands](#development-quick-start) below. Only X4 Pro has a Stable channel in this fork. In-device Check Updates reads this fork's GitHub Releases; a channel needs a published `release-index.json` before it can offer an update. See the [OTA safety notes](./docs/engineering/firmware-release.md#consumers-and-safety).
 
 ### USB-locked Xteink devices
 

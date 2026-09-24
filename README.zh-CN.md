@@ -11,7 +11,7 @@
 ## 核心功能
 
 - **阅读与书库**：EPUB、TXT、XTC/XTCH 和图片，章节导航、书签、词典、自定义字体、阅读背景，以及 KOReader 进度同步。
-- **无线功能**：浏览器传书与设置、Calibre 无线连接、OPDS 下载和 WebDAV。
+- **无线功能**：浏览器传书与设置、Calibre 无线连接、OPDS 下载、WebDAV，以及 fork 固件检查更新。
 - **Apps 应用中心**：数独、五子棋、中国象棋、扫雷、2048、电子木鱼、Ugly Avatar 等轻量游戏与工具。[应用说明](./src/activities/apps/README.md)。
 - **AirPage**：扫码上传内容，通过手动刷新或前台实时投送显示 BMP/JPEG 图片，也可将图片设为休眠画面。[操作与联网行为](./src/activities/apps/README.md#airpage)。
 - **微信读书**：扫码登录、浏览书架、下载 EPUB 离线阅读和同步进度，在 China 内容区显示。[微信读书说明](./src/activities/apps/weread/README.md)。
@@ -37,7 +37,7 @@ X4 Pro 稳定渠道使用 [Stable](https://github.com/ar0c/crossmux/releases/tag
 2. 更换固件前备份 SD 卡数据。使用匹配的安装包；只有应用部分的 `firmware.bin` 不是完整的首次安装镜像。
 3. S3 的安装与恢复请遵循对应[设备文档](./docs/engineering/device-variants.md)和发布说明。
 
-从源码构建 S3 固件可使用下方的[开发命令](#开发快速开始)。此 fork 仅 X4 Pro 提供 Stable 渠道。设备内 OTA 仍指向上游代理，在 fork 构建中禁用；请从 fork 发布页下载对应板型固件，按文档通过 SD 卡或 USB 安装。
+从源码构建 S3 固件可使用下方的[开发命令](#开发快速开始)。此 fork 仅 X4 Pro 提供 Stable 渠道。设备内“检查更新”读取本 fork 的 GitHub Releases；对应渠道发布 `release-index.json` 后才能提供更新。安全限制见[固件发布说明](./docs/engineering/firmware-release.md#consumers-and-safety)。
 
 ### USB 锁定的 Xteink 设备
 

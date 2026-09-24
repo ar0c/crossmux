@@ -88,11 +88,14 @@ index and its assets pass verification.
 
 ## Consumers and safety
 
-The existing Web flasher and device OTA proxies still use upstream services.
-The fork firmware therefore rejects in-device OTA checks until a fork-owned
-GitHub index consumer is implemented and verified. Download the exact board's
-package from the fork release and use the documented SD or USB installation
-path. Never substitute an upstream release for a fork image.
+The Web flasher remains an upstream service. Device Check Updates reads only
+`ar0c/crossmux` rolling GitHub Releases: `stable` for X4 Pro, `nightly` for
+X4 Pro and Waveshare 3.97. The index selects the exact board and content
+variant, then the immutable manifest supplies the firmware asset, size, and
+SHA-256. The device rejects mismatched board, channel, revision, size, digest,
+or a URL outside this fork's immutable release namespace. Until a channel's
+first release and `release-index.json` are published, checks report a fetch
+error; they never fall back to upstream.
 
 Official packages must contain the board tag. The OTA stream aborts a tagged
 image for another board before selecting the new partition. Untagged historical
@@ -101,4 +104,9 @@ official packaging path are mandatory.
 
 CI, indexes, and checksum checks do not replace real-device acceptance. Before
 using a Nightly image on hardware, test boot, reading, input, storage, display,
-and sleep/wake on that exact S3 board. In-device OTA remains unavailable.
+and sleep/wake on that exact S3 board. In-device OTA also needs a real update,
+reboot, and wrong-board rejection check on each board before claiming hardware
+acceptance. The wolfSSL download path currently uses `setInsecure()`; manifest
+hashes detect transfer corruption but cannot authenticate a forged manifest.
+Treat this as a transport security limitation until certificate validation or
+signed release metadata is implemented.

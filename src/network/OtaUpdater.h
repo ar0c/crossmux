@@ -19,6 +19,7 @@ class OtaUpdater {
   Channel channel = Channel::Stable;
   std::string latestVersion;
   std::string otaUrl;
+  std::array<uint8_t, 32> otaSha256{};
   size_t otaSize = 0;
   size_t processedSize = 0;
   size_t totalSize = 0;

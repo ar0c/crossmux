@@ -132,7 +132,11 @@ void OtaUpdateActivity::onEnter() {
   app.on(ACTION_INSTALL_UPDATE, &OtaUpdateActivity::onInstallUpdate, this);
   app.setScreen(&OtaUpdateActivity::updateScreen, this);
   state = State::Ready;
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  selectedChannel = OtaUpdater::Channel::Nightly;
+#else
   selectedChannel = SETTINGS.otaNightlyEnabled ? OtaUpdater::Channel::Nightly : OtaUpdater::Channel::Stable;
+#endif
   selectedReadyRow = CHECK_UPDATES_ROW;
   waitForConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   requestUpdate();
@@ -144,12 +148,17 @@ void OtaUpdateActivity::activateReadyRow() {
       beginWifiSelection();
       break;
     case NIGHTLY_ROW:
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+      // This target publishes only Nightly; keep the channel visible but fixed.
+      return;
+#else
       selectedChannel =
           selectedChannel == OtaUpdater::Channel::Stable ? OtaUpdater::Channel::Nightly : OtaUpdater::Channel::Stable;
       SETTINGS.otaNightlyEnabled = selectedChannel == OtaUpdater::Channel::Nightly;
       SETTINGS.saveToFile();
       requestUpdate();
       break;
+#endif
     case READY_ROW_COUNT:
       break;
   }

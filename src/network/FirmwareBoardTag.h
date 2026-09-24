@@ -11,9 +11,8 @@
 //
 // The tag is "CROSSPOINT-BOARD-V1:<board>;" stored once in .rodata — the
 // scanner's needle references the same array, so a CrossPoint image contains
-// exactly one occurrence. Images without a tag (other projects, forks, older
-// releases) are allowed: the guard only rejects a tag naming a DIFFERENT
-// board.
+// exactly one occurrence. SD/manual installs retain their own compatibility
+// policy; fork OTA requires a matching tag from an official manifest.
 
 namespace board_tag {
 
@@ -34,6 +33,8 @@ class Scanner {
   // True once a tag naming a different board has been seen. Valid mid-stream:
   // callers may abort a download as soon as this turns true.
   bool mismatch() const { return mismatchFound; }
+  // True after a complete tag naming this board has been observed.
+  bool matched() const { return matchingFound; }
   // Board name from the offending tag, for logging (empty until mismatch()).
   const char* foundName() const { return mismatchFound ? captured : ""; }
 
@@ -44,6 +45,7 @@ class Scanner {
   size_t magicMatched = 0;
   bool capturing = false;
   bool mismatchFound = false;
+  bool matchingFound = false;
 };
 
 }  // namespace board_tag
