@@ -98,9 +98,12 @@ class NightlyTargetTest(unittest.TestCase):
         self.assertNotIn('assets.crossmux.cn', workflow)
         rolling = workflow.split('- name: Publish rolling global index last', 1)[1].split('  verify_publish:', 1)[0]
         self.assertGreater(rolling.index('legacy_assets='), rolling.index('gh release upload "$CHANNEL" release-index.json'))
-        verify = workflow.split('  verify_publish:', 1)[1]
+        verify = workflow.split('  verify_publish:', 1)[1].split('  sync_k3s:', 1)[0]
         self.assertIn('needs: [prepare, publish_github]', verify)
         self.assertEqual(verify.count('python3 scripts/verify_nightly_release.py'), 1)
+        sync = workflow.split('  sync_k3s:', 1)[1].split('  cleanup_github:', 1)[0]
+        self.assertIn('needs: [prepare, verify_publish, publish_stable_release]', sync)
+        self.assertIn('python3 scripts/notify_ota_mirror.py', sync)
         self.assertIn("needs.publish_github.outputs.has_previous == 'true'", workflow)
         self.assertEqual(workflow.count('python3 scripts/nightly_retention.py'), 1)
         self.assertIn('gh release delete "$build_tag"', workflow)
@@ -546,6 +549,21 @@ class PublishedNightlyTest(unittest.TestCase):
                 'https://github.com/0x1abin/crossmux/releases/download/nightly-build-test/crossmux-ar0c-x4pro-firmware.bin',
                 index_url, 'nightly',
             )
+
+    def test_k3s_mirror_assets_stay_in_the_immutable_channel_build(self):
+        index_url = 'https://ooo.ar0c.com/releases/download/nightly/release-index.json'
+        build = 'nightly-build-' + 'a' * 40 + '-1-1'
+        verify_nightly_release.validate_url(
+            f'https://ooo.ar0c.com/releases/download/{build}/crossmux-ar0c-x4pro-firmware.bin',
+            index_url, 'nightly',
+        )
+        for url in (
+            f'https://github.com/ar0c/crossmux/releases/download/{build}/crossmux-ar0c-x4pro-firmware.bin',
+            f'https://ooo.ar0c.com/releases/download/{build}/../stable/release-index.json',
+            f'http://ooo.ar0c.com/releases/download/{build}/crossmux-ar0c-x4pro-firmware.bin',
+        ):
+            with self.assertRaises(ValueError):
+                verify_nightly_release.validate_url(url, index_url, 'nightly')
 
     def test_rejects_target_from_previous_revision(self):
         target_id = 'xteink_x4_pro'

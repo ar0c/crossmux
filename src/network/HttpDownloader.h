@@ -41,6 +41,9 @@ class HttpDownloader {
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
                        const std::string& password = "");
 
+  /** Fetch OTA data with the ESP certificate bundle and no redirects. */
+  static bool fetchVerifiedUrl(const std::string& url, const DataCallback& onData);
+
   /**
    * Download a file to the SD card with optional credentials.
    */

@@ -86,10 +86,52 @@ missing or malformed manifest prevents the whole channel from publishing.
 Build objects are never overwritten; cleanup runs only after the new rolling
 index and its assets pass verification.
 
+## Public K3s mirror
+
+The fork's GitHub Releases remain the build and publication source. The
+`deploy/k3s/ota` workload on `mst01` checks the public `nightly` release every
+five minutes and mirrors changed builds into `/home/ar0c/crossmux-ota-dist`. After
+`verify_publish`, the Release workflow also sends a signed notification to
+`POST /hooks/release` to synchronize immediately. Stable notifications run only
+after the versioned Stable release succeeds. The handler rejects stale or invalid
+HMAC-SHA256 signatures and checks the requested build ID; both entry points use
+one file lock. The scheduled job remains the fallback. Nightly accepts the two
+S3 targets and Stable accepts X4 Pro. Each mirror checks every manifest against
+the rolling index and checks every
+binary's length and SHA-256. It writes an immutable build directory before
+atomically replacing the rolling index. The serving Pod mounts that directory
+read-only and exposes only the release download paths. The Ingress for
+`ooo.ar0c.com` requires Cloudflare authenticated origin pulls. The first Stable
+release has not been published, so the Stable mirror CronJob is suspended until
+that release exists.
+
+The public OTA contract is
+`https://ooo.ar0c.com/releases/download/<channel>/release-index.json` with
+immutable manifests and binaries under
+`/releases/download/<channel>-build-<sha>-<run>-<attempt>/`. GitHub remains the
+source of the bytes, but the public index points only to this host. The device
+uses the ESP certificate bundle and does not follow redirects for OTA fetches;
+other network downloads retain their existing transport. Cloudflare must allow
+non-interactive GET/HEAD requests to these exact public paths. The separate
+signed POST hook also needs a narrowly scoped Cloudflare exception; it never
+serves files. A browser challenge breaks e-paper clients, so an HTTP 403 with `cf-mitigated: challenge`
+is a release blocker. An external GET and complete asset verification pass in
+CI; confirm the certificate-verified OTA fetch on physical devices before
+claiming device-level validation.
+
+Apply the K3s manifest with `k3s kubectl apply -k deploy/k3s/ota` from a
+checkout on `mst01`. The 32-byte random notification key must be installed as
+GitHub Actions secret `CROSSMUX_OTA_HOOK_KEY` and as key `key` in K3s Secret
+`default/crossmux-ota-hook-key` using the same 64-character hex value; never
+store the value in the repository. Then trigger one initial mirror Job from
+`cronjob/crossmux-ota-mirror-nightly`. Verify the cluster Service and the
+external hostname separately. Mirror failures leave the previous index in
+place; inspect the failed Job's logs rather than replacing the index by hand.
+
 ## Consumers and safety
 
 The Web flasher remains an upstream service. Device Check Updates reads only
-`ar0c/crossmux` rolling GitHub Releases: `stable` for X4 Pro, `nightly` for
+the fork's K3s mirror of its GitHub Releases: `stable` for X4 Pro, `nightly` for
 X4 Pro and Waveshare 3.97. The index selects the exact board and content
 variant, then the immutable manifest supplies the firmware asset, size, and
 SHA-256. The device rejects mismatched board, channel, revision, size, digest,
@@ -106,7 +148,6 @@ CI, indexes, and checksum checks do not replace real-device acceptance. Before
 using a Nightly image on hardware, test boot, reading, input, storage, display,
 and sleep/wake on that exact S3 board. In-device OTA also needs a real update,
 reboot, and wrong-board rejection check on each board before claiming hardware
-acceptance. The wolfSSL download path currently uses `setInsecure()`; manifest
-hashes detect transfer corruption but cannot authenticate a forged manifest.
-Treat this as a transport security limitation until certificate validation or
-signed release metadata is implemented.
+acceptance. OTA uses the certificate-verified ESP HTTP path; the general
+wolfSSL downloader still uses `setInsecure()` for unrelated downloads. This
+does not provide signed metadata or a cryptographic rollback counter.

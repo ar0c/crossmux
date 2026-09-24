@@ -270,6 +270,31 @@ jobs:
             fi
           done
 
+  sync_k3s:
+    if: >-
+      always() && github.repository == 'ar0c/crossmux' &&
+      needs.verify_publish.result == 'success' &&
+      (needs.prepare.outputs.channel == 'nightly' || needs.publish_stable_release.result == 'success')
+    needs: [prepare, verify_publish, publish_stable_release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Trigger signed K3s mirror sync
+        env:
+          CROSSMUX_OTA_HOOK_KEY: ${{ secrets.CROSSMUX_OTA_HOOK_KEY }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          BUILD_ID: ${{ needs.prepare.outputs.build_id }}
+        run: |
+          python3 scripts/notify_ota_mirror.py \
+            --channel "$CHANNEL" --build-id "$BUILD_ID" --sha "$GITHUB_SHA"
+      - name: Verify public K3s release
+        env:
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+        run: |
+          python3 scripts/verify_nightly_release.py --channel "$CHANNEL" \
+            --index-url "https://ooo.ar0c.com/releases/download/${CHANNEL}/release-index.json" \
+            --expected-sha "$GITHUB_SHA"
+
   cleanup_github:
     if: needs.prepare.outputs.channel == 'nightly' && needs.publish_github.outputs.has_previous == 'true'
     needs: [prepare, verify_publish, publish_github]
