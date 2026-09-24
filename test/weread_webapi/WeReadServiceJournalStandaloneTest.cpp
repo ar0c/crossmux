@@ -36,7 +36,10 @@ void incremental(const Identity& id) {
   assert(j.open(id, 0, 4200) && j.selectReserved() && j.jobId(after, sizeof(after)) && !strcmp(before, after));
   assert(!j.reserve(device) && j.accept(false) && j.reserve(device) && j.start() == 3600 && j.end() == 4200);
   assert(j.accept(false) && j.selectAccepted() && j.start() == 0 && j.accept(false, 60, 100));
-  assert(!j.accept(false, 0, 101));                            // Regressed server backup cannot erase observed credit.
+  const auto persisted = log.bytes;
+  for (uint64_t at = 101; at < 1101; ++at) assert(j.accept(false, 60, at));
+  assert(log.bytes == persisted);    // Unchanged polling must not consume SD journal capacity.
+  assert(!j.accept(false, 0, 101));  // Regressed server backup cannot erase observed credit.
   assert(j.selectAccepted(3000) && j.accept(true, 600, 101));  // Out-of-order receipts are not a prefix.
   assert(j.confirmed() == 660 && j.pending() == 3540);
   assert(j.open(id, 0, 4200) && j.confirmed() == 660 && j.selectAccepted() && j.credit() == 60);
@@ -142,6 +145,7 @@ int main() {
   corrupt.bytes[216] ^= 1;
   ServiceJournal crc(corrupt);
   assert(!crc.open(id, 90, 750));
-  std::cout << "PASS service journal: 50+10 incremental queue, v1 migration/downgrade rejection, all 771 power-cut "
+  std::cout << "PASS service journal: unchanged polls do not write, 50+10 incremental queue, v1 migration/downgrade "
+               "rejection, all 771 power-cut "
                "boundaries, bounded capacity, partial/out-of-order receipts, identity guards\n";
 }

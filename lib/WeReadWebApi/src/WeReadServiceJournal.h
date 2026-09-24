@@ -97,7 +97,9 @@ class ServiceJournal {
     if (task.state == State::Confirmed) return full;
     const auto next = full ? State::Confirmed : State::Accepted;
     if (checked < task.checked) checked = task.checked;
-    if (next == task.state && credit == task.credit && checked == task.checked) return true;
+    // A read-only poll is not an accounting change. Keep the older persisted
+    // timestamp instead of growing the SD journal on every unchanged receipt.
+    if (next == task.state && credit == task.credit) return true;
     confirmed_ += credit - task.credit;
     task.credit = credit;
     task.checked = checked;
