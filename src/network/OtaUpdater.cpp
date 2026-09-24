@@ -26,7 +26,7 @@
 
 namespace {
 constexpr size_t MAX_RELEASE_JSON = 8192;
-constexpr std::string_view FORK_RELEASE_BASE = "https://github.com/ar0c/crossmux/releases/download/";
+constexpr std::string_view FORK_RELEASE_BASE = "https://ooo.ar0c.com/releases/download/";
 
 const char* targetId() {
 #if FREEINK_DEVICE_X4PRO
@@ -51,7 +51,7 @@ bool isForkBuildUrl(const std::string_view url, const std::string_view channel) 
 bool fetchBoundedJson(const std::string& url, uint8_t* buffer, size_t& size) {
   size = 0;
   bool overflow = false;
-  const bool fetched = HttpDownloader::fetchUrl(url, [&](const uint8_t* bytes, const size_t length) {
+  const bool fetched = HttpDownloader::fetchVerifiedUrl(url, [&](const uint8_t* bytes, const size_t length) {
     if (length > MAX_RELEASE_JSON - size) {
       overflow = true;
       return false;
@@ -289,7 +289,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return INTERNAL_UPDATE_ERROR;
   }
   bool hashOk = true;
-  const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t len) {
+  const bool fetchOk = HttpDownloader::fetchVerifiedUrl(otaUrl, [&](const uint8_t* data, size_t len) {
     if (len > otaSize - processedSize) {
       hashOk = false;
       return false;

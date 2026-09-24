@@ -21,13 +21,11 @@ extern "C" void wolfSSL_Arduino_Serial_Print(const char* const msg) { LOG_DBG("W
 #endif
 
 namespace {
-#if !defined(FREEINK_NET_WOLFSSL)
 // RX holds the response headers. Smaller buffers leave enough contiguous heap
 // for mbedTLS on redirect-heavy OPDS feeds while still preserving the headers
 // we read directly (Location, Content-Length).
 constexpr int HTTP_RX_BUF = 2048;
 constexpr int HTTP_TX_BUF = 512;
-#endif
 // Per-socket-op timeout. Some OPDS download endpoints are slow to send headers
 // (>15s) and chunked catalogs stall mid-body, so 15s killed them. 60s gives
 // slow servers room. esp_http_client's timeout_ms is uint32, so unlike Arduino
@@ -132,14 +130,13 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
 }
 #endif
 
-#if !defined(FREEINK_NET_WOLFSSL)
 // Streams a GET body through sink.write in READ_CHUNK pieces. Uses the manual
 // open/fetch_headers/read path rather than esp_http_client_perform(): perform()
 // pushes the whole body through an event callback and reports a chunked body
 // that ends early as ESP_ERR_HTTP_INCOMPLETE_DATA, whereas the read loop streams
 // large/slow files and surfaces a short read directly.
 HttpDownloader::DownloadError runGet(const std::string& url, const std::string& username, const std::string& password,
-                                     const char* userAgent, Sink& sink) {
+                                     const char* userAgent, Sink& sink, const bool allowRedirects = true) {
   WifiPowerSaveGuard psGuard;
   esp_http_client_config_t config = {};
   config.url = url.c_str();
@@ -180,7 +177,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   }
   int64_t contentLength = esp_http_client_fetch_headers(client);
   int status = esp_http_client_get_status_code(client);
-  for (int hop = 0; isRedirect(status) && hop < MAX_REDIRECTS; ++hop) {
+  for (int hop = 0; allowRedirects && isRedirect(status) && hop < MAX_REDIRECTS; ++hop) {
     if (esp_http_client_set_redirection(client) != ESP_OK) break;
     esp_http_client_close(client);
     err = esp_http_client_open(client, 0);
@@ -237,14 +234,13 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   }
   return HttpDownloader::OK;
 }
-#endif  // !FREEINK_NET_WOLFSSL
 
-// All HTTP(S) fetches go through wolfSSL when it is the active TLS stack: it
-// speaks TLS 1.3 and reads large bodies from servers where the esp_http_client/
-// mbedTLS path fails to connect or stalls mid-stream. Plain-http URLs still use a
-// WiFiClient inside runGetWolf, so this is safe for non-TLS targets too.
+// General HTTP(S) fetches use wolfSSL when it is active: it speaks TLS 1.3
+// and reads large bodies from servers where the esp_http_client/mbedTLS path
+// fails. OTA explicitly uses the CA-verified ESP path above. Plain HTTP still
+// uses a WiFiClient inside runGetWolf.
 HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
-                                           const std::string& password, Sink& sink) {
+                                           const std::string& password, Sink& sink, const bool verified = false) {
   char userAgent[USER_AGENT_CAPACITY];
   const int userAgentLength =
       snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION, HalSystem::getDeviceModel());
@@ -252,6 +248,9 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
     LOG_ERR("HTTP", "User-Agent exceeds %zu bytes", sizeof(userAgent));
     return HttpDownloader::HTTP_ERROR;
   }
+  // OTA's public endpoint uses the bundled CA roots and refuses redirects.
+  // Other downloads retain the wolfSSL path for TLS 1.3-only hosts.
+  if (verified) return runGet(url, "", "", userAgent, sink, false);
 #if defined(FREEINK_NET_WOLFSSL)
   return runGetWolf(url, username, password, userAgent, sink);
 #else
@@ -286,6 +285,13 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   Sink sink;
   sink.write = onData;
   return runGetSecure(url, username, password, sink) == OK;
+}
+
+bool HttpDownloader::fetchVerifiedUrl(const std::string& url, const DataCallback& onData) {
+  if (!url.starts_with("https://ooo.ar0c.com/releases/download/")) return false;
+  Sink sink;
+  sink.write = onData;
+  return runGetSecure(url, "", "", sink, true) == OK;
 }
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
