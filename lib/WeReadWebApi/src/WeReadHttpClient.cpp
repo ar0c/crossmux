@@ -444,7 +444,9 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
     if (options.diagnostic) {
       options.diagnostic->error = code;
       if (client) {
+#ifndef SIMULATOR
         options.diagnostic->socket = esp_http_client_get_errno(client);
+#endif
         esp_http_client_get_and_clear_last_tls_error(client, &options.diagnostic->tls, &options.diagnostic->verify);
       }
     }
