@@ -608,6 +608,12 @@ bool BaseTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
 
 // Draw the "Recent Book" cover card on the home screen
 // TODO: Refactor method to make it cleaner, split into smaller methods
+int BaseTheme::recentBookIndexAt(int, int) const {
+  // Single-cover themes show only the first recent book; a tap anywhere in
+  // the cover strip therefore selects book 0.
+  return 0;
+}
+
 void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                     const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
                                     bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
@@ -789,6 +795,16 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 }
 
 int BaseTheme::getMenuRowHeight(const GfxRenderer&) const { return UITheme::getInstance().getMetrics().menuRowHeight; }
+
+BaseTheme::MenuRowGeometry BaseTheme::getMenuRowGeometry(const GfxRenderer&, const Rect& rect, const int,
+                                                         const int rowCount) const {
+  // Mirror of drawButtonMenu: rows start below the rect at the vertical
+  // spacing offset and step by row height + spacing, spanning the content
+  // width between the side paddings.
+  const auto& m = BaseMetrics::values;
+  return {rect.y + m.verticalSpacing,    m.menuRowHeight + m.menuSpacing,           m.menuRowHeight, 0, rowCount,
+          rect.x + m.contentSidePadding, rect.x + rect.width - m.contentSidePadding};
+}
 
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, const int buttonCount, const int selectedIndex,
                                const std::function<std::string(int)>& buttonLabel,

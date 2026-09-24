@@ -98,7 +98,15 @@ add_subdirectory(reader_build_failure)
 add_subdirectory(reader_font_preview)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME BuiltinFontShrink
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_builtin_font_shrink.py)
 add_test(NAME PioarduinoCache
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_pioarduino_cache.py)
 add_test(NAME ControlCenterGesture
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_control_center_gesture.py)
+add_test(NAME ReadingUiRegressions
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_reading_ui_regressions.py)
+add_test(NAME DownloadMemoryLifecycle
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_download_memory_lifecycle.py)
+add_test(NAME InxStyleCompatibility
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/inx_navigation/test_inx_style_compat.py)
