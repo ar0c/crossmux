@@ -8,6 +8,8 @@
 #include <iostream>
 
 #include "ReadingStatsStore.h"
+#include "HalSystem.h"
+#include "WeReadDeviceTimeSource.h"
 #include "WeReadDeviceTimeTransport.h"
 #include "WeReadServiceClient.h"
 #include "WeReadTimeStorage.h"
@@ -284,6 +286,37 @@ int main() {
   assert(Sync::start(source, "a"));
   s = finish();
   assert(s.totals.serviceConfirmed == 4800 && fakeTransport::reports == 0);
+  // A reader can audit and upload only its own measured source without any
+  // companion manifest. Moving the same SD card changes the physical match.
+  fakeStorage::reset();
+  fakeTransport::reset();
+  WiFi.connected = true;
+  char ownedSourceId[64] = {};
+  assert(deviceSource(HalSystem::deviceId.data(), "0123456789abcdef0123456789abcdef", ownedSourceId));
+  ReadingDayStats ownedDay{20709, 125000};
+  Sync::Source ownedSource{"b", ownedSourceId, &ownedDay, 1, ownedDay.readingMs, true};
+  {
+    Sync::Accounting accounting;
+    Sync::Totals totals;
+    assert(accounting.audit(ownedSource, "a", totals));
+    assert(totals.pending == 125 && totals.selectedDay == ownedDay.dayOrdinal);
+    assert(!fakeStorage::files.count(kTimeManifest));
+    const auto originalId = HalSystem::deviceId;
+    HalSystem::deviceId[5] ^= 1;
+    assert(!accounting.audit(ownedSource, "a", totals));
+    HalSystem::deviceId = originalId;
+  }
+  assert(Sync::start(ownedSource, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Complete && s.totals.deviceConfirmed == 125);
+  assert(fakeTransport::reports == 3 && fakeTransport::seconds == 125);
+  const auto originalId = HalSystem::deviceId;
+  HalSystem::deviceId[5] ^= 1;
+  WiFi.connected = true;
+  assert(Sync::start(ownedSource, "a"));
+  s = finish();
+  assert(s.auditFailed && fakeTransport::reports == 3);
+  HalSystem::deviceId = originalId;
   std::cout << "Service handoff: lost receipt retry, no ACK credit, config removal fail closed, readback PASS\n";
   std::cout << "Background lifetime, immutable source, concurrent snapshots, duplicate start, OOM, cooperative pause, "
                "Wi-Fi release and no replay PASS\n";

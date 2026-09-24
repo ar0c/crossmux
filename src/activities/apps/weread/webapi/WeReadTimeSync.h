@@ -16,6 +16,10 @@ struct Source {
   const ReadingDayStats* days;
   size_t count;
   uint64_t totalMs;
+  bool deviceOwned;
+  Source(const char* book, const char* source, const ReadingDayStats* days, size_t count, uint64_t totalMs,
+         bool deviceOwned = false)
+      : book(book), source(source), days(days), count(count), totalMs(totalMs), deviceOwned(deviceOwned) {}
 };
 
 struct Totals {

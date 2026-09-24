@@ -1,6 +1,9 @@
 #include "WeReadServiceClient.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include <HalStorage.h>
+#ifdef ARDUINO
+#include <Logging.h>
+#endif
 #include <StreamingJsonParser.h>
 
 #include <cstdlib>
@@ -11,6 +14,32 @@
 namespace WeReadTime {
 namespace {
 constexpr const char* configPath = "/WeReadSync/service.conf";
+#ifdef ARDUINO
+// No credentials, URLs, account IDs, or response bodies. The Wi-Fi file server
+// can expose this small failure record when USB serial is unavailable.
+void persistServiceDiagnostic(const char* phase, int result = -1, int http = 0,
+                              const WeReadHttpClient::NetworkDiagnostic* network = nullptr,
+                              unsigned parse = 0, unsigned bad = 0, unsigned depth = 0,
+                              unsigned roots = 0, unsigned fields = 0) {
+  char record[320];
+  const int n = std::snprintf(
+      record, sizeof(record),
+      "{\"version\":1,\"phase\":\"%s\",\"result\":%d,\"http\":%d,\"stage\":%u,\"error\":%d,\"socket\":%d,"
+      "\"tls\":%d,\"verify\":%d,\"elapsed_ms\":%u,\"parse\":%u,\"bad\":%u,\"depth\":%u,\"roots\":%u,\"fields\":%u}\n",
+      phase, result, http, network ? unsigned(network->stage) : 0, network ? network->error : 0,
+      network ? network->socket : 0, network ? network->tls : 0, network ? network->verify : 0,
+      network ? unsigned(network->elapsedMs) : 0, parse, bad, depth, roots, fields);
+  if (n <= 0 || size_t(n) >= sizeof(record) || !Storage.ensureDirectoryExists("/WeReadSync")) return;
+  HalFile file;
+  if (!Storage.openFileForWrite("WRSvc", "/WeReadSync/last-service-diagnostic.json", file)) return;
+  if (file.write(reinterpret_cast<const uint8_t*>(record), size_t(n)) != size_t(n))
+    LOG_ERR("WRSvc", "service diagnostic write failed");
+  file.flush();
+}
+#else
+template <typename... Args>
+void persistServiceDiagnostic(const char*, Args...) {}
+#endif
 // Fixed, bounded response workspace: no account history or batch array allocation.
 struct Response {
   char account[32]{}, device[32]{}, id[128]{}, book[64]{}, source[64]{}, date[16]{}, state[20]{}, key[32]{};
@@ -146,6 +175,13 @@ bool request(const char* path, const char* token, const char* body, Response& re
   options.timeoutMs = 15000;
   options.body = reinterpret_cast<const uint8_t*>(body);
   options.bodySize = body ? std::strlen(body) : 0;
+  // requestVerified requires caller-owned receive storage. The response is
+  // streamed into the parser, so one small buffer covers both GET and POST.
+  uint8_t readBuffer[512];
+  options.readBuffer = readBuffer;
+  options.readBufferSize = sizeof(readBuffer);
+  WeReadHttpClient::NetworkDiagnostic diagnostic;
+  options.diagnostic = &diagnostic;
   size_t received = 0;
   int status = 0;
   const auto result = WeReadHttpClient::requestVerified(
@@ -159,8 +195,13 @@ bool request(const char* path, const char* token, const char* body, Response& re
       {}, status);
   parser.feed(" ", 1);
   response.http = status;
-  return result == WeReadHttpClient::Result::Ok && (status == 200 || status == 202) && !parser.hasError() &&
-         !response.bad && response.depth == 0 && response.roots == 1;
+  const bool ok = result == WeReadHttpClient::Result::Ok && (status == 200 || status == 202) &&
+                  !parser.hasError() && !response.bad && response.depth == 0 && response.roots == 1;
+  if (!ok) {
+    persistServiceDiagnostic("request", int(result), status, &diagnostic, unsigned(parser.hasError()),
+                             unsigned(response.bad), response.depth, response.roots, response.fields);
+  }
+  return ok;
 }
 bool copyLine(char*& cursor, char* out, size_t cap) {
   char* end = std::strchr(cursor, '\n');
@@ -184,17 +225,31 @@ bool ServiceClient::configured() { return Storage.exists(configPath); }
 bool ServiceClient::connect(const char* account) {
   HalFile file;
   char content[256]{};
-  if (!Storage.openFileForRead("WRSvc", configPath, file)) return false;
-  const auto size = file.fileSize64();
-  if (!size || size >= sizeof(content) || file.read(reinterpret_cast<uint8_t*>(content), size) != int(size))
+  if (!Storage.openFileForRead("WRSvc", configPath, file)) {
+    persistServiceDiagnostic("config_open");
     return false;
+  }
+  const auto size = file.fileSize64();
+  if (!size || size >= sizeof(content) || file.read(reinterpret_cast<uint8_t*>(content), size) != int(size)) {
+    persistServiceDiagnostic("config_read");
+    return false;
+  }
   char* cursor = content;
   if (!copyLine(cursor, account_, sizeof(account_)) || !copyLine(cursor, device_, sizeof(device_)) ||
-      !copyLine(cursor, token_, sizeof(token_)) || *cursor || std::strcmp(account_, account))
+      !copyLine(cursor, token_, sizeof(token_)) || *cursor || std::strcmp(account_, account)) {
+    persistServiceDiagnostic("config_parse");
     return false;
+  }
+  persistServiceDiagnostic("connect_start");
   Response r;
-  return request("/api/v1/device", token_, nullptr, r) && r.fields == 3 && !std::strcmp(r.account, account_) &&
-         !std::strcmp(r.device, device_);
+  if (!request("/api/v1/device", token_, nullptr, r)) return false;
+  const bool matched = r.fields == 3 && !std::strcmp(r.account, account_) && !std::strcmp(r.device, device_);
+  if (!matched) {
+    persistServiceDiagnostic("response_identity", -1, r.http, nullptr, 0, 0, r.depth, r.roots, r.fields);
+  } else {
+    persistServiceDiagnostic("connected", 0, r.http);
+  }
+  return matched;
 }
 ServiceClient::Result ServiceClient::exchange(const Identity& id, ServiceJournal& journal) {
   if (std::strcmp(id.account, account_) || !journal.matchesDevice(device_) ||
@@ -221,6 +276,7 @@ ServiceClient::Result ServiceClient::exchange(const Identity& id, ServiceJournal
                               job, id.book, id.source, date, static_cast<unsigned long long>(journal.start()),
                               static_cast<unsigned long long>(journal.end()));
   if (n <= 0 || size_t(n) >= sizeof(body)) return Result::Failed;
+  persistServiceDiagnostic(post ? "post_start" : "query_start");
   Response r;
   if (!request(path, token_, post ? body : nullptr, r)) return post && r.http == 429 ? Result::Full : Result::Failed;
   if (r.fields != 1023 || std::strcmp(r.account, account_) || std::strcmp(r.device, device_) ||
@@ -236,6 +292,7 @@ ServiceClient::Result ServiceClient::exchange(const Identity& id, ServiceJournal
     return Result::Failed;
   const auto now = std::time(nullptr);
   if (!journal.accept(confirmed, r.confirmed, now > 0 ? uint64_t(now) : 0)) return Result::Failed;
+  persistServiceDiagnostic(confirmed ? "confirmed" : "accepted", 0, r.http);
   if (!std::strcmp(r.state, "uncertain")) return Result::Review;
   return confirmed ? Result::Confirmed : Result::Accepted;
 }

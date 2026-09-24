@@ -8,6 +8,7 @@
 #include <esp_heap_caps.h>
 
 #include <algorithm>
+#include <cstring>
 #include <ctime>
 
 #include "CrossPointState.h"
@@ -83,6 +84,26 @@ void normalizeReadingDays(std::vector<ReadingDayStats>& readingDays) {
   }
 
   readingDays = std::move(mergedDays);
+}
+
+void normalizeOwnedTime(WeReadOwnedTime& owned) {
+  std::sort(owned.days.begin(), owned.days.end(), [](const ReadingDayStats& a, const ReadingDayStats& b) {
+    return a.dayOrdinal < b.dayOrdinal;
+  });
+  size_t output = 0;
+  for (const auto& day : owned.days) {
+    if (!day.dayOrdinal || !day.readingMs) continue;
+    if (output && owned.days[output - 1].dayOrdinal == day.dayOrdinal) {
+      // Repeated records of the same immutable source are copies, not extra
+      // reading. Choosing the larger high-water mark avoids a second claim.
+      owned.days[output - 1].readingMs = std::max(owned.days[output - 1].readingMs, day.readingMs);
+    } else {
+      owned.days[output++] = day;
+    }
+  }
+  owned.days.resize(output);
+  owned.totalMs = 0;
+  for (const auto& day : owned.days) owned.totalMs += day.readingMs;
 }
 
 void addReadingToDays(std::vector<ReadingDayStats>& days, const uint32_t dayOrdinal, const uint64_t readingMs) {
@@ -245,6 +266,21 @@ void ReadingStatsStore::mergeBookInto(ReadingBookStats& primary, const ReadingBo
   primary.completed = primary.completed || duplicate.completed;
   primary.readingDays.insert(primary.readingDays.end(), duplicate.readingDays.begin(), duplicate.readingDays.end());
   normalizeReadingDays(primary.readingDays);
+  if (!duplicate.wereadOwnedTime.empty())
+    primary.wereadOwnedTime.reserve(primary.wereadOwnedTime.size() + duplicate.wereadOwnedTime.size());
+  for (const auto& other : duplicate.wereadOwnedTime) {
+    auto found = std::find_if(primary.wereadOwnedTime.begin(), primary.wereadOwnedTime.end(), [&](const auto& owned) {
+      return std::strcmp(owned.account, other.account) == 0 &&
+             std::strcmp(owned.remoteBook, other.remoteBook) == 0 && std::strcmp(owned.source, other.source) == 0;
+    });
+    if (found == primary.wereadOwnedTime.end()) {
+      primary.wereadOwnedTime.push_back(other);
+    } else {
+      found->days.reserve(found->days.size() + other.days.size());
+      found->days.insert(found->days.end(), other.days.begin(), other.days.end());
+      normalizeOwnedTime(*found);
+    }
+  }
 }
 
 void ReadingStatsStore::normalizeBook(ReadingBookStats& book) {
@@ -256,6 +292,7 @@ void ReadingStatsStore::normalizeBook(ReadingBookStats& book) {
   }
   rememberBookPath(book, book.path);
   normalizeReadingDays(book.readingDays);
+  for (auto& owned : book.wereadOwnedTime) normalizeOwnedTime(owned);
 }
 
 void ReadingStatsStore::normalizeBooks() {
@@ -443,7 +480,7 @@ void ReadingStatsStore::touchBook(const size_t index) {
     return;
   }
 
-  ReadingBookStats book = books[index];
+  ReadingBookStats book = std::move(books[index]);
   books.erase(books.begin() + static_cast<std::ptrdiff_t>(index));
   books.insert(books.begin(), std::move(book));
 
@@ -461,13 +498,18 @@ bool ReadingStatsStore::isClockValid(const uint32_t epochSeconds) { return TimeU
 bool ReadingStatsStore::shouldIgnorePath(const std::string& path) { return isIgnoredStatsPath(path); }
 
 void ReadingStatsStore::recordReadingTime(ReadingBookStats& book, const uint32_t epochSeconds,
-                                          const uint64_t readingMs) {
+                                          const uint64_t readingMs, const bool authoritativeDay) {
   if (!isClockValid(epochSeconds) || readingMs == 0) {
     return;
   }
 
   getOrCreateBookReadingDay(book, epochSeconds).readingMs += readingMs;
   getOrCreateReadingDay(epochSeconds).readingMs += readingMs;
+  if (authoritativeDay && activeSession.wereadOwnedIndex < book.wereadOwnedTime.size()) {
+    auto& owned = book.wereadOwnedTime[activeSession.wereadOwnedIndex];
+    addReadingToDays(owned.days, TimeUtils::getLocalDayOrdinal(epochSeconds), readingMs);
+    owned.totalMs += readingMs;
+  }
 }
 
 void ReadingStatsStore::appendSessionLogEntry(const uint32_t dayOrdinal, const uint32_t sessionMs) {
@@ -682,8 +724,35 @@ void ReadingStatsStore::beginSession(const std::string& path, const std::string&
   activeSession.bookIndex = 0;
   activeSession.lastInteractionMs = millis();
   activeSession.accumulatedMs = 0;
+  activeSession.wereadOwnedIndex = SIZE_MAX;
 
   markDirty();
+}
+
+bool ReadingStatsStore::bindWeReadOwnedTime(const char* account, const char* remoteBook, const char* source) {
+  if (!activeSession.active || activeSession.bookIndex >= books.size() || !account || !remoteBook || !source ||
+      !*account || !*remoteBook || !*source || std::strlen(account) >= 32 || std::strlen(remoteBook) >= 64 ||
+      std::strlen(source) >= 64)
+    return false;
+  auto& book = books[activeSession.bookIndex];
+  for (size_t i = 0; i < book.wereadOwnedTime.size(); ++i) {
+    const auto& owned = book.wereadOwnedTime[i];
+    if (!std::strcmp(owned.account, account) && !std::strcmp(owned.remoteBook, remoteBook) &&
+        !std::strcmp(owned.source, source)) {
+      activeSession.wereadOwnedIndex = i;
+      return true;
+    }
+  }
+  if (book.wereadOwnedTime.size() >= 64) return false;
+  WeReadOwnedTime owned;
+  std::strcpy(owned.account, account);
+  std::strcpy(owned.remoteBook, remoteBook);
+  std::strcpy(owned.source, source);
+  book.wereadOwnedTime.reserve(book.wereadOwnedTime.size() + 1);
+  book.wereadOwnedTime.push_back(std::move(owned));
+  activeSession.wereadOwnedIndex = book.wereadOwnedTime.size() - 1;
+  markDirty();
+  return true;
 }
 
 void ReadingStatsStore::noteActivity() {
@@ -699,8 +768,9 @@ void ReadingStatsStore::noteActivity() {
     auto& book = books[activeSession.bookIndex];
     book.totalReadingMs += creditedMs;
     activeSession.accumulatedMs += creditedMs;
-    const uint32_t referenceTimestamp = getReferenceTimestamp(TimeUtils::getAuthoritativeTimestamp(), book.lastReadAt);
-    recordReadingTime(book, referenceTimestamp, creditedMs);
+    const uint32_t authoritativeTimestamp = TimeUtils::getAuthoritativeTimestamp();
+    const uint32_t referenceTimestamp = getReferenceTimestamp(authoritativeTimestamp, book.lastReadAt);
+    recordReadingTime(book, referenceTimestamp, creditedMs, isClockValid(authoritativeTimestamp));
     updateBookReadTimestamp(book, referenceTimestamp);
     markDirty();
   }

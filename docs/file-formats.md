@@ -12,6 +12,21 @@ bytes invalidates the cache; the output value is left unchanged.
 WeRead time journals are durable accounting data, not disposable caches. See
 [time journal v1](engineering/weread-time-sync.md#journal-format-v1).
 
+## `/.crosspoint/reading_stats.json`
+
+Format 7 keeps the existing aggregate `readingDays` and book totals for reading
+analytics. Each WeRead book may also have `wereadOwnedTime` entries containing
+`account`, `remoteBook`, `source`, `totalMs`, and sorted `days` with
+`dayOrdinal`/`readingMs`. The `source` is `d` + the 12 lowercase hexadecimal
+bytes of the read-only hardware ID + `_` + the 32-character content-based local
+book ID. Each entry is a cumulative measured counter for one account, remote
+book, physical device, and local book. Manual reading-stat adjustments do not
+change it. Entries from another device stay on the card but cannot enter the
+current device's upload queue. Older format-6 aggregate days have no device
+owner and are not automatically converted into sendable time. The JSON file is
+written through a temporary file and rename; the native WRTL/WRP2 journals
+remain separate append-only upload accounting.
+
 ## `book.bin`
 
 ### Version 11
@@ -508,6 +523,67 @@ record, and remove the backup only after success. The activity changes only RAM
 while it is being used, then checkpoints after 60 seconds without a knock or
 once on activity exit. A future layout change must use a new magic and update
 this section.
+
+## WeRead paced-time accounting journal
+
+`/.crosspoint/weread/time/<account>/<source>/<day>.wrp2` is durable accounting,
+not a cache. It does not replace or migrate legacy `.wrtl`. WRP2 version 4 uses
+256-byte append-only frames, explicit little endian:
+
+| Offset | Field |
+|---:|---|
+| 0 / 4 / 5 | `WRP2` magic, version 4 (reader also accepts 1, 2, 3), state (0 idle, 1 reserved, 2 acknowledged, 3 uncertain) |
+| 6 / 7 | Missing-day baseline flag (0 or 1) / reserved zero; both zero in version 1 |
+| 8 / 40 / 104 | NUL-terminated account[32], book[64], source[64] |
+| 168 / 176 | source day ordinal, measured milliseconds (uint64) |
+| 184 / 192 | external covered seconds, device verified seconds (uint64) |
+| 200 / 204 / 208 / 212 | upload month epoch, reserved batch seconds, upload day epoch, cumulative quarantined seconds (all uint32) |
+| 216 / 224 | baseline account month/day seconds (uint64) |
+| 232 / 240 | reservation/response epoch seconds (uint64) |
+| 248 | CRC32 over bytes [0,248), stored as uint64 with upper bits zero |
+
+Version 2 preserves an absent day bucket separately from an explicit zero.
+When byte 6 is 1, offset 224 is a zero placeholder, not a measured baseline;
+confirmation requires the day bucket to appear as exactly the reserved batch and the
+month aggregate to increase by exactly that batch. This is user-approved statistical
+confirmation under the single-active-client condition, not unique attribution.
+The flag and batch are cleared in idle frames. Readers replay mixed v1/v2/v3/v4 journals without
+rewriting prior frames. V1/v2 active frames imply 30 seconds and require the upper
+month word (offset 204) to be zero. V3 stores an explicit nonzero uint32 batch
+bounded by available whole seconds. V3 verified totals need not be multiples of 30.
+V4 preserves cumulative quarantined seconds in the previously zero high day word.
+V1-v3 require that word zero. Available seconds subtract external coverage,
+verified credit, cumulative quarantine and any active batch separately.
+A new explicit full-sync run may append a quarantine transition from a non-idle
+state only after more than 120 seconds since its response (reservation if there
+was no response). It moves the entire active batch to quarantine without changing
+verified or available seconds, records the quarantine timestamp at offset 240,
+and retains all earlier frames. Legal replay checks this exact transfer and time
+boundary. Quarantine is never automatic continuation after a new failed report.
+Old firmware rejects v4; do not downgrade and remove journals to bypass protection.
+Each reservation covers its encoded batch; external confirmed
+and unknown coverage is excluded from availability. A send permit exists only
+in RAM after durable append/readback and is never restored after reopening.
+Every frame and successive legal transition must validate; a torn/corrupt suffix
+blocks use rather than falling back to an older sendable frame. CRC is not
+authentication and cannot detect whole-file rollback. Never delete, overwrite,
+copy or compact accounting journals to retry an uncertain upload. This format
+has host tests, an SD adapter and a user-started book-time queue which verifies
+each 30-second transaction before advancing; physical acceptance is separate.
+
+The manual sender additionally requires `/weread-device-handover.json`, schema
+1 in the installer's canonical UTF-8 JSON serialization (LF, no trailing newline).
+It binds account, book and source to strictly ascending receipt days, filenames
+and lowercase SHA-256 hashes of each full WRTX receipt. Exact canonical matching
+rejects unknown fields, duplicates and formatting changes. `state:prepared` with
+`sender_enabled:false` requires explicit on-device confirmation for a foreground
+queue, never unattended uploads. Every historical handover date must appear.
+After the whole prefix is verified, newer dates of the same identity are
+device-owned, with zero external coverage and measured milliseconds imported
+from original source records. Unknown external receipts or legacy reservations
+still block. Handover does not reset WRP2 reservations; the first-day bootstrap
+uses the separately versioned WRP2 v2 format described above. See the
+[time-sync contract](engineering/weread-time-sync.md).
 
 ## WeRead cache
 

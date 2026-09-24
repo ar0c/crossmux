@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "WeReadTimeCloud.h"
@@ -15,6 +17,7 @@
 
 class Epub;
 struct CrossPointPosition;
+struct ReadingBookStats;
 
 class WeReadProgressSyncActivity final : public Activity {
  public:
@@ -70,6 +73,11 @@ class WeReadProgressSyncActivity final : public Activity {
   uint64_t externalConfirmedSeconds_ = 0;
   uint64_t externalUnknownSeconds_ = 0;
   bool timeCollectionFailed_ = false;
+  bool deviceOwnedTime_ = false;
+  char deviceTimeSource_[64] = {};
+  std::unique_ptr<ReadingDayStats[]> legacyTimeDays_;
+  size_t legacyTimeDayCount_ = 0;
+  uint64_t legacyTimeTotalMs_ = 0;
   bool timeHostPaused_ = false;
   bool timeChecked_ = false;
   WeReadTimeCloud::Result cloudTimeResult_ = WeReadTimeCloud::Result::Pending;
@@ -96,6 +104,7 @@ class WeReadProgressSyncActivity final : public Activity {
   char timeDiagnosticText_[128] = {};
   WeReadTime::TimeTransaction::Issue timeIssue_ = WeReadTime::TimeTransaction::Issue::None;
   bool auditTime(const char* account, WeReadTime::ExternalTime* selected = nullptr, uint64_t* measured = nullptr);
+  bool prepareLegacyTimeSource(const ReadingBookStats& book);
   void startTimeUpload();
   void advanceTimeUpload();
   const char* timeMessage() const;
