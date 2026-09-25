@@ -9,3 +9,4 @@ using portMUX_TYPE = std::mutex;
 #define pdMS_TO_TICKS(v) (v)
 constexpr int pdPASS = 1;
 constexpr int pdTRUE = 1;
+constexpr uint32_t portMAX_DELAY = UINT32_MAX;

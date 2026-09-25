@@ -94,21 +94,47 @@ int main() {
   ESP.free = 144536;
   ESP.largest = 47092;
   // The fake transport includes its fixed production-sized workspace.
+  // Without PSRAM the task allocations leave too little contiguous TLS room.
+  fakeTask::largestAfterCreate = 32760;
   assert(!Sync::start(probe, "a"));
   assert(Sync::lastStartFailure() == Sync::StartFailure::Headroom);
+  fakeTask::largestAfterCreate = 0;
   fakePsram::available = true;
   ESP.largest = 47092;
   fakeTransport::blockPrepare = true;
   assert(Sync::start(probe, "a"));
+  const auto& startDiagnostic = fakeStorage::files.at("/WeReadSync/last-start-diagnostic.json");
+  assert(std::string(startDiagnostic.begin(), startDiagnostic.end()).find("\"reason\":0") != std::string::npos);
   waitFor(fakeTransport::enteredPrepare);
   assert(fakePsram::allocations > 0);
   Sync::pause();
   unblock(fakeTransport::blockPrepare);
   finish();
   fixture(probeDay.readingMs);
-  fakePsram::fail = true;
+  // Captured Waveshare startup: a 40,948-byte largest block is 12 bytes below
+  // the old combined stack+TLS threshold. Starting is safe if the separate
+  // task-stack allocation leaves the TLS reserve intact.
+  ESP.free = 139884;
+  ESP.largest = 40948;
+  fakeTask::largestAfterCreate = 32760;
   assert(!Sync::start(probe, "a"));
   assert(Sync::lastStartFailure() == Sync::StartFailure::Headroom);
+  assert(!Sync::active() && !Sync::ownsWifi());
+  fakeTask::largestAfterCreate = 0;
+  ESP.free = 139884;
+  ESP.largest = 40948;
+  fakeTransport::blockPrepare = true;
+  assert(Sync::start(probe, "a"));
+  waitFor(fakeTransport::enteredPrepare);
+  Sync::pause();
+  unblock(fakeTransport::blockPrepare);
+  finish();
+  fixture(probeDay.readingMs);
+  fakePsram::fail = true;
+  fakeTask::largestAfterCreate = 32760;
+  assert(!Sync::start(probe, "a"));
+  assert(Sync::lastStartFailure() == Sync::StartFailure::Headroom);
+  fakeTask::largestAfterCreate = 0;
   fakePsram::fail = false;
   fakePsram::available = false;
   ESP.free = 1024 * 1024;
