@@ -292,6 +292,9 @@ class BaseTheme {
   // wrapping to two lines rather than overflowing when it's too wide to fit.
   static void drawHintLabel(GfxRenderer& renderer, int fontId, const char* label, int x, int boxWidth, int boxTop,
                             int boxHeight, int singleLineYOffset);
+  // Put Waveshare wheel hints on the left and BOOT/PWR hints on the right.
+  bool drawWheelAndBootButtonHints(GfxRenderer& renderer, const char* back, const char* confirm, const char* left,
+                                   const char* right) const;
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
   // Menu row height as DRAWN by drawButtonMenu. HomeActivity builds its touch
   // grid from this, so hit bands always match the visuals (RoundedRaff derives

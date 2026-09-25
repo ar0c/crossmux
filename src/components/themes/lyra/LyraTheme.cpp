@@ -358,6 +358,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   if (!buttonHintsVisible()) {
     return;
   }
+  if (drawWheelAndBootButtonHints(renderer, btn1, btn2, btn3, btn4)) return;
 
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -397,7 +398,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
 }
 
 void LyraTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const {
-  if (gpio.hasTouch()) {
+  if (gpio.hasTouch() || gpio.hasWheelAndBootButtons()) {
     return;
   }
 

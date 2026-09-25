@@ -171,6 +171,7 @@ bool InxTheme::tabIndexFromPoint(const GfxRenderer&, const Rect rect, const std:
 void InxTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                const char* btn4) const {
   if (!buttonHintsVisible()) return;
+  if (drawWheelAndBootButtonHints(renderer, btn1, btn2, btn3, btn4)) return;
 
   const GfxRenderer::Orientation original = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -196,7 +197,7 @@ void InxTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const ch
 }
 
 void InxTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const {
-  if (gpio.hasTouch()) return;
+  if (gpio.hasTouch() || gpio.hasWheelAndBootButtons()) return;
   constexpr int width = InxMetrics::values.sideButtonHintsWidth;
   constexpr int height = 78;
   const int screenWidth = renderer.getScreenWidth();

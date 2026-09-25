@@ -1,8 +1,8 @@
 #include "WeReadTimeSync.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include <Arduino.h>
-#include <Logging.h>
 #include <HalSystem.h>
+#include <Logging.h>
 #include <Memory.h>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
@@ -14,8 +14,8 @@
 #include <cstring>
 
 #include "ReadingStatsStore.h"
-#include "WeReadDeviceTimeTransport.h"
 #include "WeReadDeviceTimeSource.h"
+#include "WeReadDeviceTimeTransport.h"
 #include "WeReadHandoverManifest.h"
 #include "WeReadServiceClient.h"
 #include "WeReadServiceJournal.h"
@@ -326,6 +326,7 @@ struct Job final : WeReadTime::TimeQueueSource {
   void runService() {
     using Q = WeReadTime::TimeQueue::State;
     current.available = current.running = true;
+    current.totals.serviceMode = true;
     current.queue = Q::Running;
     current.phase = WeReadTime::TimeTransaction::State::Sending;
     publish(current);
@@ -342,8 +343,7 @@ struct Job final : WeReadTime::TimeQueueSource {
       publish(current);
     };
     memory::ByteBuffer serviceStorage;
-    if (memory::psramHasHeadroom(sizeof(WeReadTime::ServiceJournal), sizeof(WeReadTime::ServiceJournal),
-                                 32 * 1024))
+    if (memory::psramHasHeadroom(sizeof(WeReadTime::ServiceJournal), sizeof(WeReadTime::ServiceJournal), 32 * 1024))
       serviceStorage = memory::makePsramByteBufferNoThrow(sizeof(WeReadTime::ServiceJournal));
     // A fallible internal allocation preserves the no-PSRAM build's service
     // path without putting this journal back on the task stack.
@@ -354,8 +354,8 @@ struct Job final : WeReadTime::TimeQueueSource {
       finish(Q::Paused);
       return;
     }
-    auto* servicePtr = serviceStorage ? new (serviceStorage.get()) WeReadTime::ServiceJournal(serviceLog)
-                                      : internalService.get();
+    auto* servicePtr =
+        serviceStorage ? new (serviceStorage.get()) WeReadTime::ServiceJournal(serviceLog) : internalService.get();
     auto& service = *servicePtr;
     ScopedCleanup serviceCleanup{[&] {
       if (serviceStorage) service.~ServiceJournal();
@@ -646,6 +646,7 @@ bool start(const Source& source, const char* account) {
   job = std::move(next);
   Status initial;
   initial.available = initial.running = true;
+  initial.totals.serviceMode = WeReadTime::ServiceClient::configured();
   initial.queue = WeReadTime::TimeQueue::State::Selecting;
   initial.phase = WeReadTime::TimeTransaction::State::Preparing;
   taskENTER_CRITICAL(&statusLock);

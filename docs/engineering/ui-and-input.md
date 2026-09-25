@@ -41,6 +41,14 @@ Constraint: Physical button positions are fixed on hardware, but their logical f
 
 **Rule**: Always use `MappedInputManager::Button::*` enums, never raw `HalGPIO::BTN_*` indices (except in ButtonRemapActivity).
 
+On Waveshare ePaper 3.97, BOOT is the physical Back key, the three wheel
+positions provide Left, Confirm, and Right, and PWR comes from the PMIC.
+`BaseTheme::drawWheelAndBootButtonHints()` places their small labels beside the
+upper left wheel and upper right BOOT/PWR buttons across all themes. It skips
+labels over occupied framebuffer areas and does not reserve the X4 Pro footer.
+Check the physical board after changing this layout; a successful build cannot
+prove bezel alignment or e-paper appearance.
+
 ## Input Frames and Event Semantics
 
 The main loop updates `MappedInputManager` once per frame before dispatching

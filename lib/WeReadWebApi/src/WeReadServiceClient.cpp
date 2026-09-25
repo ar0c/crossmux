@@ -18,9 +18,8 @@ constexpr const char* configPath = "/WeReadSync/service.conf";
 // No credentials, URLs, account IDs, or response bodies. The Wi-Fi file server
 // can expose this small failure record when USB serial is unavailable.
 void persistServiceDiagnostic(const char* phase, int result = -1, int http = 0,
-                              const WeReadHttpClient::NetworkDiagnostic* network = nullptr,
-                              unsigned parse = 0, unsigned bad = 0, unsigned depth = 0,
-                              unsigned roots = 0, unsigned fields = 0) {
+                              const WeReadHttpClient::NetworkDiagnostic* network = nullptr, unsigned parse = 0,
+                              unsigned bad = 0, unsigned depth = 0, unsigned roots = 0, unsigned fields = 0) {
   char record[320];
   const int n = std::snprintf(
       record, sizeof(record),
@@ -195,8 +194,8 @@ bool request(const char* path, const char* token, const char* body, Response& re
       {}, status);
   parser.feed(" ", 1);
   response.http = status;
-  const bool ok = result == WeReadHttpClient::Result::Ok && (status == 200 || status == 202) &&
-                  !parser.hasError() && !response.bad && response.depth == 0 && response.roots == 1;
+  const bool ok = result == WeReadHttpClient::Result::Ok && (status == 200 || status == 202) && !parser.hasError() &&
+                  !response.bad && response.depth == 0 && response.roots == 1;
   if (!ok) {
     persistServiceDiagnostic("request", int(result), status, &diagnostic, unsigned(parser.hasError()),
                              unsigned(response.bad), response.depth, response.roots, response.fields);

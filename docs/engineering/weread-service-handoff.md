@@ -92,6 +92,11 @@ version-first exported image and its SHA-256 before upload.
 The local device status is the last explicit readback. To see newer cloud
 credit, open the service management page or initiate another device sync. The
 server applies its own pacing and freezes ambiguous cloud writes.
+The sync screen identifies service mode from the first published worker status.
+While a handoff is running, it says the complete server receipt is pending.
+Only a complete, audited handoff says the server durably accepted the record
+and that the reader may leave the page; an empty run says no time was handed
+off. Cloud credit remains a separate count.
 Cloudflare may still challenge clients outside the permitted network region;
 the device stops with its reservation intact, without changing User-Agent to
 impersonate a browser or weakening TLS. The client identifies itself as

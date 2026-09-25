@@ -87,9 +87,8 @@ void normalizeReadingDays(std::vector<ReadingDayStats>& readingDays) {
 }
 
 void normalizeOwnedTime(WeReadOwnedTime& owned) {
-  std::sort(owned.days.begin(), owned.days.end(), [](const ReadingDayStats& a, const ReadingDayStats& b) {
-    return a.dayOrdinal < b.dayOrdinal;
-  });
+  std::sort(owned.days.begin(), owned.days.end(),
+            [](const ReadingDayStats& a, const ReadingDayStats& b) { return a.dayOrdinal < b.dayOrdinal; });
   size_t output = 0;
   for (const auto& day : owned.days) {
     if (!day.dayOrdinal || !day.readingMs) continue;
@@ -270,8 +269,8 @@ void ReadingStatsStore::mergeBookInto(ReadingBookStats& primary, const ReadingBo
     primary.wereadOwnedTime.reserve(primary.wereadOwnedTime.size() + duplicate.wereadOwnedTime.size());
   for (const auto& other : duplicate.wereadOwnedTime) {
     auto found = std::find_if(primary.wereadOwnedTime.begin(), primary.wereadOwnedTime.end(), [&](const auto& owned) {
-      return std::strcmp(owned.account, other.account) == 0 &&
-             std::strcmp(owned.remoteBook, other.remoteBook) == 0 && std::strcmp(owned.source, other.source) == 0;
+      return std::strcmp(owned.account, other.account) == 0 && std::strcmp(owned.remoteBook, other.remoteBook) == 0 &&
+             std::strcmp(owned.source, other.source) == 0;
     });
     if (found == primary.wereadOwnedTime.end()) {
       primary.wereadOwnedTime.push_back(other);
@@ -497,8 +496,8 @@ bool ReadingStatsStore::isClockValid(const uint32_t epochSeconds) { return TimeU
 
 bool ReadingStatsStore::shouldIgnorePath(const std::string& path) { return isIgnoredStatsPath(path); }
 
-void ReadingStatsStore::recordReadingTime(ReadingBookStats& book, const uint32_t epochSeconds,
-                                          const uint64_t readingMs, const bool authoritativeDay) {
+void ReadingStatsStore::recordReadingTime(ReadingBookStats& book, const uint32_t epochSeconds, const uint64_t readingMs,
+                                          const bool authoritativeDay) {
   if (!isClockValid(epochSeconds) || readingMs == 0) {
     return;
   }

@@ -26,8 +26,8 @@
 #include "ProgressMapper.h"
 #include "ReadingStatsStore.h"
 #include "SilentRestart.h"
-#include "WeReadTimeStorage.h"
 #include "WeReadDeviceTimeSource.h"
+#include "WeReadTimeStorage.h"
 #include "WeReadXhtmlCodec.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -206,7 +206,8 @@ bool WeReadProgressSyncActivity::prepareLegacyTimeSource(const ReadingBookStats&
   // so a newly measured minute cannot be offered by both queues.
   legacyTimeDays_ = makeUniqueNoThrow<ReadingDayStats[]>(book.readingDays.size());
   if (!legacyTimeDays_) {
-    LOG_ERR("WRTime", "OOM: legacy day snapshot (%u bytes)", unsigned(book.readingDays.size() * sizeof(ReadingDayStats)));
+    LOG_ERR("WRTime", "OOM: legacy day snapshot (%u bytes)",
+            unsigned(book.readingDays.size() * sizeof(ReadingDayStats)));
     return false;
   }
   std::copy(book.readingDays.begin(), book.readingDays.end(), legacyTimeDays_.get());
@@ -215,10 +216,9 @@ bool WeReadProgressSyncActivity::prepareLegacyTimeSource(const ReadingBookStats&
     if (owned.totalMs > UINT64_MAX - ownedTotal) return false;
     ownedTotal += owned.totalMs;
     for (const auto& day : owned.days) {
-      auto* match = std::lower_bound(legacyTimeDays_.get(), legacyTimeDays_.get() + book.readingDays.size(),
-                                     day.dayOrdinal, [](const ReadingDayStats& item, uint32_t ordinal) {
-                                       return item.dayOrdinal < ordinal;
-                                     });
+      auto* match =
+          std::lower_bound(legacyTimeDays_.get(), legacyTimeDays_.get() + book.readingDays.size(), day.dayOrdinal,
+                           [](const ReadingDayStats& item, uint32_t ordinal) { return item.dayOrdinal < ordinal; });
       if (match == legacyTimeDays_.get() + book.readingDays.size() || match->dayOrdinal != day.dayOrdinal ||
           match->readingMs < day.readingMs)
         return false;
@@ -433,11 +433,14 @@ const char* WeReadProgressSyncActivity::timeMessage() const {
   if (serviceMode_) {
     using Q = WeReadTime::TimeQueue::State;
     if (serviceQueueFull_) return tr(STR_WEREAD_SERVICE_FULL);
-    if (timeQueueState_ == Q::Complete)
-      return !pendingTimeSeconds_ && !timeCollectionFailed_ ? tr(STR_WEREAD_SERVICE_ACCEPTED)
-                                                            : tr(STR_WEREAD_SERVICE_RETRY);
+    if (timeQueueState_ == Q::Complete) {
+      if (pendingTimeSeconds_ || timeCollectionFailed_) return tr(STR_WEREAD_SERVICE_RETRY);
+      return servicePendingSeconds_ || serviceConfirmedSeconds_ ? tr(STR_WEREAD_SERVICE_ACCEPTED)
+                                                                : tr(STR_WEREAD_SERVICE_NO_TIME);
+    }
     if (timeQueueState_ == Q::Paused) return tr(STR_WEREAD_SERVICE_RETRY);
     if (timeQueueState_ == Q::Uncertain) return tr(STR_WEREAD_SERVICE_REVIEW);
+    if (timeQueueState_ == Q::Running) return tr(STR_WEREAD_SERVICE_SENDING);
   }
   if (timeIssue_ == WeReadTime::TimeTransaction::Issue::LowSpace) return tr(STR_WEREAD_TIME_LOW_SPACE);
   if (timeIssue_ == WeReadTime::TimeTransaction::Issue::BaselineIncomplete) return tr(STR_WEREAD_TIME_BASELINE_MISSING);
@@ -1008,24 +1011,44 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
       }
       UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, top, title, true, EpdFontFamily::BOLD);
       char line[112];
-      snprintf(line, sizeof(line), serviceMode_ ? tr(STR_WEREAD_SERVICE_LOCAL) : tr(STR_WEREAD_TIME_PENDING_FMT),
-               static_cast<unsigned long long>(pendingTimeSeconds_ / 60), unsigned(pendingTimeSeconds_ % 60));
-      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop, line);
-      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_DEVICE_FMT),
-               static_cast<unsigned long long>(deviceConfirmedSeconds_),
-               static_cast<unsigned long long>(deviceUnknownSeconds_));
-      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep, line);
-      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_EXTERNAL_FMT),
-               static_cast<unsigned long long>(externalConfirmedSeconds_),
-               static_cast<unsigned long long>(externalUnknownSeconds_));
-      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 2, line);
-      snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_RUN_FMT), static_cast<unsigned long long>(timeRunConfirmed_ / 60),
-               unsigned(timeRunConfirmed_ % 60));
-      if (serviceMode_)
+      if (serviceMode_ && state_ == State::TimeUploading) {
+        // The service worker publishes its running phase before it audits the
+        // source. Zero counters at this point would imply a completed handoff.
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop, tr(STR_WEREAD_SERVICE_STATS_PENDING));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep,
+                                  tr(STR_WEREAD_SERVICE_RECEIPT_PENDING));
+      } else if (serviceMode_) {
+        snprintf(line, sizeof(line), tr(STR_WEREAD_SERVICE_LOCAL),
+                 static_cast<unsigned long long>(pendingTimeSeconds_ / 60), unsigned(pendingTimeSeconds_ % 60));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop, line);
         snprintf(line, sizeof(line), tr(STR_WEREAD_SERVICE_TOTALS),
                  static_cast<unsigned long long>(servicePendingSeconds_),
                  static_cast<unsigned long long>(serviceConfirmedSeconds_));
-      UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 3, line);
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep, line);
+        const bool allAccepted = timeQueueState_ == WeReadTime::TimeQueue::State::Complete && !pendingTimeSeconds_ &&
+                                 !timeCollectionFailed_ && (servicePendingSeconds_ || serviceConfirmedSeconds_);
+        const bool noTime = timeQueueState_ == WeReadTime::TimeQueue::State::Complete && !pendingTimeSeconds_ &&
+                            !timeCollectionFailed_ && !allAccepted;
+        UITheme::drawCenteredText(
+            renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 2,
+            allAccepted ? tr(STR_WEREAD_SERVICE_RECEIPT_OK)
+                        : (noTime ? tr(STR_WEREAD_SERVICE_NO_RECEIPT) : tr(STR_WEREAD_SERVICE_RECEIPT_PENDING)));
+      } else {
+        snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_PENDING_FMT),
+                 static_cast<unsigned long long>(pendingTimeSeconds_ / 60), unsigned(pendingTimeSeconds_ % 60));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop, line);
+        snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_DEVICE_FMT),
+                 static_cast<unsigned long long>(deviceConfirmedSeconds_),
+                 static_cast<unsigned long long>(deviceUnknownSeconds_));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep, line);
+        snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_EXTERNAL_FMT),
+                 static_cast<unsigned long long>(externalConfirmedSeconds_),
+                 static_cast<unsigned long long>(externalUnknownSeconds_));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 2, line);
+        snprintf(line, sizeof(line), tr(STR_WEREAD_TIME_RUN_FMT),
+                 static_cast<unsigned long long>(timeRunConfirmed_ / 60), unsigned(timeRunConfirmed_ % 60));
+        UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, rowTop + rowStep * 3, line);
+      }
       const char* notice = tr(STR_WEREAD_TIME_TODAY_NOTICE);
       if (serviceMode_) {
         notice = tr(STR_WEREAD_SERVICE_UNCHECKED);

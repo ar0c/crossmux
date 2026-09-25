@@ -628,6 +628,25 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   }
 }
 
+bool GfxRenderer::isRectMostlyWhite(const int x, const int y, const int width, const int height,
+                                    const uint32_t maxBlackPixels) const {
+  if (!frameBuffer || _stripActive || width <= 0 || height <= 0 || x < 0 || y < 0 || x + width > getScreenWidth() ||
+      y + height > getScreenHeight())
+    return false;
+
+  uint32_t blackPixels = 0;
+  for (int row = y; row < y + height; ++row) {
+    for (int column = x; column < x + width; ++column) {
+      int physicalX = 0;
+      int physicalY = 0;
+      rotateCoordinates(orientation, column, row, &physicalX, &physicalY, panelWidth, panelHeight);
+      const size_t byteIndex = static_cast<size_t>(physicalY) * panelWidthBytes + physicalX / 8;
+      if ((frameBuffer[byteIndex] & (0x80U >> (physicalX & 7))) == 0 && ++blackPixels > maxBlackPixels) return false;
+    }
+  }
+  return true;
+}
+
 int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontFamily::Style style,
                               const BidiUtils::BidiBaseDir baseDir) const {
   if (text == nullptr || *text == '\0') {
