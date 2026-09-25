@@ -8,7 +8,9 @@
 using TaskHandle_t = void*;
 namespace fakeTask {
 inline bool failCreate = false;
+inline uint32_t freeAfterCreate = 0;
 inline uint32_t largestAfterCreate = 0;
+inline unsigned lastStackBytes = 0;
 inline std::mutex gateMutex;
 inline std::condition_variable gate;
 inline bool notified = false;
@@ -18,14 +20,16 @@ inline void join() {
   if (worker.joinable()) worker.join();
 }
 }  // namespace fakeTask
-inline int xTaskCreate(void (*fn)(void*), const char*, unsigned, void* arg, unsigned, TaskHandle_t* task) {
+inline int xTaskCreate(void (*fn)(void*), const char*, unsigned stackBytes, void* arg, unsigned, TaskHandle_t* task) {
   if (fakeTask::failCreate) return 0;
   fakeTask::join();
+  fakeTask::lastStackBytes = stackBytes;
   {
     std::lock_guard<std::mutex> lock(fakeTask::gateMutex);
     fakeTask::notified = false;
     fakeTask::canceled = false;
   }
+  if (fakeTask::freeAfterCreate) ESP.free = fakeTask::freeAfterCreate;
   if (fakeTask::largestAfterCreate) ESP.largest = fakeTask::largestAfterCreate;
   fakeTask::worker = std::thread(fn, arg);
   *task = reinterpret_cast<void*>(1);

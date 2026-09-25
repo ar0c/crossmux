@@ -74,8 +74,8 @@ any service ownership support is still unsafe to downgrade to.
 The active-task array is fixed (24 entries, no per-task heap allocation), keeping
 the accounting scratch below 6 KiB and the journal below 2 KiB. The service
 worker allocates that journal fallibly in PSRAM, with a fallible internal-memory
-fallback, rather than leaving it live on its 8 KiB stack during HTTPS calls.
-Slots are reused only after full confirmation. The existing 8 KiB worker stack,
+fallback, rather than leaving it live on the worker stack during HTTPS calls.
+Slots are reused only after full confirmation. The 12 KiB worker stack,
 fallible job allocation and internal-memory reserves remain. The journal is capped at
 4 MiB; a full journal stops new reservations rather than deleting ownership.
 The starter checks total memory before allocating, then holds the new worker
@@ -85,6 +85,11 @@ block after FreeRTOS allocates the stack. The worker runs only when at least
 TLS. Otherwise the blocked worker is deleted and no request starts. This avoids
 rejecting a device merely because one block is a few bytes smaller than the
 sum of two allocations that may land in separate blocks.
+The larger stack covers the deeper POST/TLS call chain. The service diagnostic
+includes heap and raw stack high-water values at each persisted phase; a
+`post_start` record still proves only that the request was about to begin.
+The panic report includes the ESP reset-reason code even when the S3 panic
+capture lacks a reason string or stack dump.
 
 Do not downgrade to firmware that does not understand WRS1 after delegating
 time. Such firmware cannot see service ownership and might resend it. Preserve

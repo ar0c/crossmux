@@ -330,7 +330,7 @@ struct Job final : WeReadTime::TimeQueueSource {
     current.queue = Q::Running;
     current.phase = WeReadTime::TimeTransaction::State::Sending;
     publish(current);
-    // Keep the service journal off the 8 KiB task stack: the TLS request path
+    // Keep the service journal off the worker stack: the TLS request path
     // also needs stack while this journal remains live. It is CPU-only state,
     // so the supported S3 boards can hold it in PSRAM for this explicit run.
     WeReadTime::ServiceClient client;
@@ -605,11 +605,13 @@ bool start(const Source& source, const char* account) {
       source.count > 4096)
     return fail(StartFailure::InvalidSource);
   if (WiFi.status() != WL_CONNECTED) return fail(StartFailure::Network);
-  // 8 KiB task stack + <=21 KiB job + <5 KiB audit + 16 bytes per source day
+  // 12 KiB task stack + <=21 KiB job + <5 KiB audit + 16 bytes per source day
   // (<=64 KiB). Fallible, allocated only on explicit start and freed on finish.
   // A live vector reference races reading; a maximum-sized static array would
   // permanently consume C3 RAM. Keep headroom for TLS AND the resumed reader.
-  constexpr size_t stackBytes = 8192;
+  // Service POST adds a nested exchange frame and TLS client below request().
+  // Keep that call chain off the edge of the former 8 KiB worker stack.
+  constexpr size_t stackBytes = 12 * 1024;
   // CPU-only workspace, never an ISR or DMA buffer. Allocate <=21 KiB once
   // in PSRAM where available; a task-stack/static workspace is unsuitable for
   // its size/lifetime. Preserve the C3 fallback and both internal reserves.

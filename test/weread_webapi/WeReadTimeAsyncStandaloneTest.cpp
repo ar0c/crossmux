@@ -116,10 +116,12 @@ int main() {
   // task-stack allocation leaves the TLS reserve intact.
   ESP.free = 139884;
   ESP.largest = 40948;
+  fakeTask::freeAfterCreate = 126660;
   fakeTask::largestAfterCreate = 32760;
   assert(!Sync::start(probe, "a"));
   assert(Sync::lastStartFailure() == Sync::StartFailure::Headroom);
   assert(!Sync::active() && !Sync::ownsWifi());
+  assert(fakeTask::lastStackBytes == 12 * 1024);
   fakeTask::largestAfterCreate = 0;
   ESP.free = 139884;
   ESP.largest = 40948;
@@ -129,6 +131,7 @@ int main() {
   Sync::pause();
   unblock(fakeTransport::blockPrepare);
   finish();
+  fakeTask::freeAfterCreate = 0;
   fixture(probeDay.readingMs);
   fakePsram::fail = true;
   fakeTask::largestAfterCreate = 32760;
