@@ -57,6 +57,14 @@ The fork publishes to its GitHub Releases only, in this order:
 
 Every target selected for a channel must build successfully before publication.
 CI resolves every manifest and verifies each distinct asset's size and SHA-256.
+On a non-`main` Nightly dispatch, CI builds only Waveshare ePaper 3.97. It
+verifies and copies the preceding X4 Pro manifests and exact binaries into the
+new immutable GitHub release, keeping X4 Pro's version, revision, published
+time, and bytes unchanged in the complete rolling index. The index marks
+`updatedTargets` as Waveshare only. This preserves the K3s mirror's one-build
+contract while avoiding an X4 Pro build. Dispatches from `main` still build
+both targets and require one shared current revision; a merge restores that
+normal two-target path without another workflow edit.
 If a previous Nightly index exists, cleanup protects its referenced builds.
 The first Nightly run has no previous index and skips cleanup. Stable builds are
 retained.
@@ -80,9 +88,12 @@ channel capabilities and contains `global` and `zh-CN` pointers with version,
 CrossMux SHA, SDK SHA, publish time, and immutable manifest URL. Stable requires
 both release-note locales.
 
-Every target advances together only when both compatibility manifests are valid
-and have the same CrossMux revision, SDK revision, version, and assets. A
-missing or malformed manifest prevents the whole channel from publishing.
+On `main`, every target advances together only when both compatibility
+manifests are valid and have the same CrossMux revision, SDK revision, version,
+and assets. A branch Nightly keeps the carried X4 Pro revision unchanged and
+requires only Waveshare to match the new commit. Both compatibility manifests
+for each target must still match. A missing or malformed manifest prevents the
+whole channel from publishing.
 Build objects are never overwritten; cleanup runs only after the new rolling
 index and its assets pass verification.
 

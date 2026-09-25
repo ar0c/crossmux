@@ -9,6 +9,7 @@ using namespace WeReadTime;
 std::string reply, lastBody, lastMethod;
 int responseCode = 200;
 bool transportFailure = false;
+int postMilestoneCallbacks = 0;
 namespace WeReadHttpClient {
 Result requestVerified(const char* url, const RequestOptions& o, const DataCallback& data, const HeaderCallback&,
                        int& status) {
@@ -30,6 +31,18 @@ Result requestVerified(const char* url, const RequestOptions& o, const DataCallb
   }
   lastMethod = o.method;
   lastBody = o.body ? std::string(reinterpret_cast<const char*>(o.body), o.bodySize) : "";
+  if (o.body) {
+    assert(o.onStage && o.stageContext == o.diagnostic);
+    for (auto stage :
+         {NetworkDiagnostic::Stage::Open, NetworkDiagnostic::Stage::Write, NetworkDiagnostic::Stage::Headers,
+          NetworkDiagnostic::Stage::Body, NetworkDiagnostic::Stage::Complete}) {
+      o.diagnostic->stage = stage;
+      o.onStage(o.stageContext, stage);
+      ++postMilestoneCallbacks;
+    }
+  } else {
+    assert(!o.onStage);
+  }
   status = responseCode;
   if (transportFailure) return Result::NetworkError;
   for (size_t i = 0; i < reply.size(); i += 7) {
@@ -62,6 +75,7 @@ int main() {
   reply = "{\"durably_accepted\":true,\"cloud_confirmed\":false,\"job\":" + job + "}";
   transportFailure = true;
   assert(c.exchange(v.identity(), j) == ServiceClient::Result::Failed);
+  assert(postMilestoneCallbacks == 5);
   const auto attemptedBody = lastBody;
   assert(j.state() == ServiceJournal::State::Reserved);
   transportFailure = false;

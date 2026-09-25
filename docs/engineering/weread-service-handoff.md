@@ -86,8 +86,14 @@ TLS. Otherwise the blocked worker is deleted and no request starts. This avoids
 rejecting a device merely because one block is a few bytes smaller than the
 sum of two allocations that may land in separate blocks.
 The larger stack covers the deeper POST/TLS call chain. The service diagnostic
-includes heap and raw stack high-water values at each persisted phase; a
-`post_start` record still proves only that the request was about to begin.
+includes heap, raw stack high-water, and uptime values at each persisted phase.
+`post_start` means the POST was prepared; `post_tls_start` means connection and
+TLS are about to start; `post_tls_ready` means TLS opened; `post_body_sent`
+means the request body was written; `post_headers` means response headers were
+received; `post_body_done` means the response body was read. These milestones
+contain no credentials, URL, account, book, or request/response body. They are
+not server acceptance receipts; only the `accepted` record and backend job
+readback establish durable receipt.
 The panic report includes the ESP reset-reason code even when the S3 panic
 capture lacks a reason string or stack dump.
 

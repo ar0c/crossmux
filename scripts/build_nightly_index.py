@@ -47,7 +47,17 @@ def manifest_url(base_url, region, target_id, flavor):
     return urljoin(base_url, f'{target_id}/{name}')
 
 
-def build_index(manifest_root, region, base_url, updated_at, build_id, channel, release_notes=None):
+def build_index(manifest_root, region, base_url, updated_at, build_id, channel, release_notes=None,
+                previous_index=None, expected_sha=None):
+    carried = {'xteink_x4_pro'} if previous_index is not None else set()
+    if carried and (channel != 'nightly' or not expected_sha):
+        raise ValueError('partial Nightly release requires its new revision')
+    if previous_index is not None and (
+        previous_index.get('schemaVersion') != 1
+        or previous_index.get('channel') != 'nightly'
+        or set(previous_index.get('targets', {})) != set(targets_for('nightly'))
+    ):
+        raise ValueError('invalid previous Nightly index')
     targets = {}
     crossmux_revisions = set()
     sdk_revisions = set()
@@ -71,6 +81,14 @@ def build_index(manifest_root, region, base_url, updated_at, build_id, channel, 
             raise ValueError(f'{target_id} flavor versions do not match')
         if len({json.dumps(manifest['assets'], sort_keys=True) for manifest in manifests.values()}) != 1:
             raise ValueError(f'{target_id} flavor assets do not match')
+        if target_id in carried:
+            previous = previous_index['targets'][target_id]
+            for flavor, manifest in manifests.items():
+                pointer = previous.get('variants', {}).get(flavor, {})
+                if any(manifest.get(key) != pointer.get(key) for key in ('version', 'crossmuxSha', 'sdkSha')):
+                    raise ValueError(f'{target_id} does not match the previous release')
+        elif expected_sha and revisions != {expected_sha}:
+            raise ValueError(f'{target_id} does not match the new revision')
         crossmux_revisions.update(revisions)
         sdk_revisions.update(target_sdk_revisions)
         targets[target_id] = {
@@ -84,15 +102,16 @@ def build_index(manifest_root, region, base_url, updated_at, build_id, channel, 
                     'version': manifest['version'],
                     'crossmuxSha': manifest['crossmuxSha'],
                     'sdkSha': manifest['sdkSha'],
-                    'publishedAt': updated_at,
+                    'publishedAt': (previous_index['targets'][target_id]['variants'][flavor]['publishedAt']
+                                    if target_id in carried else updated_at),
                     'manifestUrl': manifest_url(base_url, region, target_id, flavor),
                 }
                 for flavor, manifest in manifests.items()
             },
         }
-    if len(crossmux_revisions) != 1:
+    if not carried and len(crossmux_revisions) != 1:
         raise ValueError('target CrossMux revisions do not match')
-    if len(sdk_revisions) != 1:
+    if not carried and len(sdk_revisions) != 1:
         raise ValueError('target SDK revisions do not match')
     if channel == 'stable' and release_notes is None:
         raise ValueError('Stable release notes are required')
@@ -103,6 +122,8 @@ def build_index(manifest_root, region, base_url, updated_at, build_id, channel, 
         'buildId': build_id,
         'targets': targets,
     }
+    if carried:
+        index['updatedTargets'] = sorted(set(targets) - carried)
     if release_notes is not None:
         index['releaseNotes'] = {
             'global': release_notes['en'],
@@ -121,6 +142,8 @@ def main():
     parser.add_argument('--build-id', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--release-notes', type=Path)
+    parser.add_argument('--previous-index', type=Path)
+    parser.add_argument('--expected-sha')
     args = parser.parse_args()
 
     release_notes = extract_notes(args.release_notes.read_text()) if args.release_notes else None
@@ -132,6 +155,8 @@ def main():
         args.build_id,
         args.channel,
         release_notes,
+        read_json(args.previous_index) if args.previous_index else None,
+        args.expected_sha,
     )
     args.output.write_text(json.dumps(index, indent=2) + '\n')
 

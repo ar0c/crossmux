@@ -65,7 +65,9 @@ def manifest_name(target_id, flavor):
     return f"{target['deviceSlug']}-{FLAVOR_TOKENS[flavor]}-manifest.json"
 
 
-def matrix(channel):
+def matrix(channel, only_target=None):
+    if only_target is not None and only_target not in targets_for(channel):
+        raise ValueError(f'{only_target} is not a {channel} target')
     return {
         'include': [
             {
@@ -74,5 +76,6 @@ def matrix(channel):
                 'environment': environment_for(target_id, channel, 'global'),
             }
             for target_id, target in targets_for(channel).items()
+            if only_target is None or target_id == only_target
         ]
     }

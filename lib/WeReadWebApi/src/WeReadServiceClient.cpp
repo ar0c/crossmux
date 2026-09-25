@@ -20,17 +20,19 @@ constexpr const char* configPath = "/WeReadSync/service.conf";
 void persistServiceDiagnostic(const char* phase, int result = -1, int http = 0,
                               const WeReadHttpClient::NetworkDiagnostic* network = nullptr, unsigned parse = 0,
                               unsigned bad = 0, unsigned depth = 0, unsigned roots = 0, unsigned fields = 0) {
-  char record[384];
+  // ServiceClient is reached only by the single guarded sync worker. Keep the
+  // bounded trace buffer off its nested POST/TLS call stack.
+  static char record[448];
   const int n = std::snprintf(
       record, sizeof(record),
       "{\"version\":1,\"phase\":\"%s\",\"result\":%d,\"http\":%d,\"stage\":%u,\"error\":%d,\"socket\":%d,"
       "\"tls\":%d,\"verify\":%d,\"elapsed_ms\":%u,\"parse\":%u,\"bad\":%u,\"depth\":%u,\"roots\":%u,\"fields\":%u,"
-      "\"heap_free\":%u,\"heap_largest\":%u,\"stack_hwm\":%u}\n",
+      "\"heap_free\":%u,\"heap_largest\":%u,\"stack_hwm\":%u,\"uptime_ms\":%lu}\n",
       phase, result, http, network ? unsigned(network->stage) : 0, network ? network->error : 0,
       network ? network->socket : 0, network ? network->tls : 0, network ? network->verify : 0,
       network ? unsigned(network->elapsedMs) : 0, parse, bad, depth, roots, fields,
       static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()),
-      static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+      static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)), static_cast<unsigned long>(millis()));
   if (n <= 0 || size_t(n) >= sizeof(record) || !Storage.ensureDirectoryExists("/WeReadSync")) return;
   HalFile file;
   if (!Storage.openFileForWrite("WRSvc", "/WeReadSync/last-service-diagnostic.json", file)) return;
@@ -184,6 +186,33 @@ bool request(const char* path, const char* token, const char* body, Response& re
   options.readBufferSize = sizeof(readBuffer);
   WeReadHttpClient::NetworkDiagnostic diagnostic;
   options.diagnostic = &diagnostic;
+  if (body) {
+    options.stageContext = &diagnostic;
+    options.onStage = [](void* context, WeReadHttpClient::NetworkDiagnostic::Stage stage) {
+      using Stage = WeReadHttpClient::NetworkDiagnostic::Stage;
+      const char* phase = nullptr;
+      switch (stage) {
+        case Stage::Open:
+          phase = "post_tls_start";
+          break;
+        case Stage::Write:
+          phase = "post_tls_ready";
+          break;
+        case Stage::Headers:
+          phase = "post_body_sent";
+          break;
+        case Stage::Body:
+          phase = "post_headers";
+          break;
+        case Stage::Complete:
+          phase = "post_body_done";
+          break;
+        default:
+          break;
+      }
+      if (phase) persistServiceDiagnostic(phase, -1, 0, static_cast<WeReadHttpClient::NetworkDiagnostic*>(context));
+    };
+  }
   size_t received = 0;
   int status = 0;
   const auto result = WeReadHttpClient::requestVerified(

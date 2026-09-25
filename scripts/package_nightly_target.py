@@ -170,9 +170,10 @@ def main():
     parser.add_argument('--channel', choices=CHANNELS, required=True)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--matrix', action='store_true')
+    parser.add_argument('--matrix-target', choices=TARGETS)
     args = parser.parse_args()
     if args.matrix:
-        print(json.dumps(matrix(args.channel), separators=(',', ':')))
+        print(json.dumps(matrix(args.channel, args.matrix_target), separators=(',', ':')))
         return
     if not args.target:
         parser.error('target is required unless --matrix is used')

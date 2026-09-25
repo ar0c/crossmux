@@ -38,6 +38,10 @@ struct RequestOptions {
   uint8_t* readBuffer = nullptr;
   size_t readBufferSize = 0;
   NetworkDiagnostic* diagnostic = nullptr;
+  // Optional numeric milestone hook for a crash-safe request trace. The
+  // caller owns the context for the duration of this synchronous request.
+  void (*onStage)(void*, NetworkDiagnostic::Stage) = nullptr;
+  void* stageContext = nullptr;
 };
 
 struct HttpsUrlView {

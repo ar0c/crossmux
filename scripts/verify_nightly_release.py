@@ -78,7 +78,7 @@ def expected_assets(target_id, channel):
     return [(role, asset_name(target_id, f'{role}.bin'), OFFSETS[role]) for role in roles]
 
 
-def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):
+def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes, previous_index=None):
     if not SHA40.fullmatch(expected_sha):
         raise ValueError('expected SHA must contain 40 lowercase hex characters')
     index = read_json(index_url, fetch)
@@ -95,6 +95,15 @@ def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):
     targets = index.get('targets')
     if not isinstance(targets, dict) or set(targets) != set(canonical_targets):
         raise ValueError(f'published {channel} index does not contain the canonical target set')
+    updated = index.get('updatedTargets')
+    if updated is not None:
+        if (channel != 'nightly' or updated != ['waveshare_epaper_397']
+                or not isinstance(previous_index, dict)
+                or previous_index.get('schemaVersion') != 1
+                or previous_index.get('channel') != channel
+                or set(previous_index.get('targets', {})) != set(canonical_targets)):
+            raise ValueError('partial Nightly release needs its previous complete index')
+    carried = set(canonical_targets) - set(updated) if updated is not None else set()
 
     current_targets = 0
     asset_count = 0
@@ -117,6 +126,10 @@ def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):
                 str(pointer.get('sdkSha', ''))
             ) or not isinstance(pointer.get('version'), str) or not isinstance(pointer.get('publishedAt'), str):
                 raise ValueError(f'invalid {target_id}/{flavor} pointer')
+            if target_id in carried:
+                old = previous_index['targets'][target_id]['variants'][flavor]
+                if any(pointer.get(key) != old.get(key) for key in ('version', 'crossmuxSha', 'sdkSha', 'publishedAt')):
+                    raise ValueError(f'{target_id}/{flavor} carried pointer changed')
             manifest_url = pointer.get('manifestUrl')
             if not isinstance(manifest_url, str) or not manifest_url.endswith(manifest_name(target_id, flavor)):
                 raise ValueError(f'invalid {target_id}/{flavor} manifest URL')
@@ -135,7 +148,7 @@ def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):
         versions = {manifest['version'] for manifest in manifests.values()}
         if len(revisions) != 1 or len(sdk_revisions) != 1 or len(versions) != 1:
             raise ValueError(f'{target_id} compatibility manifest revisions differ')
-        if revisions != {expected_sha}:
+        if target_id not in carried and revisions != {expected_sha}:
             raise ValueError(f'{target_id} does not point to the current revision')
         comparable = [
             {key: value for key, value in manifest.items() if key != 'flavor'}
@@ -143,7 +156,8 @@ def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):
         ]
         if comparable[0] != comparable[1]:
             raise ValueError(f'{target_id} compatibility manifests differ beyond flavor')
-        current_targets += 1
+        if target_id not in carried:
+            current_targets += 1
 
         expected = expected_assets(target_id, channel)
         seen_urls = set()
@@ -183,8 +197,10 @@ def main():
     parser.add_argument('--index-url', required=True)
     parser.add_argument('--expected-sha', required=True)
     parser.add_argument('--channel', choices=CHANNELS, required=True)
+    parser.add_argument('--previous-index')
     args = parser.parse_args()
-    result = verify_release(args.index_url, args.expected_sha, args.channel)
+    previous = json.loads(open(args.previous_index, encoding='utf-8').read()) if args.previous_index else None
+    result = verify_release(args.index_url, args.expected_sha, args.channel, previous_index=previous)
     print(
         f"Verified {result['targets']} targets ({result['currentTargets']} current) "
         f"and {result['assets']} assets from {args.index_url}"

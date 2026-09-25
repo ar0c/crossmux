@@ -439,6 +439,7 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
   using Stage = WeReadHttpClient::NetworkDiagnostic::Stage;
   const auto stage = [&](Stage value) {
     if (options.diagnostic) options.diagnostic->stage = value;
+    if (options.onStage) options.onStage(options.stageContext, value);
   };
   const auto failure = [&](int code) {
     if (options.diagnostic) {

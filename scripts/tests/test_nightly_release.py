@@ -12,6 +12,7 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
 import build_nightly_index
+import carry_nightly_target
 import nightly_retention
 import nightly_targets
 import package_nightly_target
@@ -47,6 +48,10 @@ class NightlyTargetTest(unittest.TestCase):
         self.assertEqual(
             package_nightly_target.matrix('stable')['include'],
             [{'targetId': 'xteink_x4_pro', 'deviceSlug': 'x4pro', 'environment': 'x4pro-gh_release'}],
+        )
+        self.assertEqual(
+            package_nightly_target.matrix('nightly', 'waveshare_epaper_397')['include'],
+            [entry for entry in matrix if entry['targetId'] == 'waveshare_epaper_397'],
         )
 
     def test_runtime_models_and_board_tags_are_explicit(self):
@@ -366,6 +371,29 @@ class NightlyIndexTest(unittest.TestCase):
                 self.root, 'global', 'https://example.com/', 'now', 'test', 'nightly'
             )
 
+    def test_branch_index_carries_x4_without_advancing_its_revision(self):
+        old_sha, new_sha = 'a' * 40, 'c' * 40
+        self.write_all_pairs(revision=old_sha)
+        previous = build_nightly_index.build_index(
+            self.root, 'global', 'https://example.com/old/', 'old-time', 'old-build', 'nightly'
+        )
+        self.write_pair('waveshare_epaper_397', revision=new_sha)
+        index = build_nightly_index.build_index(
+            self.root, 'global', 'https://example.com/new/', 'new-time', 'new-build', 'nightly',
+            previous_index=previous, expected_sha=new_sha,
+        )
+        self.assertEqual(index['updatedTargets'], ['waveshare_epaper_397'])
+        self.assertEqual(index['targets']['xteink_x4_pro']['variants']['global']['crossmuxSha'], old_sha)
+        self.assertEqual(index['targets']['xteink_x4_pro']['variants']['global']['publishedAt'], 'old-time')
+        self.assertEqual(index['targets']['waveshare_epaper_397']['variants']['global']['crossmuxSha'], new_sha)
+        with self.assertRaisesRegex(ValueError, 'previous release'):
+            build_nightly_index.build_index(
+                self.root, 'global', 'https://example.com/new/', 'new-time', 'new-build', 'nightly',
+                previous_index={**previous, 'targets': {**previous['targets'], 'xteink_x4_pro': {
+                    **previous['targets']['xteink_x4_pro'], 'variants': {}
+                }}}, expected_sha=new_sha,
+            )
+
 
 class NightlyRetentionTest(unittest.TestCase):
     def previous_index(self, storage, first_build, second_build):
@@ -516,7 +544,7 @@ class PublishedNightlyTest(unittest.TestCase):
             'schemaVersion': 1,
             'channel': 'nightly',
             'updatedAt': 'now',
-            'buildId': 'test',
+            'buildId': 'nightly-build-test',
             'targets': targets,
         }
         self.write_index()
@@ -537,6 +565,47 @@ class PublishedNightlyTest(unittest.TestCase):
         for url in self.store:
             if url.endswith('.bin'):
                 self.assertEqual(self.fetches[url], 1)
+
+    def test_partial_release_keeps_x4_and_verifies_only_waveshare_revision(self):
+        import copy
+        previous = copy.deepcopy(self.index)
+        target_id = 'xteink_x4_pro'
+        for flavor in nightly_targets.FLAVOR_TOKENS:
+            url = self.release_url + nightly_targets.manifest_name(target_id, flavor)
+            manifest = json.loads(self.store[url])
+            manifest['crossmuxSha'] = self.old_sha
+            self.store[url] = json.dumps(manifest).encode()
+            previous['targets'][target_id]['variants'][flavor]['crossmuxSha'] = self.old_sha
+            self.index['targets'][target_id]['variants'][flavor]['crossmuxSha'] = self.old_sha
+        self.index['updatedTargets'] = ['waveshare_epaper_397']
+        self.write_index()
+        result = verify_nightly_release.verify_release(
+            self.index_url, self.current_sha, 'nightly', self.fetch, previous,
+        )
+        self.assertEqual(result['currentTargets'], 1)
+        with self.assertRaisesRegex(ValueError, 'previous complete index'):
+            verify_nightly_release.verify_release(self.index_url, self.current_sha, 'nightly', self.fetch)
+        previous['targets'][target_id]['variants']['global']['publishedAt'] = 'changed'
+        with self.assertRaisesRegex(ValueError, 'carried pointer changed'):
+            verify_nightly_release.verify_release(
+                self.index_url, self.current_sha, 'nightly', self.fetch, previous,
+            )
+
+    def test_carry_target_verifies_old_assets_before_writing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / 'carry'
+            self.assertEqual(carry_nightly_target.carry_target(
+                self.index, '0x1abin/crossmux', 'xteink_x4_pro', output, self.fetch,
+            ), 4)
+            self.assertEqual(len(list(output.iterdir())), 6)
+            output2 = Path(temp) / 'corrupt'
+            url = self.release_url + nightly_targets.asset_name('xteink_x4_pro', 'firmware.bin')
+            self.store[url] += b'corrupt'
+            with self.assertRaisesRegex(ValueError, 'SHA-256'):
+                carry_nightly_target.carry_target(
+                    self.index, '0x1abin/crossmux', 'xteink_x4_pro', output2, self.fetch,
+                )
+            self.assertFalse(output2.exists())
 
     def test_github_assets_stay_in_the_index_repository(self):
         index_url = 'https://github.com/ar0c/crossmux/releases/download/nightly/release-index.json'

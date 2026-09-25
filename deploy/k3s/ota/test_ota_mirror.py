@@ -16,6 +16,7 @@ class MirrorTest(unittest.TestCase):
         targets = {}
         for target in sorted(mirror.TARGETS[channel]):
             board_tag, slug = mirror.TARGETS[channel][target]
+            revision = ('c' if target == 'xteink_x4_pro' else 'a') * 40
             firmware = f'crossmux-ar0c-{slug}-firmware.bin'
             data = (target * 64).encode()
             assets[firmware] = data
@@ -30,16 +31,17 @@ class MirrorTest(unittest.TestCase):
                 manifest = {
                     'schemaVersion': 1, 'channel': channel, 'targetId': target,
                     'flavor': flavor, 'boardTag': board_tag, 'version': '1.0',
-                    'crossmuxSha': 'a' * 40, 'sdkSha': 'b' * 40,
+                    'crossmuxSha': revision, 'sdkSha': 'b' * 40,
                     'assets': manifest_assets,
                 }
                 assets[filename] = json.dumps(manifest).encode()
                 variants[flavor] = {
                     'manifestUrl': url, 'version': '1.0',
-                    'crossmuxSha': 'a' * 40, 'sdkSha': 'b' * 40,
+                    'crossmuxSha': revision, 'sdkSha': 'b' * 40,
                 }
             targets[target] = {'targetId': target, 'boardTag': board_tag, 'variants': variants}
-        index = {'schemaVersion': 1, 'channel': channel, 'buildId': tag, 'targets': targets}
+        index = {'schemaVersion': 1, 'channel': channel, 'buildId': tag,
+                 'updatedTargets': ['waveshare_epaper_397'], 'targets': targets}
         source = {mirror.SOURCE + tag + '/' + name: data for name, data in assets.items()}
         source[mirror.SOURCE + 'nightly/release-index.json'] = json.dumps(index).encode()
 
