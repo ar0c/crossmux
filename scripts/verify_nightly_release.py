@@ -78,7 +78,9 @@ def expected_assets(target_id, channel):
     return [(role, asset_name(target_id, f'{role}.bin'), OFFSETS[role]) for role in roles]
 
 
-def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):
+def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes, only_target=None):
+    if only_target and (channel != 'nightly' or only_target not in targets_for(channel)):
+        raise ValueError('partial verification requires a supported Nightly target')
     if not SHA40.fullmatch(expected_sha):
         raise ValueError('expected SHA must contain 40 lowercase hex characters')
     index = read_json(index_url, fetch)
@@ -135,7 +137,7 @@ def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):
         versions = {manifest['version'] for manifest in manifests.values()}
         if len(revisions) != 1 or len(sdk_revisions) != 1 or len(versions) != 1:
             raise ValueError(f'{target_id} compatibility manifest revisions differ')
-        if revisions != {expected_sha}:
+        if (not only_target or target_id == only_target) and revisions != {expected_sha}:
             raise ValueError(f'{target_id} does not point to the current revision')
         comparable = [
             {key: value for key, value in manifest.items() if key != 'flavor'}
@@ -143,7 +145,7 @@ def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):
         ]
         if comparable[0] != comparable[1]:
             raise ValueError(f'{target_id} compatibility manifests differ beyond flavor')
-        current_targets += 1
+        if revisions == {expected_sha}: current_targets += 1
 
         expected = expected_assets(target_id, channel)
         seen_urls = set()
@@ -183,8 +185,9 @@ def main():
     parser.add_argument('--index-url', required=True)
     parser.add_argument('--expected-sha', required=True)
     parser.add_argument('--channel', choices=CHANNELS, required=True)
+    parser.add_argument('--only-target', choices=TARGETS)
     args = parser.parse_args()
-    result = verify_release(args.index_url, args.expected_sha, args.channel)
+    result = verify_release(args.index_url, args.expected_sha, args.channel, only_target=args.only_target)
     print(
         f"Verified {result['targets']} targets ({result['currentTargets']} current) "
         f"and {result['assets']} assets from {args.index_url}"

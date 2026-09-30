@@ -1,4 +1,5 @@
 #include "WeReadClient.h"
+
 #include "WeReadDeviceTimeTransport.h"
 #include "WeReadTimeAck.h"
 
@@ -85,6 +86,22 @@ struct ResponseSink {
   bool (*finish)(void* ctx);
   Error writeError;
 };
+
+Error managedRequestOnce(const ManagedWeReadClient& client, const char* command, ResponseSink& sink, int& status,
+                         uint8_t* buffer, size_t size, uint32_t* next = nullptr) {
+  if (!sink.reset(sink.ctx)) return Error::SdCard;
+  const auto result = client.request(
+      "/api/v2/reading", reinterpret_cast<const uint8_t*>(command), strlen(command), buffer, size,
+      [&sink, &status](const uint8_t* bytes, size_t n) {
+        return status == 200 ? sink.write(sink.ctx, bytes, n) : true;
+      },
+      status, next);
+  if (result == WeReadHttpClient::Result::NetworkError) return Error::Network;
+  if (result == WeReadHttpClient::Result::Aborted) return sink.writeError;
+  if (status == 409 || status == 503) return Error::Unavailable;
+  if (status != 200) return Error::Unavailable;
+  return sink.finish(sink.ctx) ? Error::Ok : sink.writeError;
+}
 
 bool noOpFinish(void*) { return true; }
 
@@ -341,9 +358,8 @@ Error requestOnce(const char* method, const char* path, const uint8_t* body, con
   const auto onHeader = [session, cookie, cookieSize, &cookiesOk](const char* name, const char* value) {
     cookiesOk = absorbSetCookie(session, name, value, cookie, cookieSize) && cookiesOk;
   };
-  const auto result = verifiedTls
-                          ? WeReadHttpClient::requestVerified(url, options, onData, onHeader, status)
-                          : reusableSession
+  const auto result = verifiedTls ? WeReadHttpClient::requestVerified(url, options, onData, onHeader, status)
+                      : reusableSession
                           ? WeReadHttpClient::request(*reusableSession, url, options, onData, onHeader, status)
                           : WeReadHttpClient::request(url, options, onData, onHeader, status);
   if (result == WeReadHttpClient::Result::Ok) {
@@ -1378,7 +1394,8 @@ bool appendProgressQuery(char* out, const size_t outSize, char* work, const size
   }
   if (report) {
     if (!appendText(out, outSize, position, "&rn=") || !appendUnsigned(out, outSize, position, randomNumber) ||
-        (seconds && (!appendText(out, outSize, position, "&rt=") || !appendUnsigned(out, outSize, position, seconds))) ||
+        (seconds &&
+         (!appendText(out, outSize, position, "&rt=") || !appendUnsigned(out, outSize, position, seconds))) ||
         !appendText(out, outSize, position, "&sg=")) {
       return false;
     }
@@ -1410,7 +1427,8 @@ bool makeProgressBody(const char* bookId, const WeReadStore::TocRecord& chapter,
   if (seconds && (!report || !readerToken || !readerToken[0])) return false;
   if (!isSafeProtocolToken(token) || (pclts && pclts[0] && !isSafeProtocolToken(pclts))) return false;
   const float clampedFraction = std::max(0.0f, std::min(1.0f, localFraction));
-  const uint32_t progress = exactProgress == UINT32_MAX ? static_cast<uint32_t>(clampedFraction * 100.0f) : exactProgress;
+  const uint32_t progress =
+      exactProgress == UINT32_MAX ? static_cast<uint32_t>(clampedFraction * 100.0f) : exactProgress;
   if (progress > 100) return false;
   const uint32_t randomNumber = report ? static_cast<uint32_t>(random(0, 1000)) : 0;
   const uint64_t timestampMs =
@@ -1452,7 +1470,8 @@ bool makeProgressBody(const char* bookId, const WeReadStore::TocRecord& chapter,
   if (report) {
     if (!appendText(body, bodySize, position, ",\"ts\":") || !appendUnsigned(body, bodySize, position, timestampMs) ||
         !appendText(body, bodySize, position, ",\"rn\":") || !appendUnsigned(body, bodySize, position, randomNumber) ||
-        (seconds && (!appendText(body, bodySize, position, ",\"rt\":") || !appendUnsigned(body, bodySize, position, seconds)))) {
+        (seconds &&
+         (!appendText(body, bodySize, position, ",\"rt\":") || !appendUnsigned(body, bodySize, position, seconds)))) {
       return false;
     }
     const int sourceLength = snprintf(work, workSize, "%llu%u%s", static_cast<unsigned long long>(timestampMs),
@@ -1981,6 +2000,24 @@ void Operation::reset() {
   if (shelfCoverUrl_) shelfCoverUrl_[0] = '\0';
 }
 
+bool Operation::loadAccount() {
+  managedMode_ = ManagedWeReadClient::required();
+  loginUid_[0] = 0;
+  if (!managedMode_) {
+    WeReadStore::loadSession(session_);
+    return true;
+  }
+  session_.clear();
+  if (!managed_.connect(ioBuffer_, sizeof(ioBuffer_), session_.vid, sizeof(session_.vid), previousVid_,
+                        sizeof(previousVid_))) {
+    error_ = Error::Unavailable;
+    phase_ = Phase::Failed;
+    return false;
+  }
+  return true;
+}
+bool Operation::persistAccount() { return managedMode_ || WeReadStore::saveSession(session_); }
+
 bool Operation::begin(const Kind kind, const WeReadStore::ShelfRecord* book, const DownloadOptions options,
                       const ShelfCoverScope shelfCoverScope) {
   reset();
@@ -2028,7 +2065,7 @@ bool Operation::begin(const Kind kind, const WeReadStore::ShelfRecord* book, con
       memcpy(shelfCoverUrl_.get(), book->coverUrl, strlen(book->coverUrl) + 1);
     }
   }
-  WeReadStore::loadSession(session_);
+  if (!loadAccount()) return false;
   Phase first = Phase::SyncShelf;
   switch (kind) {
     case Kind::Sync:
@@ -2044,7 +2081,7 @@ bool Operation::begin(const Kind kind, const WeReadStore::ShelfRecord* book, con
     case Kind::Browse:
       break;
   }
-  if (session_.valid()) {
+  if (managedMode_ || session_.valid()) {
     phase_ = first;
   } else {
     startLogin(first);
@@ -2064,8 +2101,8 @@ bool Operation::beginBrowseCache(const WeReadStore::BookRecord& book) {
   book_ = book;
   browseKind_ = WeReadBrowse::Kind::PopularHighlights;
   browseCursor_ = {};
-  WeReadStore::loadSession(session_);
-  if (session_.valid()) {
+  if (!loadAccount()) return false;
+  if (managedMode_ || session_.valid()) {
     phase_ = Phase::PrepareBrowseCache;
   } else {
     startLogin(Phase::PrepareBrowseCache);
@@ -2086,8 +2123,8 @@ bool Operation::beginProgressSync(const char* bookId, ProgressSyncInput input, c
   progressSyncInput_ = input;
   progressSyncMode_ = mode;
   progressSyncInput_.localFraction = std::max(0.0f, std::min(1.0f, input.localFraction));
-  WeReadStore::loadSession(session_);
-  if (!session_.valid()) {
+  if (!loadAccount()) return false;
+  if (!managedMode_ && !session_.valid()) {
     error_ = Error::SessionExpired;
     phase_ = Phase::Failed;
     return false;
@@ -2135,6 +2172,11 @@ Operation::Event Operation::cancelNow() {
 }
 
 void Operation::startLogin(const Phase resume) {
+  if (managedMode_) {
+    error_ = Error::Unavailable;
+    phase_ = Phase::Failed;
+    return;
+  }
   memcpy(previousVid_, session_.vid, sizeof(previousVid_));
   previousVid_[sizeof(previousVid_) - 1] = '\0';
   session_.clear();
@@ -2150,6 +2192,11 @@ void Operation::startLogin(const Phase resume) {
 }
 
 void Operation::requestAuthentication(const Phase resume) {
+  if (managedMode_) {
+    error_ = Error::Unavailable;
+    phase_ = Phase::Failed;
+    return;
+  }
   bookSession_.reset();
   resumePhase_ = resume;
   requestAttempt_ = 0;
@@ -2309,7 +2356,7 @@ Error Operation::pollLogin() {
     browseManifest_ = {};
     resumePhase_ = Phase::PrepareBrowseCache;
   }
-  if (!WeReadStore::saveSession(session_)) return Error::SdCard;
+  if (!persistAccount()) return Error::SdCard;
   loginConfirmed_ = true;
   return Error::Ok;
 }
@@ -2330,7 +2377,7 @@ Error Operation::renewSession() {
     WeReadStore::clearSession();
     return Error::SessionExpired;
   }
-  return WeReadStore::saveSession(session_) ? Error::Ok : Error::SdCard;
+  return persistAccount() ? Error::Ok : Error::SdCard;
 }
 
 Error Operation::syncShelfOnce() {
@@ -2339,9 +2386,41 @@ Error Operation::syncShelfOnce() {
   StreamingJsonParser parser(shelfCallbacks(&context));
   context.parser = &parser;
   ResponseSink sink{&context, resetShelf, feedShelf, noOpFinish, Error::Protocol};
-  const Error error =
-      requestOnce("GET", "/web/shelf/sync", nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_, cookie_,
-                  sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_));
+  Error error = Error::Ok;
+  if (managedMode_) {
+    uint32_t cursor = 0;
+    // Preserve one atomic IndexWriter across bounded metadata pages. No
+    // shelf array is allocated on the device; each page streams to the SD.
+    for (unsigned page = 0; page < 100; page++) {
+      char command[64];
+      snprintf(command, sizeof(command), "{\"action\":\"shelf\",\"cursor\":%u}", unsigned(cursor));
+      if (page) {
+        context.parser->reset();
+        context.field = ShelfField::None;
+        context.depth = 0;
+        context.inBooks = false;
+        context.inBook = false;
+        context.rootClosed = false;
+        context.errorCode = 0;
+        sink.reset = noOpFinish;
+      }
+      uint32_t next = UINT32_MAX;
+      error = managedRequestOnce(managed_, command, sink, responseStatus_, ioBuffer_, sizeof(ioBuffer_), &next);
+      if (cancelRequested_) {
+        error = Error::Cancelled;
+        break;
+      }
+      if (error != Error::Ok || !context.rootClosed || context.errorCode) break;
+      if (next == 0) break;
+      if (next <= cursor || next > 10000 || page == 99) {
+        error = Error::Protocol;
+        break;
+      }
+      cursor = next;
+    }
+  } else
+    error = requestOnce("GET", "/web/shelf/sync", nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_,
+                        cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_));
   if (error != Error::Ok) {
     context.writer.abort();
     return error;
@@ -2362,7 +2441,7 @@ Error Operation::syncShelfOnce() {
   LOG_INF("WR", "Shelf download complete: books=%u ms=%u", static_cast<unsigned>(recordCount),
           static_cast<unsigned>(millis() - startedAt));
   logMemory("shelf parsed");
-  return WeReadStore::saveSession(session_) ? Error::Ok : Error::SdCard;
+  return persistAccount() ? Error::Ok : Error::SdCard;
 }
 
 Error Operation::organizeShelfOnce() {
@@ -2647,9 +2726,13 @@ Error Operation::fetchDetailOnce() {
   if (!WeReadProtocol::urlEncode(book_.bookId, encodedBookId, sizeof(encodedBookId))) return Error::Protocol;
   referer_ = "/web/book/info?bookId=";
   referer_ += encodedBookId;
+  char command[128];
+  snprintf(command, sizeof(command), "{\"action\":\"detail\",\"book_id\":\"%s\"}", book_.bookId);
   const Error error =
-      requestOnce("GET", referer_.c_str(), nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_, cookie_,
-                  sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+      managedMode_
+          ? managedRequestOnce(managed_, command, sink, responseStatus_, ioBuffer_, sizeof(ioBuffer_))
+          : requestOnce("GET", referer_.c_str(), nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_, cookie_,
+                        sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
   if (error != Error::Ok) {
     context.writer.abort();
     return error;
@@ -2676,7 +2759,7 @@ Error Operation::fetchDetailOnce() {
           url_[0] ? "selected" : "missing");
   if (!context.writer.finish(context.header)) return Error::SdCard;
   logMemory("detail parsed");
-  return WeReadStore::saveSession(session_) ? Error::Ok : Error::SdCard;
+  return persistAccount() ? Error::Ok : Error::SdCard;
 }
 
 Error Operation::fetchBrowseOnce() {
@@ -2717,9 +2800,26 @@ Error Operation::fetchBrowseOnce() {
   }
   if (length <= 0 || static_cast<size_t>(length) >= kUrlSize) return Error::Protocol;
 
+  const char* managedKind = "popular";
+  switch (browseKind_) {
+    case WeReadBrowse::Kind::PopularHighlights:
+      break;
+    case WeReadBrowse::Kind::MyHighlights:
+      managedKind = "mine";
+      break;
+    case WeReadBrowse::Kind::PopularReviews:
+      managedKind = "reviews";
+      break;
+  }
+  char command[256];
+  snprintf(command, sizeof(command),
+           "{\"action\":\"browse\",\"book_id\":\"%s\",\"kind\":\"%s\",\"max_idx\":%u,\"sync_key\":%llu}", book_.bookId,
+           managedKind, unsigned(browseCursor_.maxIdx), static_cast<unsigned long long>(browseCursor_.syncKey));
   Error error =
-      requestOnce("GET", path, nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_, cookie_, sizeof(cookie_),
-                  url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_) - kUrlSize, &bookSession_);
+      managedMode_
+          ? managedRequestOnce(managed_, command, sink, responseStatus_, ioBuffer_, sizeof(ioBuffer_))
+          : requestOnce("GET", path, nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_, cookie_,
+                        sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_) - kUrlSize, &bookSession_);
   if (error != Error::Ok && parser.storageFailed()) error = Error::SdCard;
   if (error != Error::Ok) {
     LOG_ERR("WR", "browse request failed: kind=%u page=%u status=%d error=%u", static_cast<unsigned>(browseKind_),
@@ -2730,7 +2830,7 @@ Error Operation::fetchBrowseOnce() {
     return Error::SessionExpired;
   }
   if (responseStatus_ != 200 || parser.errorCode() != 0) return Error::Protocol;
-  if (!WeReadStore::saveSession(session_)) return Error::SdCard;
+  if (!persistAccount()) return Error::SdCard;
 
   const size_t kind = WeReadBrowse::kindIndex(browseKind_);
   if (browseManifest_.recordCounts[kind] > UINT32_MAX - parser.count()) return Error::Protocol;
@@ -2789,9 +2889,13 @@ Error Operation::fetchTocOnce() {
   const int bodySize =
       snprintf(reinterpret_cast<char*>(ioBuffer_), sizeof(ioBuffer_), "{\"bookIds\":[\"%s\"]}", book_.bookId);
   if (bodySize <= 0 || static_cast<size_t>(bodySize) >= sizeof(ioBuffer_)) return Error::Protocol;
-  const Error error = requestOnce("POST", "/web/book/chapterInfos", ioBuffer_, static_cast<size_t>(bodySize), &session_,
-                                  kDefaultReferer, sink, responseStatus_, cookie_, sizeof(cookie_), url_, sizeof(url_),
-                                  ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+  char command[128];
+  snprintf(command, sizeof(command), "{\"action\":\"catalog\",\"book_id\":\"%s\"}", book_.bookId);
+  const Error error = managedMode_
+                          ? managedRequestOnce(managed_, command, sink, responseStatus_, ioBuffer_, sizeof(ioBuffer_))
+                          : requestOnce("POST", "/web/book/chapterInfos", ioBuffer_, static_cast<size_t>(bodySize),
+                                        &session_, kDefaultReferer, sink, responseStatus_, cookie_, sizeof(cookie_),
+                                        url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
   if (error != Error::Ok) {
     context.writer.abort();
     return error;
@@ -2821,9 +2925,13 @@ Error Operation::fetchProgressOnce(const bool bypassCache) {
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(suffix)) return Error::Protocol;
     referer_ += suffix;
   }
+  char command[128];
+  snprintf(command, sizeof(command), "{\"action\":\"progress\",\"book_id\":\"%s\"}", book_.bookId);
   const Error error =
-      requestOnce("GET", referer_.c_str(), nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_, cookie_,
-                  sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+      managedMode_
+          ? managedRequestOnce(managed_, command, sink, responseStatus_, ioBuffer_, sizeof(ioBuffer_))
+          : requestOnce("GET", referer_.c_str(), nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_, cookie_,
+                        sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
   if (error != Error::Ok) return error;
   if (responseStatus_ == 401 || responseStatus_ == 403 || parser.errorCode() == -2012) {
     return Error::SessionExpired;
@@ -2832,7 +2940,7 @@ Error Operation::fetchProgressOnce(const bool bypassCache) {
     return Error::Protocol;
   }
   progressSyncResult_.remote = parser.progress();
-  return WeReadStore::saveSession(session_) ? Error::Ok : Error::SdCard;
+  return persistAccount() ? Error::Ok : Error::SdCard;
 }
 
 float Operation::normalizedRemoteProgress() const {
@@ -2859,6 +2967,7 @@ bool Operation::sameRemotePosition() const {
 }
 
 bool Operation::remoteAppIdMatchesLocal() const {
+  if (managedMode_) return true;  // Backend verified the requested logical position.
   const auto& remote = progressSyncResult_.remote;
   if (!remote.hasAppId) return false;
   char localAppId[64];
@@ -2876,6 +2985,11 @@ void Operation::persistInitialProgress() {
 }
 
 Error Operation::decideProgress() {
+  if (managedMode_ && Storage.exists((bookDir_ + "/managed-progress.part").c_str())) {
+    const Error pending = sendProgressOnce(true);
+    if (pending != Error::Ok) return pending;
+  }
+
   const float remoteFraction = normalizedRemoteProgress();
   progressSyncResult_.remote.percent = remoteFraction * 100.0f;
   bool preciseLocal = false;
@@ -2921,11 +3035,16 @@ Error Operation::decideProgress() {
       break;
   }
   if (!makeReaderReferer(book_.bookId, chapter_.chapterUid, referer_)) return Error::Unavailable;
+  if (managedMode_) {
+    progressUploadStartedAt_ = progressSyncResult_.remote.updateTime;
+    return Error::Ok;
+  }
   progressUploadStartedAt_ = TimeUtils::getCurrentValidTimestamp();
   return progressUploadStartedAt_ == 0 ? Error::Clock : Error::Ok;
 }
 
 Error Operation::fetchProgressReaderOnce() {
+  if (managedMode_) return Error::Ok;  // The backend prepares and signs position writes.
   const size_t hostLength = strlen(kHost);
   if (referer_.compare(0, hostLength, kHost) != 0) return Error::Protocol;
   // Image downloads and login are inactive here; reuse their fixed scratch buffers.
@@ -2943,6 +3062,47 @@ Error Operation::fetchProgressReaderOnce() {
 }
 
 Error Operation::sendProgressOnce(const bool report) {
+  if (managedMode_) {
+    if (!report) return Error::Ok;
+    char command[384];
+    const int n =
+        snprintf(command, sizeof(command),
+                 "{\"book_id\":\"%s\",\"chapter_uid\":\"%s\",\"chapter_idx\":%u,\"chapter_offset\":%u,\"progress\":%u,"
+                 "\"expected_update_time\":%u}",
+                 book_.bookId, chapter_.chapterUid, unsigned(chapter_.chapterIdx), unsigned(progressChapterOffset_),
+                 unsigned(progressSyncInput_.localFraction * 100.0f), unsigned(progressSyncResult_.remote.updateTime));
+    if (n <= 0 || size_t(n) >= sizeof(command) || !progressSyncResult_.remote.hasUpdateTime) return Error::Unavailable;
+    // One per-book outbox keeps the identical logical position across lost
+    // receipts. It is never replaced by a newly fetched remote timestamp.
+    const std::string pending = bookDir_ + "/managed-progress.part";
+    if (Storage.exists(pending.c_str())) {
+      HalFile file;
+      if (!Storage.openFileForRead("WRManaged", pending, file)) return Error::SdCard;
+      auto size = file.fileSize64();
+      if (!size || size >= sizeof(command) || file.read(reinterpret_cast<uint8_t*>(command), size) != int(size))
+        return Error::SdCard;
+      command[size] = 0;
+    } else {
+      HalFile file;
+      if (!Storage.openFileForWrite("WRManaged", pending, file) ||
+          file.write(reinterpret_cast<const uint8_t*>(command), size_t(n)) != size_t(n))
+        return Error::SdCard;
+      file.flush();
+    }
+    ManagedWeReadClient::Metadata metadata;
+    if (!managed_.metadata("/api/v2/progress-jobs", reinterpret_cast<const uint8_t*>(command), strlen(command),
+                           ioBuffer_, sizeof(ioBuffer_), metadata))
+      return Error::Unavailable;
+    if (strcmp(metadata.book, book_.bookId)) return Error::Unavailable;
+    if (!strcmp(metadata.state, "conflict")) {
+      // A conflict is durable evidence that no position write was admitted.
+      // Clear only that refused outbox; a fresh explicit comparison can choose
+      // a direction. Ambiguous/running jobs are never discarded here.
+      return Storage.remove(pending.c_str()) ? Error::Unavailable : Error::SdCard;
+    }
+    if (strcmp(metadata.state, "verified")) return Error::Unavailable;
+    return Storage.remove(pending.c_str()) ? Error::Ok : Error::SdCard;
+  }
   size_t bodySize = 0;
   if (!makeProgressBody(book_.bookId, chapter_, progressChapterOffset_, progressSyncInput_.localFraction, psvts_,
                         imageHost_, previousVid_, report, reinterpret_cast<char*>(ioBuffer_), sizeof(ioBuffer_), url_,
@@ -2965,10 +3125,23 @@ Error Operation::sendProgressOnce(const bool report) {
       (!emptyBody && (!context.rootClosed || (!context.succeed && !context.hasSyncKey)))) {
     return Error::Protocol;
   }
-  return WeReadStore::saveSession(session_) ? Error::Ok : Error::SdCard;
+  return persistAccount() ? Error::Ok : Error::SdCard;
 }
 
 Error Operation::fetchReaderOnce() {
+  if (managedMode_) {
+    char command[192];
+    snprintf(command, sizeof(command), "{\"action\":\"context\",\"book_id\":\"%s\",\"chapter_uid\":\"%s\"}",
+             book_.bookId, chapter_.chapterUid);
+    ManagedWeReadClient::Metadata metadata;
+    if (!managed_.metadata("/api/v2/reading", reinterpret_cast<const uint8_t*>(command), strlen(command), ioBuffer_,
+                           sizeof(ioBuffer_), metadata) ||
+        strlen(metadata.context) != 32 || !isSafeProtocolToken(metadata.context))
+      return Error::Unavailable;
+    memcpy(loginUid_, metadata.context, sizeof(metadata.context));
+    strcpy(psvts_, "managed");
+    return Error::Ok;
+  }
   const size_t hostLength = strlen(kHost);
   if (referer_.compare(0, hostLength, kHost) != 0) return Error::Protocol;
   WeReadProtocol::PsvtsExtractor context(psvts_, sizeof(psvts_));
@@ -2986,6 +3159,19 @@ Error Operation::fetchReaderOnce() {
 }
 
 Error Operation::fetchShardOnce(const char* endpoint, const std::string& destination) {
+  if (managedMode_) {
+    if (strlen(loginUid_) != 32) return Error::Unavailable;
+    const char* kind = strrchr(endpoint, '/');
+    if (!kind) return Error::Protocol;
+    char command[256];
+    snprintf(command, sizeof(command),
+             "{\"action\":\"shard\",\"book_id\":\"%s\",\"context_id\":\"%s\",\"kind\":\"%s\"}", book_.bookId, loginUid_,
+             kind + 1);
+    FileSink context;
+    context.path = &destination;
+    ResponseSink sink{&context, resetFile, writeFile, finishFile, Error::SdCard};
+    return managedRequestOnce(managed_, command, sink, responseStatus_, ioBuffer_, sizeof(ioBuffer_));
+  }
   size_t bodySize = 0;
   if (!makeContentBody(book_.bookId, chapter_.chapterUid, psvts_, reinterpret_cast<char*>(ioBuffer_), sizeof(ioBuffer_),
                        bodySize)) {
@@ -3099,7 +3285,7 @@ Operation::Event Operation::finishWholeBook(const std::string& source) {
   }
   if (!persistCoverOverride()) LOG_ERR("WR", "Failed to persist EPUB cover override");
   cleanupTransient(bookDir_, "");
-  if (!WeReadStore::saveSession(session_)) return fail(Error::SdCard);
+  if (!persistAccount()) return fail(Error::SdCard);
   persistInitialProgress();
   if (indexFile_.isOpen()) indexFile_.close();
   phase_ = Phase::Complete;
@@ -3196,7 +3382,7 @@ Error Operation::requestImage(WeReadStore::ImageRecord& image, WeReadStore::Imag
                                          {"Referer", kDefaultReferer}};
   size_t headerCount = 3;
   cookie_[0] = '\0';
-  if (isWereadUrl(referer_.c_str())) {
+  if (!managedMode_ && isWereadUrl(referer_.c_str())) {
     if (!session_.cookieHeader(cookie_, sizeof(cookie_))) {
       return Error::Protocol;
     }
@@ -3234,8 +3420,18 @@ Error Operation::requestImage(WeReadStore::ImageRecord& image, WeReadStore::Imag
     }
     memcpy(url_, value, length + 1);
   };
+  char managedImage[256];
+  char resource[65];
+  if (managedMode_) {
+    if (!ManagedWeReadClient::resourceID(referer_.c_str(), resource)) return Error::Protocol;
+    snprintf(managedImage, sizeof(managedImage), "{\"action\":\"asset\",\"book_id\":\"%s\",\"resource_id\":\"%s\"}",
+             book_.bookId, resource);
+  }
   const WeReadHttpClient::Result result =
-      WeReadHttpClient::request(bookSession_, referer_.c_str(), options, onData, onHeader, responseStatus_);
+      managedMode_
+          ? managed_.request("/api/v2/reading", reinterpret_cast<const uint8_t*>(managedImage), strlen(managedImage),
+                             ioBuffer_, sizeof(ioBuffer_), onData, responseStatus_)
+          : WeReadHttpClient::request(bookSession_, referer_.c_str(), options, onData, onHeader, responseStatus_);
   if (file.file.isOpen()) finishFile(&file);
 
   WeReadProtocol::ImageType magicType = WeReadProtocol::ImageType::None;
@@ -3902,8 +4098,9 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       const bool samePosition = sameRemotePosition();
       const bool sameAppId = remoteAppIdMatchesLocal();
       const auto& remote = progressSyncResult_.remote;
-      const ProgressSyncOutcome outcome = progressVerification(
-          samePosition, remote.hasAppId, sameAppId, remote.hasUpdateTime, remote.updateTime, progressUploadStartedAt_);
+      const ProgressSyncOutcome outcome =
+          progressVerification(samePosition, managedMode_ || remote.hasAppId, sameAppId, remote.hasUpdateTime,
+                               remote.updateTime, progressUploadStartedAt_);
       LOG_INF("WR", "progress verify: attempt=%u same=%u time=%u sameApp=%u outcome=%u",
               static_cast<unsigned>(progressVerifyAttempts_), static_cast<unsigned>(samePosition),
               static_cast<unsigned>(remote.updateTime), static_cast<unsigned>(sameAppId),
@@ -3976,7 +4173,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
         return Event::None;
       }
       if (!makeReaderReferer(book_.bookId, chapter_.chapterUid, referer_)) return fail(Error::Protocol);
-      if (!psvts_[0]) {
+      if (!managedMode_ && !psvts_[0]) {
         if (!TimeUtils::isClockValid()) {
           if (!WeReadHttpClient::networkReady()) return fail(Error::Network);
           // SNTP and TLS both hold network buffers. A cold-clock download
@@ -4115,6 +4312,10 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       return decodeChapter(false);
 
     case Phase::AdvanceChapter:
+      if (managedMode_) {
+        psvts_[0] = 0;
+        loginUid_[0] = 0;
+      }
       guardBookSession("progress");
       ++chapterIndex_;
       progressCompleted_ = chapterIndex_ - firstChapterIndex_;
@@ -4161,7 +4362,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
                                       sizeof(ioBuffer_), finalPartPath_, callback, callbackContext);
       logMemory("package end");
       if (error != Error::Ok) return fail(error);
-      if (!WeReadStore::saveSession(session_)) return fail(Error::SdCard);
+      if (!persistAccount()) return fail(Error::SdCard);
       WeReadStore::BookOptions previousOptions;
       const bool hadPreviousOptions = WeReadStore::loadBookOptions(bookDir_, previousOptions);
       WeReadStore::BookOptions savedOptions;
@@ -4203,12 +4404,19 @@ void DeviceTimeTransport::reset() {
     auto* p = static_cast<volatile uint8_t*>(data);
     while (length--) *p++ = 0;
   };
-  wipe(cookie_, sizeof(cookie_)); wipe(ps_, sizeof(ps_)); wipe(pc_, sizeof(pc_));
-  wipe(token_, sizeof(token_)); wipe(body_, sizeof(body_)); wipe(io_, sizeof(io_));
+  wipe(cookie_, sizeof(cookie_));
+  wipe(ps_, sizeof(ps_));
+  wipe(pc_, sizeof(pc_));
+  wipe(token_, sizeof(token_));
+  wipe(body_, sizeof(body_));
+  wipe(io_, sizeof(io_));
   query_.clear();
   querying_ = false;
-  identity_ = {}; remote_ = {}; chapter_ = {};
-  preparedAt_ = 0; preparedMs_ = 0;
+  identity_ = {};
+  remote_ = {};
+  chapter_ = {};
+  preparedAt_ = 0;
+  preparedMs_ = 0;
   enteredAtMs_ = 0;
   reportEvidence_ = {};
   referer_.clear();
@@ -4220,37 +4428,43 @@ uint32_t DeviceTimeTransport::monotonicMs() const { return millis(); }
 bool DeviceTimeTransport::fresh() const {
   const auto now = epochSeconds();
   return preparedAt_ && now >= preparedAt_ && now - preparedAt_ <= 30 &&
-         uint32_t(monotonicMs() - preparedMs_) <= 30000 &&
-         !strcmp(session_.vid, identity_.account);
+         uint32_t(monotonicMs() - preparedMs_) <= 30000 && !strcmp(session_.vid, identity_.account);
 }
 
 bool DeviceTimeTransport::retryablePreparation() const {
   using D = WeReadTime::Diagnostic::Stage;
   return phase_ == Phase::Failed && !reportEvidence_.attempted &&
-      (diagnostic_.stage == D::ReaderRequest || diagnostic_.stage == D::ProgressRequest) &&
-      diagnostic_.error == static_cast<int>(Error::Network) && diagnostic_.network.transientReadFailure();
+         (diagnostic_.stage == D::ReaderRequest || diagnostic_.stage == D::ProgressRequest) &&
+         diagnostic_.error == static_cast<int>(Error::Network) && diagnostic_.network.transientReadFailure();
 }
 
 WeReadTime::TimeTransport::Read DeviceTimeTransport::prepare(const WeReadTime::Identity& identity) {
   using D = WeReadTime::Diagnostic::Stage;
-  if (phase_ != Phase::Login && (strcmp(identity.account, identity_.account) ||
-      strcmp(identity.book, identity_.book) || strcmp(identity.source, identity_.source) ||
-      identity.day != identity_.day)) { diagnostic_ = {D::Identity}; phase_ = Phase::Failed; return Read::Failed; }
+  if (phase_ != Phase::Login && (strcmp(identity.account, identity_.account) || strcmp(identity.book, identity_.book) ||
+                                 strcmp(identity.source, identity_.source) || identity.day != identity_.day)) {
+    diagnostic_ = {D::Identity};
+    phase_ = Phase::Failed;
+    return Read::Failed;
+  }
   switch (phase_) {
     case Phase::Login: {
       diagnostic_ = {D::Login};
       WeReadTime::Ledger validation;
       if (!validation.bind(identity.account, identity.book, identity.source, identity.day) ||
           !WeReadStore::loadSession(session_) || !session_.valid() || strcmp(session_.vid, identity.account)) {
-        phase_ = Phase::Failed; return Read::Failed;
+        phase_ = Phase::Failed;
+        return Read::Failed;
       }
       identity_ = identity;
       if (!WeReadProtocol::encodeId(identity.book, md5Hex, url_, sizeof(url_))) {
         diagnostic_ = {D::ReaderId};
-        phase_ = Phase::Failed; return Read::Failed;
+        phase_ = Phase::Failed;
+        return Read::Failed;
       }
       referer_.reserve(256);
-      referer_ = kHost; referer_ += "/web/reader/"; referer_ += url_;
+      referer_ = kHost;
+      referer_ += "/web/reader/";
+      referer_ += url_;
       phase_ = Phase::Reader;
       return Read::Pending;
     }
@@ -4259,21 +4473,22 @@ WeReadTime::TimeTransport::Read DeviceTimeTransport::prepare(const WeReadTime::I
       ResponseSink sink{&context, resetReaderContext, extractReaderContext, noOpFinish, Error::Protocol};
       int status = 0;
       WeReadHttpClient::NetworkDiagnostic network;
-      const auto error = requestOnce("GET", referer_.c_str() + strlen(kHost), nullptr, 0, &session_,
-                                    referer_.c_str(), sink, status, cookie_, sizeof(cookie_), url_, sizeof(url_),
-                                    io_, sizeof(io_), nullptr, true, &network);
+      const auto error =
+          requestOnce("GET", referer_.c_str() + strlen(kHost), nullptr, 0, &session_, referer_.c_str(), sink, status,
+                      cookie_, sizeof(cookie_), url_, sizeof(url_), io_, sizeof(io_), nullptr, true, &network);
       // Unlike position-only sync there is NO guessed signing-token fallback.
       diagnostic_ = {D::ReaderRequest, static_cast<int>(error), status};
       diagnostic_.network = network;
       if (error == Error::Ok && status == 200) {
         diagnostic_ = {D::ReaderSignature, 0, status,
-          (context.psvts.complete() ? 1 : 0) | (context.token.complete() ? 2 : 0) |
-          (isSafeProtocolToken(ps_) ? 4 : 0) | (isSafeProtocolToken(token_) ? 8 : 0)};
+                       (context.psvts.complete() ? 1 : 0) | (context.token.complete() ? 2 : 0) |
+                           (isSafeProtocolToken(ps_) ? 4 : 0) | (isSafeProtocolToken(token_) ? 8 : 0)};
       }
-      if (error != Error::Ok || status != 200 || strcmp(session_.vid, identity_.account) ||
-          !context.psvts.complete() || !context.token.complete() || !isSafeProtocolToken(ps_) ||
-          !isSafeProtocolToken(token_) || (pc_[0] && !isSafeProtocolToken(pc_))) {
-        phase_ = Phase::Failed; return Read::Failed;
+      if (error != Error::Ok || status != 200 || strcmp(session_.vid, identity_.account) || !context.psvts.complete() ||
+          !context.token.complete() || !isSafeProtocolToken(ps_) || !isSafeProtocolToken(token_) ||
+          (pc_[0] && !isSafeProtocolToken(pc_))) {
+        phase_ = Phase::Failed;
+        return Read::Failed;
       }
       phase_ = Phase::Progress;
       return Read::Pending;
@@ -4285,24 +4500,27 @@ WeReadTime::TimeTransport::Read DeviceTimeTransport::prepare(const WeReadTime::I
       if (!parser) {
         diagnostic_ = {D::ProgressMemory};
         LOG_ERR("WRTime", "OOM: progress parser (%u bytes)", static_cast<unsigned>(sizeof(*parser)));
-        phase_ = Phase::Failed; return Read::Failed;
+        phase_ = Phase::Failed;
+        return Read::Failed;
       }
       const int n = snprintf(body_, sizeof(body_), "/web/book/getProgress?bookId=%s&_=%llu", identity_.book,
                              static_cast<unsigned long long>(epochSeconds()));
-      if (n <= 0 || size_t(n) >= sizeof(body_)) { phase_ = Phase::Failed; return Read::Failed; }
+      if (n <= 0 || size_t(n) >= sizeof(body_)) {
+        phase_ = Phase::Failed;
+        return Read::Failed;
+      }
       ResponseSink sink{parser.get(), resetRemoteProgress, feedRemoteProgress, noOpFinish, Error::Protocol};
       int status = 0;
       WeReadHttpClient::NetworkDiagnostic network;
-      const auto error = requestOnce("GET", body_, nullptr, 0, &session_, referer_.c_str(), sink, status,
-                                    cookie_, sizeof(cookie_), url_, sizeof(url_), io_, sizeof(io_), nullptr, true, &network);
+      const auto error = requestOnce("GET", body_, nullptr, 0, &session_, referer_.c_str(), sink, status, cookie_,
+                                     sizeof(cookie_), url_, sizeof(url_), io_, sizeof(io_), nullptr, true, &network);
       diagnostic_ = {D::ProgressRequest, static_cast<int>(error), status};
       diagnostic_.network = network;
-      if (error == Error::Ok && status == 200)
-        diagnostic_ = {D::ProgressPayload, parser->errorCode(), status};
-      if (error != Error::Ok || status != 200 || strcmp(session_.vid, identity_.account) ||
-          parser->errorCode() || !parser->complete() || !parser->progress().hasChapterOffset ||
-          !std::isfinite(parser->progress().percent)) {
-        phase_ = Phase::Failed; return Read::Failed;
+      if (error == Error::Ok && status == 200) diagnostic_ = {D::ProgressPayload, parser->errorCode(), status};
+      if (error != Error::Ok || status != 200 || strcmp(session_.vid, identity_.account) || parser->errorCode() ||
+          !parser->complete() || !parser->progress().hasChapterOffset || !std::isfinite(parser->progress().percent)) {
+        phase_ = Phase::Failed;
+        return Read::Failed;
       }
       remote_ = parser->progress();
       parser.reset();
@@ -4310,28 +4528,55 @@ WeReadTime::TimeTransport::Read DeviceTimeTransport::prepare(const WeReadTime::I
       uint32_t count = 0;
       if (!WeReadStore::openToc(WeReadStore::tocPath(identity_.book), toc, count)) {
         diagnostic_ = {D::TocOpen};
-        phase_ = Phase::Failed; return Read::Failed;
+        phase_ = Phase::Failed;
+        return Read::Failed;
       }
       bool found = false;
       // Scan into the reusable chapter workspace; no vector of chapter records.
       for (uint32_t i = 0; i < count; ++i) {
-        if (!WeReadStore::readTocRecord(toc, i, chapter_)) { diagnostic_ = {D::TocRead}; phase_ = Phase::Failed; return Read::Failed; }
-        if (!strcmp(chapter_.chapterUid, remote_.chapterUid)) { found = true; break; }
+        if (!WeReadStore::readTocRecord(toc, i, chapter_)) {
+          diagnostic_ = {D::TocRead};
+          phase_ = Phase::Failed;
+          return Read::Failed;
+        }
+        if (!strcmp(chapter_.chapterUid, remote_.chapterUid)) {
+          found = true;
+          break;
+        }
       }
-      if (!found) { diagnostic_ = {D::ChapterMissing}; phase_ = Phase::Failed; return Read::Failed; }
-      if (remote_.percent < 0 || remote_.percent > 100) { diagnostic_ = {D::ProgressRange}; phase_ = Phase::Failed; return Read::Failed; }
+      if (!found) {
+        diagnostic_ = {D::ChapterMissing};
+        phase_ = Phase::Failed;
+        return Read::Failed;
+      }
+      if (remote_.percent < 0 || remote_.percent > 100) {
+        diagnostic_ = {D::ProgressRange};
+        phase_ = Phase::Failed;
+        return Read::Failed;
+      }
       if (std::fabs(remote_.percent - std::round(remote_.percent)) > 0.0001f) {
-        diagnostic_ = {D::ProgressFraction}; phase_ = Phase::Failed; return Read::Failed;
+        diagnostic_ = {D::ProgressFraction};
+        phase_ = Phase::Failed;
+        return Read::Failed;
       }
-      if (!WeReadStore::saveSession(session_)) { diagnostic_ = {D::SessionSave}; phase_ = Phase::Failed; return Read::Failed; }
+      if (!WeReadStore::saveSession(session_)) {
+        diagnostic_ = {D::SessionSave};
+        phase_ = Phase::Failed;
+        return Read::Failed;
+      }
       // No local approximate chapter/offset is substituted for the cloud anchor.
-      preparedAt_ = epochSeconds(); preparedMs_ = monotonicMs();
+      preparedAt_ = epochSeconds();
+      preparedMs_ = monotonicMs();
       phase_ = preparedAt_ ? Phase::Ready : Phase::Failed;
       diagnostic_ = {preparedAt_ ? D::None : D::Clock};
       return phase_ == Phase::Ready ? Read::Ready : Read::Failed;
     }
-    case Phase::Ready: return Read::Ready;
-    case Phase::Entered: case Phase::Reported: case Phase::Failed: return Read::Failed;
+    case Phase::Ready:
+      return Read::Ready;
+    case Phase::Entered:
+    case Phase::Reported:
+    case Phase::Failed:
+      return Read::Failed;
   }
   return Read::Failed;
 }
@@ -4342,7 +4587,10 @@ WeReadTime::TimeTransport::Read DeviceTimeTransport::snapshot(WeReadTime::Accoun
   if (phase_ != Phase::Ready && phase_ != Phase::Reported) return Read::Failed;
   if (!querying_) {
     if (strcmp(session_.vid, identity_.account) || !session_.cookieHeader(cookie_, sizeof(cookie_)) ||
-        !query_.begin(cookie_, epochSeconds())) { diagnostic_.error = static_cast<int>(query_.result()); return Read::Failed; }
+        !query_.begin(cookie_, epochSeconds())) {
+      diagnostic_.error = static_cast<int>(query_.result());
+      return Read::Failed;
+    }
     querying_ = true;
   }
   const auto state = query_.step();
@@ -4391,20 +4639,29 @@ WeReadTime::TimeTransport::Write DeviceTimeTransport::post(bool timed, uint32_t 
     }
   }
   size_t length = 0;
-  if (!makeProgressBody(identity_.book, chapter_, remote_.chapterOffset, remote_.percent / 100.0f,
-                        ps_, pc_, token_, timed, body_, sizeof(body_), url_, sizeof(url_), length,
-                        timed ? seconds : 0, static_cast<uint32_t>(std::round(remote_.percent)))) {
+  if (!makeProgressBody(identity_.book, chapter_, remote_.chapterOffset, remote_.percent / 100.0f, ps_, pc_, token_,
+                        timed, body_, sizeof(body_), url_, sizeof(url_), length, timed ? seconds : 0,
+                        static_cast<uint32_t>(std::round(remote_.percent)))) {
     if (timed) reportEvidence_.guard = Guard::Body;
     return Write::Unknown;
   }
-  struct AckSink { char* bytes; size_t size; } ack{acknowledgement_, 0};
-  ResponseSink sink{
-      &ack, [](void* raw) { static_cast<AckSink*>(raw)->size = 0; return true; },
-      [](void* raw, const uint8_t* data, size_t size) {
-        auto& out = *static_cast<AckSink*>(raw);
-        if (size > 512 - out.size) return false;
-        memcpy(out.bytes + out.size, data, size); out.size += size; return true;
-      }, noOpFinish, Error::Protocol};
+  struct AckSink {
+    char* bytes;
+    size_t size;
+  } ack{acknowledgement_, 0};
+  ResponseSink sink{&ack,
+                    [](void* raw) {
+                      static_cast<AckSink*>(raw)->size = 0;
+                      return true;
+                    },
+                    [](void* raw, const uint8_t* data, size_t size) {
+                      auto& out = *static_cast<AckSink*>(raw);
+                      if (size > 512 - out.size) return false;
+                      memcpy(out.bytes + out.size, data, size);
+                      out.size += size;
+                      return true;
+                    },
+                    noOpFinish, Error::Protocol};
   int status = 0;
   const uint32_t requestStartMs = monotonicMs();
   if (timed) {
@@ -4416,9 +4673,9 @@ WeReadTime::TimeTransport::Write DeviceTimeTransport::post(bool timed, uint32_t 
     lastReportStartMs_ = requestStartMs;
     hasLastReport_ = true;
   }
-  const auto error = requestOnce("POST", "/web/book/read", reinterpret_cast<const uint8_t*>(body_), length,
-                                &session_, referer_.c_str(), sink, status, cookie_, sizeof(cookie_),
-                                url_, sizeof(url_), io_, sizeof(io_), nullptr, true);
+  const auto error = requestOnce("POST", "/web/book/read", reinterpret_cast<const uint8_t*>(body_), length, &session_,
+                                 referer_.c_str(), sink, status, cookie_, sizeof(cookie_), url_, sizeof(url_), io_,
+                                 sizeof(io_), nullptr, true);
   WeReadTime::AckObservation observation;
   const bool bodyAccepted = WeReadTime::acceptedTimeAck(ack.bytes, ack.size, !timed, &observation);
   const bool accepted = error == Error::Ok && status == 200 && !strcmp(session_.vid, identity_.account) && bodyAccepted;
@@ -4435,8 +4692,12 @@ WeReadTime::TimeTransport::Write DeviceTimeTransport::post(bool timed, uint32_t 
   diagnostic_.detail = accepted ? 1 : 0;
   LOG_INF("WRTime", "Timed transport phase=%s http=%d accepted=%u; no retry, credit unverified",
           timed ? "report" : "entry", status, static_cast<unsigned>(accepted));
-  if (timed) phase_ = Phase::Reported;
-  else if (accepted) { phase_ = Phase::Entered; enteredAtMs_ = monotonicMs(); }
+  if (timed)
+    phase_ = Phase::Reported;
+  else if (accepted) {
+    phase_ = Phase::Entered;
+    enteredAtMs_ = monotonicMs();
+  }
   return accepted ? Write::Accepted : Write::Unknown;
 }
 

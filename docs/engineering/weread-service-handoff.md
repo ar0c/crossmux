@@ -92,6 +92,11 @@ version-first exported image and its SHA-256 before upload.
 The local device status is the last explicit readback. To see newer cloud
 credit, open the service management page or initiate another device sync. The
 server applies its own pacing and freezes ambiguous cloud writes.
+The sync screen identifies service mode from the first published worker status.
+While a handoff is running, it says the complete server receipt is pending.
+Only a complete, audited handoff says the server durably accepted the record
+and that the reader may leave the page; an empty run says no time was handed
+off. Cloud credit remains a separate count.
 Cloudflare may still challenge clients outside the permitted network region;
 the device stops with its reservation intact, without changing User-Agent to
 impersonate a browser or weakening TLS. The client identifies itself as
@@ -100,3 +105,61 @@ impersonate a browser or weakening TLS. The client identifies itself as
 Build and native tests do not prove physical-device Wi-Fi/TLS/SD operation.
 After installing the package, verify one genuinely new, unsent reading range,
 the server's durable receipt, device disconnect, and later exact cloud credit.
+
+## Unified managed reading (development branch)
+
+`codex/weread-managed-session` adds backend-managed shelf, detail, catalog,
+notes/reviews, content context/shards and registered images. The device requires
+`managed_reading_v1` from `/api/v2/device/status` with exact account/device
+identity. Enable it separately with `WESYNC_MANAGED_READING=true` on the backend;
+the default is disabled. No reading request can supply a URL or web credential.
+The existing three-line service configuration also supplies reading identity.
+After successful negotiation an identity-only `managed-account` marker blocks
+QR/direct fallback if configuration disappears. It does not replace or erase
+old session files, cached books or time ledgers. Reconcile old ownership before
+an account/device change; never clear a service ledger to resume direct uploads.
+
+`POST /api/v2/reading` uses closed logical actions (`shelf`, `detail`, `catalog`,
+`progress`, `browse`, `context`, `shard`, `asset`). Shelf pages stream at most 100
+books to one atomic IndexWriter. Each chapter obtains its own expiring context;
+book/generation/device mismatch fails closed. Existing SD shard validation,
+codec, chapter cache and EPUB packager are reused. There is no Range concatenation:
+failed transient `.part` files restart cleanly, and complete validated chapters
+may be reused. CDN resource IDs are SHA-256 of the normalized registered URL;
+the backend restricts hosts, checks image magic and forwards no cookie or bearer.
+Encrypted image registrations survive backend restart for seven days.
+
+Position writes use independent durable `/api/v2/progress-jobs`. Before POST the
+device flushes one identical logical position to `managed-progress.part`.
+Queued/uncertain/running states retain that outbox. Only exact bound verified
+receipts clear it. A durable conflict proves no write was admitted; clear that
+refused outbox and require a new explicit comparison/direction. The backend
+checks expected cloud update time, reserves before sending, omits `rt`, and
+read-backs position. Unknown writes freeze successors, activation and renewals;
+repeat submission performs only read-only recovery when uncertain. Position
+verification never means credited reading time; WRS1/guard contracts are unchanged.
+
+The client reuses the owning Operation's 4 KiB buffer and inactive legacy scratch;
+no new persistent heap buffer is allocated. Host sizeof(Operation)=8176 remains
+below its 8192-byte static budget. Transport and parser evidence (numbers only,
+no IDs, URL, body or credentials) is in `last-managed-diagnostic.json` and
+`last-managed-parser-diagnostic.json`; request_start survives a mid-request crash.
+
+### Local acceptance
+
+- `scripts/test_weread_managed_simulator.py --help`: production Operation,
+  parsers/codec/SD writers/EPUB packaging against synthetic loopback backend.
+- The explicit `simulator_managed_acceptance` profile injects transport only
+  under **both** SIMULATOR and CROSSPOINT_MANAGED_ACCEPTANCE; hardware images
+  cannot compile this path. Fixtures never use real credentials or cloud writes.
+- `scripts/test_weread_simulator.py`: two UI profiles' home/settings/sleep/wake
+  screenshots; Waveshare profile checks geometry, not hardware controller timing.
+- Backend `scripts/validate-managed-session.ps1 --help`: retained real login,
+  paused account/held sender, bounded readonly shelf/catalog/content/images and
+  notes/reviews. Private responses stay beside the private device file; public
+  report contains only counts, status and timing. No new QR or time/position POST.
+
+Local acceptance does not prove physical Wi-Fi/TLS/SD, external-device session
+coexistence, or real credited time. Keep production feature activation and
+physical acceptance as separate gates. The retained encrypted database/key,
+not an expired QR, is the reusable credential source.

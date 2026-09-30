@@ -47,11 +47,24 @@ def manifest_url(base_url, region, target_id, flavor):
     return urljoin(base_url, f'{target_id}/{name}')
 
 
-def build_index(manifest_root, region, base_url, updated_at, build_id, channel, release_notes=None):
+def build_index(manifest_root, region, base_url, updated_at, build_id, channel, release_notes=None, only_target=None, previous=None):
+    if only_target and (channel != 'nightly' or only_target not in targets_for(channel)):
+        raise ValueError('partial releases are Nightly-only and require a supported target')
     targets = {}
     crossmux_revisions = set()
     sdk_revisions = set()
     for target_id, target in targets_for(channel).items():
+        if only_target and target_id != only_target:
+            if channel != 'nightly' or not previous or previous.get('channel') != channel or previous.get('schemaVersion') != 1:
+                raise ValueError('partial Nightly requires a complete previous index')
+            entry = previous.get('targets', {}).get(target_id)
+            if not entry or entry.get('targetId') != target_id or any(entry.get(k) != target[k] for k in ('models','deviceSlug','boardTag','supportedChannels')):
+                raise ValueError('invalid preserved target')
+            variants = entry.get('variants', {})
+            if set(variants) != set(FLAVOR_TOKENS) or any(not str(v.get('manifestUrl','')).startswith('https://') or len(str(v.get('crossmuxSha',''))) != 40 for v in variants.values()):
+                raise ValueError('invalid preserved variants')
+            targets[target_id] = entry
+            continue
         manifests = {}
         for flavor in FLAVOR_TOKENS:
             matches = list(manifest_root.rglob(manifest_name(target_id, flavor)))
@@ -121,6 +134,8 @@ def main():
     parser.add_argument('--build-id', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--release-notes', type=Path)
+    parser.add_argument('--only-target', choices=TARGETS)
+    parser.add_argument('--previous-index', type=Path)
     args = parser.parse_args()
 
     release_notes = extract_notes(args.release_notes.read_text()) if args.release_notes else None
@@ -132,6 +147,8 @@ def main():
         args.build_id,
         args.channel,
         release_notes,
+        args.only_target,
+        read_json(args.previous_index) if args.previous_index else None,
     )
     args.output.write_text(json.dumps(index, indent=2) + '\n')
 

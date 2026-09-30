@@ -35,6 +35,7 @@ jobs:
       matrix: ${{ steps.release.outputs.matrix }}
       build_id: ${{ steps.release.outputs.build_id }}
       build_tag: ${{ steps.release.outputs.build_tag }}
+      target_args: ${{ steps.release.outputs.target_args }}
     steps:
       - uses: actions/checkout@v6
       - id: release
@@ -54,7 +55,12 @@ jobs:
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
           echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
           echo "build_tag=$build_id" >> "$GITHUB_OUTPUT"
-          echo "matrix=$(python3 scripts/package_nightly_target.py --channel "$channel" --matrix)" >> "$GITHUB_OUTPUT"
+          target_args=()
+          if [ "$channel" = nightly ] && [ "$GITHUB_REF_NAME" = codex/weread-managed-session ]; then
+            target_args=(--only-target waveshare_epaper_397)
+          fi
+          echo "target_args=${target_args[*]}" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(python3 scripts/package_nightly_target.py --channel "$channel" --matrix "${target_args[@]}")" >> "$GITHUB_OUTPUT"
 
   notes:
     needs: prepare
@@ -180,13 +186,15 @@ jobs:
           BUILD_ID: ${{ needs.prepare.outputs.build_id }}
           BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
         run: |
+          scope_args=(${{ needs.prepare.outputs.target_args }})
+          if [ ${#scope_args[@]} -gt 0 ]; then scope_args+=(--previous-index previous/global/release-index.json); fi
           notes_args=()
           [ ! -f notes/ota-notes.md ] || notes_args+=(--release-notes notes/ota-notes.md)
           python3 scripts/build_nightly_index.py \
             --channel "$CHANNEL" --manifests artifacts --region global \
             --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${BUILD_TAG}/" \
             --updated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --build-id "$BUILD_ID" \
-            --output release-index.json "${notes_args[@]}"
+            --output release-index.json "${notes_args[@]}" "${scope_args[@]}"
       - name: Publish immutable GitHub build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -231,7 +239,7 @@ jobs:
         run: |
           python3 scripts/verify_nightly_release.py --channel "$CHANNEL" \
             --index-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CHANNEL}/release-index.json?run=${GITHUB_RUN_ID}" \
-            --expected-sha "$GITHUB_SHA"
+            --expected-sha "$GITHUB_SHA" ${{ needs.prepare.outputs.target_args }}
 
   publish_stable_release:
     if: needs.prepare.outputs.channel == 'stable'
@@ -293,7 +301,7 @@ jobs:
         run: |
           python3 scripts/verify_nightly_release.py --channel "$CHANNEL" \
             --index-url "https://ooo.ar0c.com/releases/download/${CHANNEL}/release-index.json" \
-            --expected-sha "$GITHUB_SHA"
+            --expected-sha "$GITHUB_SHA" ${{ needs.prepare.outputs.target_args }}
 
   cleanup_github:
     if: needs.prepare.outputs.channel == 'nightly' && needs.publish_github.outputs.has_previous == 'true'

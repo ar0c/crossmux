@@ -18,9 +18,8 @@ constexpr const char* configPath = "/WeReadSync/service.conf";
 // No credentials, URLs, account IDs, or response bodies. The Wi-Fi file server
 // can expose this small failure record when USB serial is unavailable.
 void persistServiceDiagnostic(const char* phase, int result = -1, int http = 0,
-                              const WeReadHttpClient::NetworkDiagnostic* network = nullptr,
-                              unsigned parse = 0, unsigned bad = 0, unsigned depth = 0,
-                              unsigned roots = 0, unsigned fields = 0) {
+                              const WeReadHttpClient::NetworkDiagnostic* network = nullptr, unsigned parse = 0,
+                              unsigned bad = 0, unsigned depth = 0, unsigned roots = 0, unsigned fields = 0) {
   char record[320];
   const int n = std::snprintf(
       record, sizeof(record),
@@ -195,8 +194,8 @@ bool request(const char* path, const char* token, const char* body, Response& re
       {}, status);
   parser.feed(" ", 1);
   response.http = status;
-  const bool ok = result == WeReadHttpClient::Result::Ok && (status == 200 || status == 202) &&
-                  !parser.hasError() && !response.bad && response.depth == 0 && response.roots == 1;
+  const bool ok = result == WeReadHttpClient::Result::Ok && (status == 200 || status == 202) && !parser.hasError() &&
+                  !response.bad && response.depth == 0 && response.roots == 1;
   if (!ok) {
     persistServiceDiagnostic("request", int(result), status, &diagnostic, unsigned(parser.hasError()),
                              unsigned(response.bad), response.depth, response.roots, response.fields);
@@ -221,8 +220,10 @@ bool copyLine(char*& cursor, char* out, size_t cap) {
   return true;
 }
 }  // namespace
-bool ServiceClient::configured() { return Storage.exists(configPath); }
-bool ServiceClient::connect(const char* account) {
+bool ServiceClient::configured() {
+  return Storage.exists(configPath) || Storage.exists("/.crosspoint/weread/managed-account");
+}
+bool ServiceClient::configure(const char* account) {
   HalFile file;
   char content[256]{};
   if (!Storage.openFileForRead("WRSvc", configPath, file)) {
@@ -236,10 +237,14 @@ bool ServiceClient::connect(const char* account) {
   }
   char* cursor = content;
   if (!copyLine(cursor, account_, sizeof(account_)) || !copyLine(cursor, device_, sizeof(device_)) ||
-      !copyLine(cursor, token_, sizeof(token_)) || *cursor || std::strcmp(account_, account)) {
+      !copyLine(cursor, token_, sizeof(token_)) || *cursor || (account && std::strcmp(account_, account))) {
     persistServiceDiagnostic("config_parse");
     return false;
   }
+  return true;
+}
+bool ServiceClient::connect(const char* account) {
+  if (!configure(account)) return false;
   persistServiceDiagnostic("connect_start");
   Response r;
   if (!request("/api/v1/device", token_, nullptr, r)) return false;

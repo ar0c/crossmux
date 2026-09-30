@@ -151,3 +151,13 @@ reboot, and wrong-board rejection check on each board before claiming hardware
 acceptance. OTA uses the certificate-verified ESP HTTP path; the general
 wolfSSL downloader still uses `setInsecure()` for unrelated downloads. This
 does not provide signed metadata or a cryptographic rollback counter.
+
+### Managed-session development branch
+
+A Nightly workflow dispatch from `codex/weread-managed-session` packages only
+Waveshare 3.97. It requires the previous complete Nightly index and preserves
+X4 Pro's immutable manifest pointers exactly. Publish verification checks all
+preserved assets/hashes and requires the current SHA only for Waveshare. Retention
+keeps builds referenced by the previous index. On main or other ordinary release
+branches the canonical matrix applies again; supported devices are unchanged.
+Partial mode is Nightly-only and fails without a valid previous index.

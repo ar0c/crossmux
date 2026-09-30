@@ -52,6 +52,7 @@
 #include "util/ReadingGuideLine.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include <WeReadStore.h>
+#include <ManagedWeReadClient.h>
 #include <WeReadDeviceTimeSource.h>
 
 #include "activities/apps/weread/WeReadProgressSyncActivity.h"
@@ -411,7 +412,7 @@ bool EpubReaderActivity::loadBook() {
     auto session = makeUniqueNoThrow<WeReadStore::Session>();
     HalSystem::DeviceId device{};
     char source[64] = {};
-    if (!statsBook || !session || !WeReadStore::loadSession(*session) || !session->valid() ||
+    if (!statsBook || !session || !WeReadClient::ManagedWeReadClient::loadAccount(*session) ||
         !HalSystem::getDeviceId(device) ||
         !WeReadTime::deviceSource(device.data(), statsBook->bookId.c_str(), source) ||
         !READING_STATS.bindWeReadOwnedTime(session->vid, wereadBookId_, source)) {

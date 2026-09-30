@@ -520,7 +520,7 @@ void WeReadActivity::enterApp() {
   // This bounded 832-byte probe is gone before TLS and avoids a transient heap
   // allocation that could fragment the ESP32-C3 heap.
   WeReadStore::Session session;
-  const bool loggedIn = WeReadStore::loadSession(session);
+  const bool loggedIn = WeReadClient::ManagedWeReadClient::loadAccount(session);
   session.clear();
   if (loggedIn) {
     openShelf();
@@ -1964,6 +1964,7 @@ const char* WeReadActivity::errorMessage() const {
     case WeReadClient::Error::Network:
       return WiFi.status() == WL_CONNECTED ? tr(STR_WEREAD_HTTP_ERROR) : tr(STR_WEREAD_NO_WIFI);
     case WeReadClient::Error::Unavailable:
+      if(WeReadClient::ManagedWeReadClient::required())return tr(STR_WEREAD_MANAGED_UNAVAILABLE);
       return tr(STR_WEREAD_CACHE_NOT_AVAILABLE);
     case WeReadClient::Error::WholeBookOnly:
       return tr(STR_WEREAD_CACHE_WHOLE_BOOK_ONLY);

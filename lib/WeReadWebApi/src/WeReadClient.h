@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 
+#include "ManagedWeReadClient.h"
 #include "WeReadBrowse.h"
 #include "WeReadHttpClient.h"
 #include "WeReadProtocol.h"
@@ -376,6 +377,10 @@ class Operation {
   ProgressSyncMode progressSyncMode_ = ProgressSyncMode::Compare;
   ProgressSyncResult progressSyncResult_;
   WeReadStore::Session session_;
+  ManagedWeReadClient managed_;
+  bool managedMode_ = false;
+  bool loadAccount();
+  bool persistAccount();
   WeReadStore::BookRecord book_;
   std::unique_ptr<char[]> shelfCoverUrl_;
   WeReadStore::TocRecord chapter_;

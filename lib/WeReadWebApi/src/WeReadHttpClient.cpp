@@ -437,7 +437,9 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
                                     uint32_t& newConnections, uint32_t& reusedRequests) {
   status = -1;
   using Stage = WeReadHttpClient::NetworkDiagnostic::Stage;
-  const auto stage = [&](Stage value) { if (options.diagnostic) options.diagnostic->stage = value; };
+  const auto stage = [&](Stage value) {
+    if (options.diagnostic) options.diagnostic->stage = value;
+  };
   const auto failure = [&](int code) {
     if (options.diagnostic) {
       options.diagnostic->error = code;
@@ -653,6 +655,10 @@ Result request(const char* url, const RequestOptions& options, const DataCallbac
 
 Result requestVerified(const char* url, const RequestOptions& options, const DataCallback& onData,
                        const HeaderCallback& onHeader, int& status) {
+#if defined(SIMULATOR) && defined(CROSSPOINT_MANAGED_ACCEPTANCE)
+  extern Result acceptanceRequest(const char*, const RequestOptions&, const DataCallback&, const HeaderCallback&, int&);
+  return acceptanceRequest(url, options, onData, onHeader, status);
+#endif
   if (options.diagnostic) *options.diagnostic = {};
   if (!networkReady()) {
     if (options.diagnostic) options.diagnostic->stage = NetworkDiagnostic::Stage::Network;
@@ -663,8 +669,8 @@ Result requestVerified(const char* url, const RequestOptions& options, const Dat
   char host[128] = {};
   uint32_t connections = 0, reused = 0;
   const uint32_t started = millis();
-  const Result result = runRequest(url, options, onData, onHeader, status, client, host, sizeof(host),
-                                   connections, reused);
+  const Result result =
+      runRequest(url, options, onData, onHeader, status, client, host, sizeof(host), connections, reused);
   if (options.diagnostic) options.diagnostic->elapsedMs = uint32_t(millis() - started);
   cleanupClient(client);
   return result;

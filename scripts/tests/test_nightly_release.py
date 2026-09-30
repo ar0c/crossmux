@@ -279,6 +279,19 @@ class NightlyIndexTest(unittest.TestCase):
         for target_id in nightly_targets.targets_for(channel):
             self.write_pair(target_id, revision, sdk_revision, channel)
 
+    def test_partial_release_retains_other_device_and_requires_previous(self):
+        self.write_all_pairs(revision='c'*40)
+        old = build_nightly_index.build_index(self.root,'global','https://github.com/ar0c/crossmux/releases/download/nightly-build-old/','old','old','nightly')
+        for flavor in nightly_targets.FLAVOR_TOKENS:
+            (self.root/nightly_targets.manifest_name('xteink_x4_pro',flavor)).unlink()
+        self.write_pair('waveshare_epaper_397')
+        args=(self.root,'global','https://github.com/ar0c/crossmux/releases/download/nightly-build-new/','new','new','nightly')
+        with self.assertRaisesRegex(ValueError,'previous index'):
+            build_nightly_index.build_index(*args,only_target='waveshare_epaper_397')
+        new=build_nightly_index.build_index(*args,only_target='waveshare_epaper_397',previous=old)
+        self.assertEqual(new['targets']['xteink_x4_pro'],old['targets']['xteink_x4_pro'])
+        self.assertEqual(new['targets']['waveshare_epaper_397']['variants']['global']['crossmuxSha'],'a'*40)
+
     def test_builds_complete_index(self):
         self.write_all_pairs()
         index = build_nightly_index.build_index(
@@ -527,6 +540,20 @@ class PublishedNightlyTest(unittest.TestCase):
     def fetch(self, url):
         self.fetches[url] = self.fetches.get(url, 0) + 1
         return self.store[url]
+
+    def test_partial_publish_verifies_preserved_assets_and_new_waveshare_revision(self):
+        for flavor,pointer in self.index['targets']['xteink_x4_pro']['variants'].items():
+            pointer['crossmuxSha']=self.old_sha
+            url=pointer['manifestUrl']
+            manifest=json.loads(self.store[url]);manifest['crossmuxSha']=self.old_sha
+            self.store[url]=json.dumps(manifest).encode()
+        self.write_index()
+        with self.assertRaisesRegex(ValueError,'current revision'):
+            verify_nightly_release.verify_release(self.index_url,self.current_sha,'nightly',self.fetch)
+        result=verify_nightly_release.verify_release(self.index_url,self.current_sha,'nightly',self.fetch,only_target='waveshare_epaper_397')
+        self.assertEqual(result['targets'],2)
+        self.assertEqual(result['currentTargets'],1)
+        self.assertEqual(result['assets'],8)
 
     def test_verifies_complete_current_release_with_one_asset_fetch(self):
         result = verify_nightly_release.verify_release(

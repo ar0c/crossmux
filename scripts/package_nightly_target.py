@@ -170,9 +170,14 @@ def main():
     parser.add_argument('--channel', choices=CHANNELS, required=True)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--matrix', action='store_true')
+    parser.add_argument('--only-target', choices=TARGETS)
     args = parser.parse_args()
     if args.matrix:
-        print(json.dumps(matrix(args.channel), separators=(',', ':')))
+        selected = matrix(args.channel)
+        if args.only_target:
+            selected['include'] = [row for row in selected['include'] if row['targetId'] == args.only_target]
+            if not selected['include']: parser.error('target does not support this channel')
+        print(json.dumps(selected, separators=(',', ':')))
         return
     if not args.target:
         parser.error('target is required unless --matrix is used')

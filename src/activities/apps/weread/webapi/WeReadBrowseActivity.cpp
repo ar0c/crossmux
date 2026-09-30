@@ -129,7 +129,7 @@ const char* WeReadBrowseActivity::kindTitle() const {
 
 bool WeReadBrowseActivity::reloadCache() {
   WeReadStore::Session session;
-  if (!WeReadStore::loadSession(session) || !WeReadBrowse::loadCache(book_.bookId, session.vid, cache_)) {
+  if (!WeReadClient::ManagedWeReadClient::loadAccount(session) || !WeReadBrowse::loadCache(book_.bookId, session.vid, cache_)) {
     cache_ = {};
     hasCache_ = false;
     return false;
@@ -609,6 +609,7 @@ void WeReadBrowseActivity::handleErrorInput() {
 }
 
 const char* WeReadBrowseActivity::errorMessage() const {
+  if(WeReadClient::ManagedWeReadClient::required()&&error_==WeReadClient::Error::Unavailable)return tr(STR_WEREAD_MANAGED_UNAVAILABLE);
   switch (error_) {
     case WeReadClient::Error::Network:
       return WiFi.status() == WL_CONNECTED ? tr(STR_WEREAD_HTTP_ERROR) : tr(STR_WEREAD_NO_WIFI);

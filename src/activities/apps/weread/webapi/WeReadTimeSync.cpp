@@ -326,6 +326,7 @@ struct Job final : WeReadTime::TimeQueueSource {
   void runService() {
     using Q = WeReadTime::TimeQueue::State;
     current.available = current.running = true;
+    current.totals.serviceMode = true;
     current.queue = Q::Running;
     current.phase = WeReadTime::TimeTransaction::State::Sending;
     publish(current);
@@ -646,6 +647,7 @@ bool start(const Source& source, const char* account) {
   job = std::move(next);
   Status initial;
   initial.available = initial.running = true;
+  initial.totals.serviceMode = WeReadTime::ServiceClient::configured();
   initial.queue = WeReadTime::TimeQueue::State::Selecting;
   initial.phase = WeReadTime::TimeTransaction::State::Preparing;
   taskENTER_CRITICAL(&statusLock);

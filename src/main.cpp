@@ -506,6 +506,10 @@ void continueChineseFontInstall(const uint8_t expectedPointSize) {
 #endif
 
 void setup() {
+#if defined(SIMULATOR) && defined(CROSSPOINT_MANAGED_ACCEPTANCE)
+  extern void runManagedWeReadAcceptance();
+  runManagedWeReadAcceptance();
+#endif
   BoardConfig::holdPowerRails();
 
 #ifdef ENABLE_SERIAL_LOG
