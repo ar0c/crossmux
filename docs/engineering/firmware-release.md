@@ -105,6 +105,12 @@ read-only and exposes only the release download paths. The Ingress for
 release has not been published, so the Stable mirror CronJob is suspended until
 that release exists.
 
+For a Waveshare-only Nightly release, the mirror accepts X4 Pro pointers to an
+older immutable build only when that target entry exactly matches the previous
+published index. It verifies assets under each pointer's own build directory
+before replacing the rolling index. A changed preserved target or missing
+immutable asset keeps the old public index in place.
+
 The public OTA contract is
 `https://ooo.ar0c.com/releases/download/<channel>/release-index.json` with
 immutable manifests and binaries under

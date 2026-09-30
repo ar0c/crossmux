@@ -65,19 +65,27 @@ def mirror_channel(root, channel):
 
     root.mkdir(parents=True, exist_ok=True)
     current = root / channel / 'release-index.json'
-    if current.is_file() and (root / build_id).is_dir():
+    previous_targets = {}
+    if current.is_file():
         published = json.loads(current.read_bytes())
         for entry in published.get('targets', {}).values():
             for pointer in entry.get('variants', {}).values():
                 url = pointer.get('manifestUrl', '')
                 if url.startswith(DESTINATION):
                     pointer['manifestUrl'] = SOURCE + url[len(DESTINATION):]
-        if published == index:
+        previous_targets = published.get('targets', {})
+        referenced_tags = {
+            source_asset_url(pointer['manifestUrl'], channel)[0]
+            for entry in published.get('targets', {}).values()
+            for pointer in entry.get('variants', {}).values()
+        }
+        if published == index and all((root / tag).is_dir() for tag in referenced_tags):
             return build_id, 0
 
     with tempfile.TemporaryDirectory(prefix='.staging-', dir=root) as temp:
         staging = Path(temp)
         mirrored = {}
+        staged_builds = {}
         for target_id, entry in targets.items():
             board_tag, slug = TARGETS[channel][target_id]
             if (entry.get('targetId') != target_id or entry.get('boardTag') != board_tag or
@@ -85,11 +93,20 @@ def mirror_channel(root, channel):
                 raise ValueError('invalid target entry')
             if set(entry['variants']) != {'global', 'zh-CN'}:
                 raise ValueError('incomplete content variants')
+            tags = {
+                source_asset_url(pointer.get('manifestUrl'), channel)[0]
+                for pointer in entry['variants'].values()
+            }
+            if len(tags) != 1:
+                raise ValueError('target variants point to different builds')
+            target_tag = tags.pop()
+            if target_tag != build_id and (channel != 'nightly' or previous_targets.get(target_id) != entry):
+                raise ValueError('preserved target differs from the previous index')
+            build_staging = staged_builds.setdefault(target_tag, staging / target_tag)
+            build_staging.mkdir(exist_ok=True)
             for flavor, pointer in entry['variants'].items():
                 url = pointer.get('manifestUrl')
                 tag, name = source_asset_url(url, channel)
-                if tag != build_id:
-                    raise ValueError('manifest points to another build')
                 suffix = 'global' if flavor == 'global' else 'cn'
                 if name != f'{slug}-{suffix}-manifest.json':
                     raise ValueError('unexpected manifest filename')
@@ -112,24 +129,26 @@ def mirror_channel(root, channel):
                             not 0 < size <= MAX_BINARY or not isinstance(digest, str) or
                             not SHA256.fullmatch(digest)):
                         raise ValueError('invalid firmware asset metadata')
-                    if filename not in mirrored:
+                    asset_key = (tag, filename)
+                    if asset_key not in mirrored:
                         data = fetch(SOURCE + tag + '/' + filename, MAX_BINARY)
                         if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
                             raise ValueError(f'firmware asset failed SHA-256: {filename}')
-                        (staging / filename).write_bytes(data)
-                        mirrored[filename] = (size, digest)
-                    elif mirrored[filename] != (size, digest):
+                        (build_staging / filename).write_bytes(data)
+                        mirrored[asset_key] = (size, digest)
+                    elif mirrored[asset_key] != (size, digest):
                         raise ValueError('asset differs between manifests')
-                (staging / name).write_bytes(manifest_bytes)
+                (build_staging / name).write_bytes(manifest_bytes)
                 pointer['manifestUrl'] = DESTINATION + tag + '/' + name
 
-        build_dir = root / build_id
-        if build_dir.exists():
-            for file in staging.iterdir():
-                if not (build_dir / file.name).is_file() or (build_dir / file.name).read_bytes() != file.read_bytes():
-                    raise ValueError(f'immutable build differs: {file.name}')
-        else:
-            os.replace(staging, build_dir)
+        for tag, staged_dir in staged_builds.items():
+            build_dir = root / tag
+            if build_dir.exists():
+                for file in staged_dir.iterdir():
+                    if not (build_dir / file.name).is_file() or (build_dir / file.name).read_bytes() != file.read_bytes():
+                        raise ValueError(f'immutable build differs: {file.name}')
+            else:
+                os.replace(staged_dir, build_dir)
 
     channel_dir = root / channel
     channel_dir.mkdir(exist_ok=True)
