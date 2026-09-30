@@ -1,10 +1,10 @@
-#include "WeReadHttpClient.h"
-#include "WeReadTimeCloud.h"
-
 #include <cassert>
 #include <cstring>
 #include <iostream>
 #include <string>
+
+#include "WeReadHttpClient.h"
+#include "WeReadTimeCloud.h"
 
 namespace {
 int calls = 0;
@@ -12,11 +12,11 @@ int failAt = -1;
 int responseStatus = 200;
 std::string stats = R"({"baseTime":1788192000,"totalReadTime":16234,"readTimes":{"1789401600":2947}})";
 std::string lastBody;
-}
+}  // namespace
 
 namespace WeReadHttpClient {
 Result requestVerified(const char* url, const RequestOptions& options, const DataCallback& onData,
-               const HeaderCallback&, int& status) {
+                       const HeaderCallback&, int& status) {
   ++calls;
   status = responseStatus;
   if (calls == failAt) return Result::NetworkError;
@@ -52,7 +52,7 @@ Result requestVerified(const char* url, const RequestOptions& options, const Dat
   }
   return Result::Ok;
 }
-}
+}  // namespace WeReadHttpClient
 
 int main() {
   using WeReadTimeCloud::Query;
@@ -62,7 +62,8 @@ int main() {
   assert(query.step() == Result::Pending && query.readingStats());
   assert(query.step() == Result::Ready);
   assert(query.snapshot().hasDay && query.snapshot().daySeconds == 2947);
-  assert(lastBody == R"({"api_name":"/readdata/detail","skill_version":"1.0.4","mode":"monthly","baseTime":1788192000})");
+  assert(lastBody ==
+         R"({"api_name":"/readdata/detail","skill_version":"1.0.4","mode":"monthly","baseTime":1788192000})");
   assert(calls == 2 && query.step() == Result::Ready && calls == 2);
   assert(!query.begin("cookie", 0));
   assert(query.step() == Result::Clock && calls == 2);

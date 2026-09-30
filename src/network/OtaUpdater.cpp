@@ -114,8 +114,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
   {
     JsonDocument index;
     if (deserializeJson(index, reinterpret_cast<char*>(response.get()), responseSize) ||
-        index["schemaVersion"].as<int>() != 1 ||
-        std::strcmp(index["channel"] | "", channelName) != 0) return JSON_PARSE_ERROR;
+        index["schemaVersion"].as<int>() != 1 || std::strcmp(index["channel"] | "", channelName) != 0)
+      return JSON_PARSE_ERROR;
     JsonVariantConst entry = index["targets"][target];
     if (std::strcmp(entry["targetId"] | "", target) != 0 ||
         std::strlen(entry["boardTag"] | "") != board_tag::boardNameLen() ||
@@ -127,7 +127,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
     indexVersion = variant["version"] | "";
     indexRevision = variant["crossmuxSha"] | "";
     if (!isForkBuildUrl(manifestUrl, channelName) || indexVersion.empty() || indexVersion.size() > 63 ||
-        indexRevision.size() != 40) return JSON_PARSE_ERROR;
+        indexRevision.size() != 40)
+      return JSON_PARSE_ERROR;
 
     JsonArrayConst notes = index["releaseNotes"][flavor].as<JsonArrayConst>();
     for (JsonVariantConst note : notes) {
@@ -144,10 +145,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
   {
     JsonDocument manifest;
     if (deserializeJson(manifest, reinterpret_cast<char*>(response.get()), responseSize) ||
-        manifest["schemaVersion"].as<int>() != 1 ||
-        std::strcmp(manifest["channel"] | "", channelName) != 0 ||
-        std::strcmp(manifest["targetId"] | "", target) != 0 ||
-        std::strcmp(manifest["flavor"] | "", flavor) != 0 ||
+        manifest["schemaVersion"].as<int>() != 1 || std::strcmp(manifest["channel"] | "", channelName) != 0 ||
+        std::strcmp(manifest["targetId"] | "", target) != 0 || std::strcmp(manifest["flavor"] | "", flavor) != 0 ||
         std::strcmp(manifest["version"] | "", indexVersion.c_str()) != 0 ||
         std::strcmp(manifest["crossmuxSha"] | "", indexRevision.c_str()) != 0 ||
         std::strlen(manifest["boardTag"] | "") != board_tag::boardNameLen() ||
@@ -187,12 +186,12 @@ bool OtaUpdater::isUpdateNewer() const {
       if (latestVersion == CROSSPOINT_VERSION) return false;
       // Release builds embed the same seven-character source revision after '+'.
       // A local timestamped development build has no comparable release SHA.
-      if (const size_t plus = latestVersion.rfind('+'); plus != std::string::npos &&
-          latestVersion.size() - plus == 8) {
+      if (const size_t plus = latestVersion.rfind('+'); plus != std::string::npos && latestVersion.size() - plus == 8) {
         const std::string_view current = CROSSPOINT_VERSION;
         const size_t currentPlus = current.rfind('+');
-        if (currentPlus != std::string_view::npos && current.substr(currentPlus + 1) ==
-                                                        std::string_view(latestVersion).substr(plus + 1)) return false;
+        if (currentPlus != std::string_view::npos &&
+            current.substr(currentPlus + 1) == std::string_view(latestVersion).substr(plus + 1))
+          return false;
       }
       return true;
   }
@@ -343,7 +342,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
 
   uint8_t actualDigest[32] = {};
   if (mbedtls_sha256_finish(&shaCtx, actualDigest) != 0 || processedSize != otaSize ||
-      std::memcmp(actualDigest, otaSha256.data(), otaSha256.size()) != 0) hashOk = false;
+      std::memcmp(actualDigest, otaSha256.data(), otaSha256.size()) != 0)
+    hashOk = false;
   mbedtls_sha256_free(&shaCtx);
 
   if (wrongChip || wrongBoard || !boardScanner.matched()) {

@@ -27,16 +27,19 @@ static std::string unhex(const std::string& value) {
   return out;
 }
 namespace WeReadHttpClient {
-Result requestVerified(const char* url, const RequestOptions& options, const DataCallback& data,
-                       const HeaderCallback&, int& status) {
+Result requestVerified(const char* url, const RequestOptions& options, const DataCallback& data, const HeaderCallback&,
+                       int& status) {
   const std::string prefix = "https://wesync.ar0c.com";
   assert(std::string(url).starts_with(prefix));
   assert(options.readBuffer && options.readBufferSize >= 2);
   std::string authorization;
   for (size_t i = 0; i < options.headerCount; ++i)
     if (!strcmp(options.headers[i].name, "Authorization")) authorization = options.headers[i].value;
-  const std::string body = options.body ? std::string(reinterpret_cast<const char*>(options.body), options.bodySize) : "";
-  std::cout << options.method << '\n' << std::string(url).substr(prefix.size()) << '\n' << authorization << '\n'
+  const std::string body =
+      options.body ? std::string(reinterpret_cast<const char*>(options.body), options.bodySize) : "";
+  std::cout << options.method << '\n'
+            << std::string(url).substr(prefix.size()) << '\n'
+            << authorization << '\n'
             << hex(body) << std::endl;
   std::string code, encoded;
   assert(std::getline(std::cin, code) && std::getline(std::cin, encoded));
@@ -77,5 +80,6 @@ int main(int argc, char** argv) {
   assert(client.exchange(ledger.identity(), journal) == ServiceClient::Result::Failed);
   assert(client.exchange(ledger.identity(), journal) == ServiceClient::Result::Failed);
   assert(journal.state() == ServiceJournal::State::Accepted && journal.confirmed() == 0);
-  std::cerr << "PASS real C++ client / Go backend: durable loss+restart, identical retry, GET recovery, identity rejection, revocation\n";
+  std::cerr << "PASS real C++ client / Go backend: durable loss+restart, identical retry, GET recovery, identity "
+               "rejection, revocation\n";
 }

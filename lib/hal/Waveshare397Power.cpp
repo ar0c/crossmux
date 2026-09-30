@@ -112,8 +112,8 @@ bool begin() {
   uint8_t powerOffSource = 0;
   if (read(Register::PowerOnSource, powerOnSource) && read(Register::PowerOffSource, powerOffSource)) {
     softwareSleepPowerKeyBoot = isSoftwareSleepPowerKeyBoot(powerOnSource, powerOffSource);
-    LOG_INF("PWR", "AXP2101 power cycle: on=0x%02x off=0x%02x software-key-wake=%u", powerOnSource,
-            powerOffSource, static_cast<unsigned>(softwareSleepPowerKeyBoot));
+    LOG_INF("PWR", "AXP2101 power cycle: on=0x%02x off=0x%02x software-key-wake=%u", powerOnSource, powerOffSource,
+            static_cast<unsigned>(softwareSleepPowerKeyBoot));
   } else {
     LOG_ERR("PWR", "AXP2101 power-cycle source unavailable; PMIC wake unclassified");
   }

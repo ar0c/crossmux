@@ -7,8 +7,8 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalFrontlight.h>
-#include <HalSystem.h>
 #include <HalStorage.h>
+#include <HalSystem.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -51,9 +51,9 @@
 #include "util/ReadingBackground.h"
 #include "util/ReadingGuideLine.h"
 #ifdef ENABLE_CHINESE_VERSION
-#include <WeReadStore.h>
 #include <ManagedWeReadClient.h>
 #include <WeReadDeviceTimeSource.h>
+#include <WeReadStore.h>
 
 #include "activities/apps/weread/WeReadProgressSyncActivity.h"
 #include "activities/settings/FontDownloadActivity.h"

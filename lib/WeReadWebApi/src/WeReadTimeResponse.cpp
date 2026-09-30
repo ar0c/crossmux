@@ -1,6 +1,6 @@
-#include "WeReadTimeCloud.h"
-
 #include <cstring>
+
+#include "WeReadTimeCloud.h"
 
 namespace WeReadTimeCloud {
 namespace {
@@ -21,8 +21,8 @@ bool integer(const char* value, size_t len, uint64_t& out) {
 }  // namespace
 
 Response::Response()
-    : parser_({this, onKey, onString, onNumber, onBool, onNull, onObjectStart, onObjectEnd,
-               onArrayStart, onArrayEnd, onChunk}) {}
+    : parser_({this, onKey, onString, onNumber, onBool, onNull, onObjectStart, onObjectEnd, onArrayStart, onArrayEnd,
+               onChunk}) {}
 
 void Response::reset(Mode mode, uint64_t month, uint64_t day) {
   parser_.reset();
@@ -45,7 +45,10 @@ bool Response::feed(const uint8_t* data, size_t size) {
     const bool space = ch == ' ' || ch == '\r' || ch == '\n' || ch == '\t';
     if (closed_ || !started_) {
       if (space) continue;
-      if (closed_ || ch != '{') { failed_ = true; break; }
+      if (closed_ || ch != '{') {
+        failed_ = true;
+        break;
+      }
     }
     parser_.feed(&ch, 1);
   }
@@ -55,21 +58,26 @@ bool Response::feed(const uint8_t* data, size_t size) {
 bool Response::complete() const {
   if (failed_ || parser_.hasError() || !closed_ || depth_) return false;
   if (mode_ == Mode::Key) return seenKey_;
-  return seenMonth_ && seenTotal_ && seenDays_ &&
-         (!snapshot_.hasDay || snapshot_.daySeconds <= snapshot_.monthSeconds);
+  return seenMonth_ && seenTotal_ && seenDays_ && (!snapshot_.hasDay || snapshot_.daySeconds <= snapshot_.monthSeconds);
 }
 
 void Response::onKey(void* raw, const char* key, size_t len) {
   auto& self = *static_cast<Response*>(raw);
   self.field_ = Field::Ignore;
   if (self.depth_ == 1) {
-    if (equal(key, len, "errcode")) self.field_ = Field::Error;
-    else if (equal(key, len, "upgrade_info")) self.field_ = Field::Upgrade;
-    else if (self.mode_ == Mode::Key && equal(key, len, "apikey")) self.field_ = Field::Key;
+    if (equal(key, len, "errcode"))
+      self.field_ = Field::Error;
+    else if (equal(key, len, "upgrade_info"))
+      self.field_ = Field::Upgrade;
+    else if (self.mode_ == Mode::Key && equal(key, len, "apikey"))
+      self.field_ = Field::Key;
     else if (self.mode_ == Mode::Stats) {
-      if (equal(key, len, "baseTime")) self.field_ = Field::Month;
-      else if (equal(key, len, "totalReadTime")) self.field_ = Field::Total;
-      else if (equal(key, len, "readTimes")) self.field_ = Field::Days;
+      if (equal(key, len, "baseTime"))
+        self.field_ = Field::Month;
+      else if (equal(key, len, "totalReadTime"))
+        self.field_ = Field::Total;
+      else if (equal(key, len, "readTimes"))
+        self.field_ = Field::Days;
     }
   } else if (self.daysDepth_ && self.depth_ == self.daysDepth_) {
     uint64_t day = 0;
@@ -85,15 +93,17 @@ void Response::wrongType() {
 
 void Response::onString(void* raw, const char* value, size_t len) {
   auto& self = *static_cast<Response*>(raw);
-  if (self.field_ != Field::Key) { self.wrongType(); return; }
+  if (self.field_ != Field::Key) {
+    self.wrongType();
+    return;
+  }
   if (self.seenKey_ || len <= 4 || len >= sizeof(self.key_) || memcmp(value, "wrk-", 4)) {
     self.failed_ = true;
     return;
   }
   for (size_t i = 0; i < len; ++i) {
     const char ch = value[i];
-    if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-          (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')) {
+    if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')) {
       self.failed_ = true;
       return;
     }
@@ -108,7 +118,10 @@ void Response::onNumber(void* raw, const char* value, size_t len) {
   auto& self = *static_cast<Response*>(raw);
   if (self.field_ == Field::Ignore) return;
   uint64_t number = 0;
-  if (!integer(value, len, number)) { self.failed_ = true; return; }
+  if (!integer(value, len, number)) {
+    self.failed_ = true;
+    return;
+  }
   switch (self.field_) {
     case Field::Month:
       if (self.seenMonth_ || number != self.snapshot_.month) self.failed_ = true;
@@ -128,7 +141,9 @@ void Response::onNumber(void* raw, const char* value, size_t len) {
       if (self.seenError_ || number != 0) self.failed_ = true;
       self.seenError_ = true;
       break;
-    default: self.failed_ = true; break;
+    default:
+      self.failed_ = true;
+      break;
   }
   self.field_ = Field::Ignore;
 }
@@ -145,11 +160,17 @@ void Response::start(bool object) {
   } else {
     wrongType();
   }
-  if (depth_ >= sizeof(objects_)) { failed_ = true; return; }
+  if (depth_ >= sizeof(objects_)) {
+    failed_ = true;
+    return;
+  }
   objects_[depth_++] = object;
 }
 void Response::end(bool object) {
-  if (!depth_ || objects_[depth_ - 1] != object || field_ != Field::Ignore) { failed_ = true; return; }
+  if (!depth_ || objects_[depth_ - 1] != object || field_ != Field::Ignore) {
+    failed_ = true;
+    return;
+  }
   if (depth_ == daysDepth_) daysDepth_ = 0;
   if (--depth_ == 0) closed_ = true;
 }

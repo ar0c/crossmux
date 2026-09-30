@@ -20,12 +20,19 @@ inline bool acceptedTimeAck(const char* text, size_t length, bool entry, AckObse
   const auto space = [&]() {
     while (at < length && (text[at] == ' ' || text[at] == '\r' || text[at] == '\n' || text[at] == '\t')) ++at;
   };
-  const auto take = [&](char value) { space(); return at < length && text[at++] == value; };
+  const auto take = [&](char value) {
+    space();
+    return at < length && text[at++] == value;
+  };
   if (!take('{')) return false;
   uint8_t seen = 0;
   bool acknowledged = false;
   space();
-  if (at < length && text[at] == '}') { ++at; space(); return entry && at == length; }
+  if (at < length && text[at] == '}') {
+    ++at;
+    space();
+    return entry && at == length;
+  }
   for (unsigned fields = 0; fields < 5; ++fields) {
     if (!take('"')) return false;
     const size_t start = at;
@@ -44,7 +51,8 @@ inline bool acceptedTimeAck(const char* text, size_t length, bool entry, AckObse
     seen |= field;
     space();
     uint64_t value = 0;
-    if (field == 1 && length - at >= 4 && !std::memcmp(text + at, "true", 4)) at += 4, value = 1;
+    if (field == 1 && length - at >= 4 && !std::memcmp(text + at, "true", 4))
+      at += 4, value = 1;
     else {
       if (at >= length || text[at] < '0' || text[at] > '9') return false;
       const bool leadingZero = text[at] == '0';
@@ -52,7 +60,8 @@ inline bool acceptedTimeAck(const char* text, size_t length, bool entry, AckObse
       while (at < length && text[at] >= '0' && text[at] <= '9') {
         const unsigned digit = unsigned(text[at++] - '0');
         if ((leadingZero && digits) || value > (UINT64_MAX - digit) / 10) return false;
-        value = value * 10 + digit; ++digits;
+        value = value * 10 + digit;
+        ++digits;
       }
     }
     if (observation) {
@@ -60,12 +69,20 @@ inline bool acceptedTimeAck(const char* text, size_t length, bool entry, AckObse
       if (field == 1) observation->succ = category;
       if (field == 2) observation->synckey = category;
     }
-    if (field == 1) { if (value != 1) return false; acknowledged = true; }
-    else if (field == 2) acknowledged = true;
-    else if (value != 0) return false;
+    if (field == 1) {
+      if (value != 1) return false;
+      acknowledged = true;
+    } else if (field == 2)
+      acknowledged = true;
+    else if (value != 0)
+      return false;
     space();
     if (at >= length) return false;
-    if (text[at] == '}') { ++at; space(); return at == length && (entry || acknowledged); }
+    if (text[at] == '}') {
+      ++at;
+      space();
+      return at == length && (entry || acknowledged);
+    }
     if (text[at++] != ',') return false;
   }
   return false;

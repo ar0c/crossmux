@@ -7,8 +7,8 @@
 #include <chrono>
 #include <iostream>
 
-#include "ReadingStatsStore.h"
 #include "HalSystem.h"
+#include "ReadingStatsStore.h"
 #include "WeReadDeviceTimeSource.h"
 #include "WeReadDeviceTimeTransport.h"
 #include "WeReadServiceClient.h"

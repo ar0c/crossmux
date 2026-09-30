@@ -1,8 +1,9 @@
-#include "WeReadTimeDataLayout.h"
 #include <cassert>
+#include <iostream>
 #include <map>
 #include <string>
-#include <iostream>
+
+#include "WeReadTimeDataLayout.h"
 using namespace WeReadTime;
 struct Store {
   std::map<std::string, std::string> files;
@@ -34,7 +35,9 @@ int main() {
   for (unsigned mode = 0; mode < 4; ++mode) {
     Store f;
     f.files[kLegacyTimeManifest] = mode == 3 ? "directory" : "bytes";
-    f.failDirectory = mode == 0; f.failMove = mode == 1; f.corruptResult = mode == 2;
+    f.failDirectory = mode == 0;
+    f.failMove = mode == 1;
+    f.corruptResult = mode == 2;
     assert(!relocateTimeFile(f, kLegacyTimeManifest, kTimeManifest));
     assert(f.files.count(kLegacyTimeManifest));
   }

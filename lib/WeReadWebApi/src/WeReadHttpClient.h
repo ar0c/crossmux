@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+
 #include "WeReadNetworkDiagnostic.h"
 
 #if defined(FREEINK_NET_WOLFSSL) && !defined(CROSSPOINT_EMULATED)

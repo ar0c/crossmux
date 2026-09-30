@@ -1,11 +1,11 @@
 #pragma once
 
-#include "WeReadTimeCloud.h"
-#include "WeReadTimeTransaction.h"
-#include "WeReadStore.h"
 #include "WeReadProtocol.h"
-#include "WeReadTimeDiagnostic.h"
+#include "WeReadStore.h"
 #include "WeReadTimeBaseline.h"
+#include "WeReadTimeCloud.h"
+#include "WeReadTimeDiagnostic.h"
+#include "WeReadTimeTransaction.h"
 
 namespace WeReadClient {
 // Worker-scoped fixed workspace. No write retries, no login fallback, no persistent
@@ -27,6 +27,7 @@ class DeviceTimeTransport final : public WeReadTime::TimeTransport {
     result.report = reportEvidence_;
     return result;
   }
+
  private:
   enum class Phase { Login, Reader, Progress, Ready, Entered, Reported, Failed };
   Write post(bool timed, uint32_t seconds = 0);

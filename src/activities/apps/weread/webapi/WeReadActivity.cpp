@@ -1964,7 +1964,7 @@ const char* WeReadActivity::errorMessage() const {
     case WeReadClient::Error::Network:
       return WiFi.status() == WL_CONNECTED ? tr(STR_WEREAD_HTTP_ERROR) : tr(STR_WEREAD_NO_WIFI);
     case WeReadClient::Error::Unavailable:
-      if(WeReadClient::ManagedWeReadClient::required())return tr(STR_WEREAD_MANAGED_UNAVAILABLE);
+      if (WeReadClient::ManagedWeReadClient::required()) return tr(STR_WEREAD_MANAGED_UNAVAILABLE);
       return tr(STR_WEREAD_CACHE_NOT_AVAILABLE);
     case WeReadClient::Error::WholeBookOnly:
       return tr(STR_WEREAD_CACHE_WHOLE_BOOK_ONLY);
