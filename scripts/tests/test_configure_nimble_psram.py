@@ -8,7 +8,7 @@ import unittest
 class NimblePsramMiddlewareTest(unittest.TestCase):
     def test_supported_s3_ble_targets_share_psram(self):
         config = configparser.ConfigParser(interpolation=None)
-        config.read(Path(__file__).resolve().parents[2] / "platformio.ini")
+        config.read(Path(__file__).resolve().parents[2] / "platformio.ini", encoding="utf-8")
         devices = ("x4pro", "waveshare_epaper_397")
         for device in devices:
             hardware = f"{device}_hardware"
@@ -23,15 +23,15 @@ class NimblePsramMiddlewareTest(unittest.TestCase):
         self.assertEqual({name for name in config.sections() if name.endswith('_hardware')},
                          {'x4pro_hardware', 'sound_feedback_hardware', 'waveshare_epaper_397_hardware'})
         self.assertEqual({name for name in config.sections() if name.startswith('env:')}, {
-            'env:simulator',
+            'env:simulator', 'env:simulator_waveshare_ui', 'env:simulator_managed_acceptance',
             'env:x4pro', 'env:x4pro-gh_release', 'env:x4pro-gh_release_rc', 'env:x4pro_nightly',
             'env:waveshare_epaper_397', 'env:waveshare_epaper_397_nightly',
         })
 
     def test_generic_base_and_simulators_do_not_inherit_radio_configuration(self):
         config = configparser.ConfigParser(interpolation=None)
-        config.read(Path(__file__).resolve().parents[2] / "platformio.ini")
-        for name in ("base", "env:simulator"):
+        config.read(Path(__file__).resolve().parents[2] / "platformio.ini", encoding="utf-8")
+        for name in ("base", "env:simulator", "env:simulator_waveshare_ui", "env:simulator_managed_acceptance"):
             with self.subTest(profile=name):
                 for value in config[name].values():
                     self.assertNotIn("s3_ble", value)
