@@ -4,6 +4,8 @@ Project: CrossMux, a community fork of CrossPoint Reader for ESP32 e-ink devices
 Mission: Keep reading fast and reliable while supporting lightweight apps, reading analytics, standby faces, and on-demand services within the hardware budget.
 Targets: Xteink X4 Pro and Waveshare ePaper 3.97 have separate ESP32-S3 images. See [`scripts/nightly_targets.py`](scripts/nightly_targets.py) for release targets and channels.
 
+**Personal release authorization (2026-10-02):** The owner permits direct releases of this fork and its `ar0c/weread-sync` companion through their existing GitHub/OTA and personal K3s/Helm paths after relevant local validation, without repeated per-release confirmation. This project-specific authorization supersedes the generic GitLab `ship` master/tag release flow for these two projects only. Follow the scope and verification rules in [firmware-release.md](docs/engineering/firmware-release.md).
+
 > **This file is a map, not a manual.** It holds the identity, the
 > non-negotiable invariants, and a quick reference — then points to the deep
 > engineering docs in [`docs/engineering/`](docs/engineering/index.md). Read the

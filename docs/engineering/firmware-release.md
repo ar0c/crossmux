@@ -45,6 +45,25 @@ produce a separate ESP32-S3 Nightly image. Each image is aliased by the compatib
 
 ## Publishing
 
+### Owner-authorized direct releases
+
+On 2026-10-02 the owner authorized direct releases of this personal fork and
+its `ar0c/weread-sync` companion without repeated per-release confirmation.
+Use the established GitHub Releases/OTA path for firmware and the service-owned
+Helm chart on the personal K3s cluster for the backend. The generic GitLab
+`ship` master/tag path does not apply to these two GitHub projects. This
+authorization does not extend to other projects or release destinations.
+
+Before publishing, run relevant local tests against the exact source snapshot,
+verify the target board or backend image identity, and keep an immutable build
+plus a rollback reference. Publish the firmware's immutable assets before its
+rolling index; check the GitHub index and public mirror afterward. For the
+backend, change only the verified image, preserve existing Helm values and
+`workerHold`, use an atomic upgrade, and read back the running version and
+business result. A healthy Pod or OTA index alone does not prove device
+behavior. Do not release uncertain reading-time batches, fabricate credit, or
+perform irreversible hardware/security writes under this authorization.
+
 Each target job builds once and packages one binary set plus two compatibility
 manifests. Packaging checks the ESP image chip ID, required board tag, partition
 layout, app-slot size, and SHA-256 before emitting the manifests.
