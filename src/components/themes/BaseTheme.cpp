@@ -10,11 +10,13 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 #include "BleInput.h"
 #include "I18n.h"
 #include "RecentBooksStore.h"
+#include "Utf8.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -205,9 +207,87 @@ void BaseTheme::drawHintLabel(GfxRenderer& renderer, const int fontId, const cha
   }
 }
 
+bool BaseTheme::drawWheelAndBootButtonHints(GfxRenderer& renderer, const char* back, const char* confirm,
+                                            const char* left, const char* right) const {
+  if (!gpio.hasWheelAndBootButtons()) return false;
+
+  // Hardware positions in the default portrait view: wheel upper left,
+  // PWR above BOOT on the upper right.
+  const auto originalOrientation = renderer.getOrientation();
+  renderer.setOrientation(GfxRenderer::Portrait);
+
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  constexpr int hintWidth = 22;
+  constexpr int hintHeight = 88;
+  constexpr int hintGap = 8;
+  constexpr int wheelHeight = hintHeight * 3 + hintGap * 2;
+  const int width = std::min(hintWidth, pageWidth / 8);
+  const int top = std::clamp(pageHeight / 10, 0, pageHeight - wheelHeight);
+  const int rightX = pageWidth - width - 4;
+
+  const auto drawHint = [&](const char* label, const int x, const int y) {
+    if (!label || !*label) return;
+    // Leave existing content visible; a hint is only drawn on a clear edge.
+    constexpr int contentGap = 8;
+    const int clearX = x == 0 ? x : x - contentGap;
+    if (!renderer.isRectMostlyWhite(clearX, y, width + contentGap, hintHeight, 24)) return;
+    GfxRenderer::ClipScope clip(renderer, x + 1, y + 1, width - 2, hintHeight - 2);
+    const unsigned char* cursor = reinterpret_cast<const unsigned char*>(label);
+    bool hasCjk = false;
+    uint32_t cp = 0;
+    while ((cp = utf8NextCodepoint(&cursor))) {
+      if (utf8IsCjkCodepoint(cp)) hasCjk = true;
+    }
+    if (hasCjk) {
+      constexpr int glyphCellHeight = 20;
+      constexpr int maxGlyphs = 4;
+      cursor = reinterpret_cast<const unsigned char*>(label);
+      int count = 0;
+      while (count < maxGlyphs && (cp = utf8NextCodepoint(&cursor))) {
+        if (cp != ' ') ++count;
+      }
+      const int firstY = y + (hintHeight - count * glyphCellHeight) / 2;
+      cursor = reinterpret_cast<const unsigned char*>(label);
+      for (int index = 0; index < count;) {
+        const unsigned char* start = cursor;
+        cp = utf8NextCodepoint(&cursor);
+        if (!cp) break;
+        if (cp == ' ') continue;
+        const size_t bytes = static_cast<size_t>(cursor - start);
+        if (bytes > 4) break;
+        char glyph[5]{};
+        std::memcpy(glyph, start, bytes);
+        const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, glyph);
+        renderer.drawText(UI_10_FONT_ID, x + (width - textWidth) / 2, firstY + index * glyphCellHeight, glyph);
+        ++index;
+      }
+    } else {
+      const auto visibleLabel = renderer.truncatedText(UI_10_FONT_ID, label, hintHeight - 8);
+      const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, visibleLabel.c_str());
+      const int textHeight = renderer.getTextHeight(UI_10_FONT_ID);
+      renderer.drawTextRotated90CW(UI_10_FONT_ID, x + (width - textHeight) / 2, y + (hintHeight + textWidth) / 2,
+                                   visibleLabel.c_str());
+    }
+  };
+
+  const char* powerHint =
+      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ? tr(STR_SLEEP) : tr(STR_HOLD_POWER_TO_SLEEP);
+  drawHint(powerHint, rightX, top);
+  drawHint(back, rightX, top + hintHeight + hintGap);
+  const char* wheelLabels[] = {left, confirm, right};
+  for (int i = 0; i < 3; ++i) {
+    drawHint(wheelLabels[i], 0, top + i * (hintHeight + hintGap));
+  }
+
+  renderer.setOrientation(originalOrientation);
+  return true;
+}
+
 void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                 const char* btn4) const {
   if (!buttonHintsVisible()) return;
+  if (drawWheelAndBootButtonHints(renderer, btn1, btn2, btn3, btn4)) return;
 
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -241,7 +321,7 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
 bool BaseTheme::buttonHintsVisible() const { return !gpio.hasTouch() && SETTINGS.showButtonHints; }
 
 void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const {
-  if (gpio.hasTouch()) {
+  if (gpio.hasTouch() || gpio.hasWheelAndBootButtons()) {
     return;
   }
 
@@ -608,6 +688,12 @@ bool BaseTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
 
 // Draw the "Recent Book" cover card on the home screen
 // TODO: Refactor method to make it cleaner, split into smaller methods
+int BaseTheme::recentBookIndexAt(int, int) const {
+  // Single-cover themes show only the first recent book; a tap anywhere in
+  // the cover strip therefore selects book 0.
+  return 0;
+}
+
 void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                     const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
                                     bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
@@ -789,6 +875,16 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 }
 
 int BaseTheme::getMenuRowHeight(const GfxRenderer&) const { return UITheme::getInstance().getMetrics().menuRowHeight; }
+
+BaseTheme::MenuRowGeometry BaseTheme::getMenuRowGeometry(const GfxRenderer&, const Rect& rect, const int,
+                                                         const int rowCount) const {
+  // Mirror of drawButtonMenu: rows start below the rect at the vertical
+  // spacing offset and step by row height + spacing, spanning the content
+  // width between the side paddings.
+  const auto& m = BaseMetrics::values;
+  return {rect.y + m.verticalSpacing,    m.menuRowHeight + m.menuSpacing,           m.menuRowHeight, 0, rowCount,
+          rect.x + m.contentSidePadding, rect.x + rect.width - m.contentSidePadding};
+}
 
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, const int buttonCount, const int selectedIndex,
                                const std::function<std::string(int)>& buttonLabel,

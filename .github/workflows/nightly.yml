@@ -11,6 +11,15 @@ on:
         description: 'Chinese OTA release notes (2-8 lines, max 32 characters each)'
         required: true
         type: string
+      release_target:
+        description: 'Nightly target; auto keeps the managed-session branch on Waveshare only'
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - xteink_x4_pro
+          - waveshare_epaper_397
   push:
     tags:
       - '*.*.*'
@@ -39,6 +48,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - id: release
+        env:
+          RELEASE_TARGET: ${{ inputs.release_target }}
         run: |
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = push ]; then
@@ -56,8 +67,19 @@ jobs:
           echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
           echo "build_tag=$build_id" >> "$GITHUB_OUTPUT"
           target_args=()
-          if [ "$channel" = nightly ] && [ "$GITHUB_REF_NAME" = codex/weread-managed-session ]; then
-            target_args=(--only-target waveshare_epaper_397)
+          if [ "$channel" = nightly ]; then
+            case "${RELEASE_TARGET:-auto}" in
+              auto)
+                if [ "$GITHUB_REF_NAME" = codex/weread-managed-session ] ||
+                   [ "$GITHUB_REF_NAME" = codex/weread-managed-session-1.6.0 ]; then
+                  target_args=(--only-target waveshare_epaper_397)
+                fi
+                ;;
+              xteink_x4_pro|waveshare_epaper_397)
+                target_args=(--only-target "$RELEASE_TARGET")
+                ;;
+              *) echo "::error::Unsupported Nightly target: $RELEASE_TARGET"; exit 1 ;;
+            esac
           fi
           echo "target_args=${target_args[*]}" >> "$GITHUB_OUTPUT"
           echo "matrix=$(python3 scripts/package_nightly_target.py --channel "$channel" --matrix "${target_args[@]}")" >> "$GITHUB_OUTPUT"
@@ -125,7 +147,9 @@ jobs:
       - name: Install PlatformIO Core
         run: uv pip install --system -U pioarduino==6.1.19
       - name: Set seven-character build revision
-        run: echo "CROSSPOINT_RC_HASH=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+        run: |
+          echo "CROSSPOINT_RC_HASH=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "CROSSPOINT_BUILD_KIND=rc" >> "$GITHUB_ENV"
       - name: Build unified target
         run: pio run -e "${{ matrix.environment }}"
       - name: Package and verify unified target

@@ -432,8 +432,8 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
   if (hasFailed()) return;
-  currentTextBlock = makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled,
-                                                   blockStyle, collectTouchLinks);
+  currentTextBlock = makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, firstLineIndent, hyphenationEnabled,
+                                                   focusReadingEnabled, blockStyle, collectTouchLinks);
   if (!currentTextBlock) {
     LOG_ERR("EHP", "OOM: ParsedText (%u bytes)", static_cast<unsigned>(sizeof(ParsedText)));
     failAllocation("page layout");
@@ -918,8 +918,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
 
     self->currentTextBlock =
-        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled, self->focusReadingEnabled,
-                                      tableCellBlockStyle, self->collectTouchLinks);
+        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->firstLineIndent, self->hyphenationEnabled,
+                                      self->focusReadingEnabled, tableCellBlockStyle, self->collectTouchLinks);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: table cell");
       self->failAllocation("table cell");
@@ -1003,26 +1003,38 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           // Resolve the image path relative to the HTML file
           std::string resolvedPath = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(self->contentBase + src));
 
-          if (ImageDecoderFactory::isFormatSupported(resolvedPath)) {
-            // Create a unique filename for the cached image
+          // Read the entry's first bytes before deciding anything. They carry both
+          // the dimensions AND the real format, and an EPUB may name an image
+          // without an extension or with a misleading one — while the decoder
+          // lookup is extension-based. Deciding on the href alone dropped those
+          // images silently: no log, no placeholder, the picture just vanished.
+          // The header therefore decides; the path extension is only the fallback.
+          ImageDimensions dims = {0, 0};
+          ImageDimsProbe headerProbe;
+          self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+          bool gotDimensions = headerProbe.getDimensions(dims);
+          const char* sniffedExtension = ImageDimsProbe::extensionForFormat(headerProbe.detectedFormat());
+          const bool recognised = sniffedExtension != nullptr || ImageDecoderFactory::isFormatSupported(resolvedPath);
+
+          if (!recognised) {
+            LOG_ERR("EHP", "Unsupported image entry (neither JPEG/PNG content nor a known extension): %s",
+                    resolvedPath.c_str());
+          } else {
+            // Create a unique filename for the cached image. Prefer the sniffed
+            // format so the cached file always carries an extension the decoder
+            // can act on, whatever the href said.
             std::string ext;
-            size_t extPos = resolvedPath.rfind('.');
-            if (extPos != std::string::npos) {
-              ext = resolvedPath.substr(extPos);
+            if (sniffedExtension != nullptr) {
+              ext = sniffedExtension;
+            } else {
+              const size_t extPos = resolvedPath.rfind('.');
+              if (extPos != std::string::npos) {
+                ext = resolvedPath.substr(extPos);
+              }
             }
             std::string cachedImagePath = self->imageBasePath + std::to_string(self->imageCounter++) + ext;
 
             {
-              // Probe the dimensions from the entry's first bytes (early-aborted
-              // inflate, a few KB) instead of extracting the whole image now —
-              // extraction is deferred to the first render of the page (see
-              // ImageBlock's lazy extractor). This is what keeps first-open of an
-              // image-heavy chapter from stalling for seconds per image.
-              ImageDimensions dims = {0, 0};
-              ImageDimsProbe headerProbe;
-              self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
-              bool gotDimensions = headerProbe.getDimensions(dims);
-
               if (!gotDimensions) {
                 // No header within the stream (rare) — fall back to extracting the
                 // whole image and probing the file. That can take seconds, so
@@ -1600,8 +1612,8 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     const BlockStyle flowStyle =
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
     self->currentTextBlock =
-        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled, self->focusReadingEnabled,
-                                      flowStyle, self->collectTouchLinks);
+        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->firstLineIndent, self->hyphenationEnabled,
+                                      self->focusReadingEnabled, flowStyle, self->collectTouchLinks);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block for character data");
       self->failAllocation("text block for character data");
@@ -1985,8 +1997,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     const BlockStyle flowStyle =
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
     self->currentTextBlock =
-        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled, self->focusReadingEnabled,
-                                      flowStyle, self->collectTouchLinks);
+        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->firstLineIndent, self->hyphenationEnabled,
+                                      self->focusReadingEnabled, flowStyle, self->collectTouchLinks);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block after table");
       self->failAllocation("text block after table");
@@ -2348,8 +2360,12 @@ void ChapterHtmlSlimParser::makePages() {
     currentPageNextY += blockStyle.paddingBottom;
   }
 
-  // Extra paragraph spacing if enabled.
-  if (extraParagraphSpacing) {
-    currentPageNextY += lineHeight / 2;
+  // Extra paragraph spacing: 0=off, else 0.5x/0.75x/1x/1.25x/1.5x line height.
+  if (extraParagraphSpacing > 0) {
+    constexpr float EXTRA_PARAGRAPH_SPACING_FACTORS[] = {0.0f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f};
+    const float factor = extraParagraphSpacing < std::size(EXTRA_PARAGRAPH_SPACING_FACTORS)
+                             ? EXTRA_PARAGRAPH_SPACING_FACTORS[extraParagraphSpacing]
+                             : 1.5f;
+    currentPageNextY += static_cast<int16_t>(lineHeight * factor);
   }
 }

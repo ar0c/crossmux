@@ -29,7 +29,7 @@ class ForkIdentityTest(unittest.TestCase):
         sha = module['get_git_short_sha'](str(root))
         injected = env['CPPDEFINES'][0][1]
         stamp = injected.split('ar0c')[0].strip('\\"').rstrip('-')
-        version, _ = module['x4pro_identity']('1.5.8', sha, stamp)
+        version, _ = module['x4pro_identity'](module['get_base_version'](str(root)), sha, stamp)
         self.assertIn(version, env['CPPDEFINES'][0][1])
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / 'firmware.bin'
@@ -60,6 +60,9 @@ class ForkIdentityTest(unittest.TestCase):
 
         env = Env(PIOENV='waveshare_epaper_397', PROJECT_DIR=str(root))
         module['inject_version'](env)
+        base_version = module['get_base_version'](str(root))
+        short_sha = module['get_git_short_sha'](str(root))
+        self.assertIn(f'{base_version}-{short_sha[:7]}-ws397-dev', env['CPPDEFINES'][0][1])
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / 'firmware.bin'
             image.write_bytes(b'test image bytes')
@@ -69,9 +72,9 @@ class ForkIdentityTest(unittest.TestCase):
                     return str(image)
 
             env.action([Node()], [], env)
-            filename = module['dev_artifact_name']('1.5.8', 'waveshare_epaper_397',
-                                                   module['get_git_short_sha'](str(root)), image)
-            self.assertTrue(filename.startswith('crossmux-ar0c-1.5.8-waveshare-epaper-397-'))
+            filename = module['dev_artifact_name'](base_version, 'waveshare_epaper_397',
+                                                   short_sha, image)
+            self.assertTrue(filename.startswith(f'crossmux-ar0c-{base_version}-waveshare-epaper-397-'))
             self.assertEqual((image.parent / filename).read_bytes(), image.read_bytes())
 
     def test_unsafe_or_untraceable_versions_are_rejected(self):

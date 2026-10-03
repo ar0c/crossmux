@@ -17,6 +17,13 @@ The runtime version on subsequent builds is
 The base upstream version is not artificially incremented. Identity/export tests are in
 `scripts/tests/test_fork_identity.py`.
 
+Nightly versions put the changing seven-character source revision immediately
+after the base version: `1.6.0-<revision>-ws397-rc` or
+`1.6.0-<revision>-x4pro-rc`. A local Waveshare test build ends in `-local`
+instead. `ws397` is only a short display label; the OTA target and board tag
+retain the full Waveshare identity. These versions fit the 31-character ESP
+application descriptor field and match the published manifest exactly.
+
 The previously built full time-sync image (SHA-256 beginning `d9bc65ce`) used
 the historical name `260915-181930-d9bc65ce-ar0c-x4pro.bin`, based on its recorded build output time.
 That historical filename-only change left its embedded runtime version unchanged.
@@ -160,10 +167,50 @@ does not provide signed metadata or a cryptographic rollback counter.
 
 ### Managed-session development branch
 
-A Nightly workflow dispatch from `codex/weread-managed-session` packages only
-Waveshare 3.97. It requires the previous complete Nightly index and preserves
-X4 Pro's immutable manifest pointers exactly. Publish verification checks all
-preserved assets/hashes and requires the current SHA only for Waveshare. Retention
+A Nightly workflow dispatch from `codex/weread-managed-session` or its
+`codex/weread-managed-session-1.6.0` successor packages only
+Waveshare 3.97 by default. An explicit `release_target=xteink_x4_pro`
+workflow dispatch packages only X4 Pro for a requested test release. It
+requires the previous complete Nightly index and preserves the other
+device's immutable manifest pointers exactly. Publish verification checks all
+preserved assets/hashes and requires the current SHA only for the selected target. Retention
 keeps builds referenced by the previous index. On main or other ordinary release
 branches the canonical matrix applies again; supported devices are unchanged.
 Partial mode is Nightly-only and fails without a valid previous index.
+
+### Local Waveshare Nightly test release
+
+`scripts/manual_nightly_release.py` can prepare, publish, and restore a
+Waveshare-only Nightly index from a local Windows checkout. It does not publish
+`service.conf` or any device credentials. The source identity for this mode is
+the staged Git **tree** object, recorded as `git-tree-local` in the two
+manifests; the source archive stays in the local prepared directory. This
+distinguishes a local build from a pushed Git commit. Keep the prepared
+directory until the release has been accepted or rolled back.
+
+Stage exactly the source snapshot to build, with no unstaged tracked changes
+or untracked source files. Put validated English and Chinese OTA note arrays in
+a local UTF-8 JSON file using the `en` and `zh` keys. Then run:
+
+```text
+python scripts/manual_nightly_release.py prepare --build --notes-json <notes.json> --output <new-prepared-directory>
+python scripts/manual_nightly_release.py publish --prepared <prepared-directory>
+python scripts/manual_nightly_release.py rollback --prepared <prepared-directory>
+```
+
+Preparation builds `waveshare_epaper_397_nightly` with an embedded
+`1.6.0-<tree7>-ws397-local`-style version, checks that
+version in the ESP32-S3 image, packages the four install segments and two
+manifests, and verifies the candidate index including the preserved X4 Pro
+assets. The actual base version comes from `platformio.ini`. Publication
+refuses a changed rolling index, uploads an immutable build first, verifies
+its assets, moves the GitHub Nightly index last, then waits for and verifies
+the public K3s mirror. This is a shared Nightly channel: other Waveshare
+Nightly devices can see the test build.
+
+Rollback restores only the saved previous rolling index if the channel still
+points at this prepared release. The K3s mirror validates that old index and
+reuses immutable assets. An already installed higher base version cannot
+automatically downgrade through the device's update check; repair it with a
+newer build or a deliberate SD-card install. Never delete a referenced
+immutable release while preparing or rolling back.

@@ -330,7 +330,7 @@ struct Job final : WeReadTime::TimeQueueSource {
     current.queue = Q::Running;
     current.phase = WeReadTime::TimeTransaction::State::Sending;
     publish(current);
-    // Keep the service journal off the 8 KiB task stack: the TLS request path
+    // Keep the service journal off the worker stack: the TLS request path
     // also needs stack while this journal remains live. It is CPU-only state,
     // so the supported S3 boards can hold it in PSRAM for this explicit run.
     WeReadTime::ServiceClient client;
@@ -478,6 +478,13 @@ using JobPtr = std::unique_ptr<Job, JobDeleter>;
 JobPtr job;
 
 void worker(void* argument) {
+  // The starter checks real heap headroom after FreeRTOS allocates this task's
+  // stack. Do not touch the shared job before that check completes.
+  if (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 0) {
+    workerDone.store(true, std::memory_order_release);
+    vTaskDelete(nullptr);
+    return;
+  }
   static_cast<Job*>(argument)->run();
   // Last access to Job precedes this release. Main may now destroy all scratch.
   workerDone.store(true, std::memory_order_release);
@@ -566,10 +573,10 @@ bool start(const Source& source, const char* account) {
   unsigned freeHeap = ESP.getFreeHeap();
   unsigned largestBlock = ESP.getMaxAllocHeap();
   size_t budget = 0, contiguous = 0;
-  const auto fail = [&](StartFailure reason) {
-    startFailure = reason;
+  const auto recordStart = [&](StartFailure reason) {
     // Bounded, credential-free evidence for file-manager-only devices. Keep
-    // startup evidence separate from the last transaction/cloud receipt.
+    // startup evidence separate from the last transaction/cloud receipt. A
+    // successful start replaces a stale failure record from an earlier run.
     char record[384];
     const int n = std::snprintf(record, sizeof(record),
                                 "{\"schema\":1,\"reason\":%u,\"free_heap\":%u,\"largest_block\":%u,"
@@ -585,6 +592,10 @@ bool start(const Source& source, const char* account) {
         LOG_ERR("WRTime", "Startup diagnostic write failed");
       file.flush();
     }
+  };
+  const auto fail = [&](StartFailure reason) {
+    startFailure = reason;
+    recordStart(reason);
     LOG_ERR("WRTime", "Startup rejected reason=%u free=%u largest=%u budget=%u contiguous=%u", unsigned(reason),
             freeHeap, largestBlock, unsigned(budget), unsigned(contiguous));
     return false;
@@ -594,11 +605,13 @@ bool start(const Source& source, const char* account) {
       source.count > 4096)
     return fail(StartFailure::InvalidSource);
   if (WiFi.status() != WL_CONNECTED) return fail(StartFailure::Network);
-  // 8 KiB task stack + <=21 KiB job + <5 KiB audit + 16 bytes per source day
+  // 12 KiB task stack + <=21 KiB job + <5 KiB audit + 16 bytes per source day
   // (<=64 KiB). Fallible, allocated only on explicit start and freed on finish.
   // A live vector reference races reading; a maximum-sized static array would
   // permanently consume C3 RAM. Keep headroom for TLS AND the resumed reader.
-  constexpr size_t stackBytes = 8192;
+  // Service POST adds a nested exchange frame and TLS client below request().
+  // Keep that call chain off the edge of the former 8 KiB worker stack.
+  constexpr size_t stackBytes = 12 * 1024;
   // CPU-only workspace, never an ISR or DMA buffer. Allocate <=21 KiB once
   // in PSRAM where available; a task-stack/static workspace is unsuitable for
   // its size/lifetime. Preserve the C3 fallback and both internal reserves.
@@ -612,7 +625,10 @@ bool start(const Source& source, const char* account) {
 #if !defined(SIMULATOR)
   budget = internalJobBytes + source.count * sizeof(ReadingDayStats) + stackBytes + 6 * 1024 + 1024;
   contiguous = std::max({internalJobBytes, source.count * sizeof(ReadingDayStats), stackBytes});
-  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, 96 * 1024, 32 * 1024)) {
+  // A single largest block need not hold both the task stack and the TLS
+  // reserve. Check each actual allocation first, then measure the remainder.
+  contiguous = std::max(contiguous, size_t(32 * 1024));
+  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, 96 * 1024, 0)) {
     LOG_ERR("WRTime", "Insufficient heap for background sync and reader (%u bytes)", unsigned(budget));
     return fail(StartFailure::Headroom);
   }
@@ -668,7 +684,27 @@ bool start(const Source& source, const char* account) {
     LOG_ERR("WRTime", "OOM: background task stack/TCB");
     return fail(StartFailure::TaskMemory);
   }
+#if !defined(SIMULATOR)
+  freeHeap = ESP.getFreeHeap();
+  largestBlock = ESP.getMaxAllocHeap();
+  budget = 6 * 1024 + 1024;
+  contiguous = 0;
+  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, 96 * 1024, 32 * 1024)) {
+    vTaskDelete(task);  // The worker is still blocked on its start notification.
+    workerDone.store(true, std::memory_order_release);
+    job.reset();
+    initial.available = false;
+    initial.running = false;
+    initial.queue = WeReadTime::TimeQueue::State::Paused;
+    initial.phase = WeReadTime::TimeTransaction::State::NotSent;
+    initial.diagnostic.stage = WeReadTime::Diagnostic::Stage::StartupMemory;
+    publish(initial);
+    return fail(StartFailure::Headroom);
+  }
+#endif
   wifiOwned = true;
+  recordStart(StartFailure::None);
+  xTaskNotifyGive(task);
   return true;
 }
 }  // namespace WeReadTimeSync

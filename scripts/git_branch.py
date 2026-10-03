@@ -123,8 +123,7 @@ def inject_version(env):
         build_stamp = datetime.now(timezone(timedelta(hours=8))).strftime('%y%m%d-%H%M%S')
         version_string, _ = x4pro_identity(base_version, short_sha, build_stamp)
     else:
-        device = pioenv.replace('_', '-')
-        version_string = f'{base_version}-{device}-rc+{short_sha}'
+        version_string = f'{base_version}-{short_sha[:7]}-ws397-dev'
 
     def export_firmware(target, source, env):
         image = Path(target[0].get_abspath())

@@ -4,6 +4,8 @@ Project: CrossMux, a community fork of CrossPoint Reader for ESP32 e-ink devices
 Mission: Keep reading fast and reliable while supporting lightweight apps, reading analytics, standby faces, and on-demand services within the hardware budget.
 Targets: Xteink X4 Pro and Waveshare ePaper 3.97 have separate ESP32-S3 images. See [`scripts/nightly_targets.py`](scripts/nightly_targets.py) for release targets and channels.
 
+**Project device scope:** Only Xteink X4 Pro and Waveshare ePaper 3.97 are supported firmware targets in this fork. Keep build, CI, packaging, OTA, and release target lists limited to these two devices when merging upstream. Shared upstream code may still be integrated, but do not re-enable another device target without an explicit change to this project rule from the user. X4 Pro has Stable and Nightly channels; Waveshare ePaper 3.97 has Nightly only. The canonical matrix is in [`scripts/nightly_targets.py`](scripts/nightly_targets.py).
+
 > **This file is a map, not a manual.** It holds the identity, the
 > non-negotiable invariants, and a quick reference — then points to the deep
 > engineering docs in [`docs/engineering/`](docs/engineering/index.md). Read the
@@ -91,8 +93,8 @@ python3 scripts/debugging_monitor.py # Enhanced serial monitor
 | Git workflow | Repo detection, branching, commits | [docs/engineering/git-workflow.md](docs/engineering/git-workflow.md) |
 | Cache management | Cache structure, invalidation, format versioning | [docs/engineering/cache-management.md](docs/engineering/cache-management.md) |
 | Unified languages & Chinese support | Runtime content profiles, embedded CJK fonts | [docs/engineering/chinese-build.md](docs/engineering/chinese-build.md) |
-| Firmware releases | Stable/Nightly targets, packaging, GitHub/COS indexes, rollback, OTA contracts | [docs/engineering/firmware-release.md](docs/engineering/firmware-release.md) |
-| Device variants | Shared X3/X4 image, separate S3 builds, hardware validation limits | [docs/engineering/device-variants.md](docs/engineering/device-variants.md) |
+| Firmware releases | Two-device Stable/Nightly targets, packaging, GitHub indexes, rollback, OTA contracts | [docs/engineering/firmware-release.md](docs/engineering/firmware-release.md) |
+| Device variants | X4 Pro and Waveshare 3.97 images and hardware validation limits | [docs/engineering/device-variants.md](docs/engineering/device-variants.md) |
 | System overview & dataflow | Runtime lifecycle, activity model, pipeline diagrams | [docs/contributing/architecture.md](docs/contributing/architecture.md) |
 | Binary file formats | Byte-level cache/notes/font formats | [docs/file-formats.md](docs/file-formats.md) |
 | i18n system | Translation workflow in depth | [docs/i18n.md](docs/i18n.md) |

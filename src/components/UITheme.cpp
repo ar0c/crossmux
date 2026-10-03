@@ -92,7 +92,8 @@ const ThemeMetrics& UITheme::getMetrics() const {
   const bool showButtonHints = currentTheme->buttonHintsVisible();
   if (!metricsValid || showButtonHints != metricsForButtonHints) {
     adjustedMetrics = *currentMetrics;
-    if (!showButtonHints) {
+    // Waveshare hints follow the wheel and BOOT/PWR edges, not the footer.
+    if (!showButtonHints || gpio.hasWheelAndBootButtons()) {
       adjustedMetrics.buttonHintsHeight = 0;
     }
     metricsForButtonHints = showButtonHints;

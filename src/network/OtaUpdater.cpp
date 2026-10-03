@@ -85,6 +85,26 @@ bool safeAssetName(const std::string_view name) {
          });
 }
 
+std::string_view nightlyRevision(const std::string_view version) {
+  // New Nightly versions put the source revision immediately after the base
+  // version so it remains visible on the narrow e-paper update screen.
+  const size_t firstDash = version.find('-');
+  if (firstDash != std::string_view::npos) {
+    const size_t secondDash = version.find('-', firstDash + 1);
+    if (secondDash != std::string_view::npos) {
+      const std::string_view revision = version.substr(firstDash + 1, secondDash - firstDash - 1);
+      if (revision.size() == 7 && std::all_of(revision.begin(), revision.end(), [](const char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+          }))
+        return revision;
+    }
+  }
+  // Previously published Nightly builds used -rc+<seven-character SHA>.
+  const size_t plus = version.rfind('+');
+  if (plus != std::string_view::npos && version.size() - plus == 8) return version.substr(plus + 1);
+  return {};
+}
+
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
@@ -182,18 +202,23 @@ bool OtaUpdater::isUpdateNewer() const {
   switch (channel) {
     case Channel::Stable:
       break;
-    case Channel::Nightly:
+    case Channel::Nightly: {
       if (latestVersion == CROSSPOINT_VERSION) return false;
-      // Release builds embed the same seven-character source revision after '+'.
-      // A local timestamped development build has no comparable release SHA.
-      if (const size_t plus = latestVersion.rfind('+'); plus != std::string::npos && latestVersion.size() - plus == 8) {
-        const std::string_view current = CROSSPOINT_VERSION;
-        const size_t currentPlus = current.rfind('+');
-        if (currentPlus != std::string_view::npos &&
-            current.substr(currentPlus + 1) == std::string_view(latestVersion).substr(plus + 1))
-          return false;
-      }
+      // A feature branch can publish to Nightly with an older base version.
+      // Such a candidate must never be offered as a device upgrade.
+      int currentMajor = 0, currentMinor = 0, currentPatch = 0;
+      int latestMajor = 0, latestMinor = 0, latestPatch = 0;
+      if (sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch) != 3 ||
+          sscanf(CROSSPOINT_VERSION, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch) != 3)
+        return false;
+      if (latestMajor < currentMajor ||
+          (latestMajor == currentMajor && latestMinor < currentMinor) ||
+          (latestMajor == currentMajor && latestMinor == currentMinor && latestPatch < currentPatch))
+        return false;
+      const std::string_view latestRevision = nightlyRevision(latestVersion);
+      if (!latestRevision.empty() && latestRevision == nightlyRevision(CROSSPOINT_VERSION)) return false;
       return true;
+    }
   }
   if (latestVersion == CROSSPOINT_VERSION) return false;
 

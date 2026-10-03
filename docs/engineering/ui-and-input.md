@@ -41,6 +41,14 @@ Constraint: Physical button positions are fixed on hardware, but their logical f
 
 **Rule**: Always use `MappedInputManager::Button::*` enums, never raw `HalGPIO::BTN_*` indices (except in ButtonRemapActivity).
 
+On Waveshare ePaper 3.97, BOOT is the physical Back key, the three wheel
+positions provide Left, Confirm, and Right, and PWR comes from the PMIC.
+`BaseTheme::drawWheelAndBootButtonHints()` places their small labels beside the
+upper left wheel and upper right BOOT/PWR buttons across all themes. It skips
+labels over occupied framebuffer areas and does not reserve the X4 Pro footer.
+Check the physical board after changing this layout; a successful build cannot
+prove bezel alignment or e-paper appearance.
+
 ## Input Frames and Event Semantics
 
 The main loop updates `MappedInputManager` once per frame before dispatching
@@ -174,6 +182,9 @@ action**.
   so the caller can draw its fallback cover.
 * INX front-button hints use black text above a 50% gray bottom line. Empty
   actions draw neither label nor line; directional actions use `<` and `>`.
+* INX header subtitles share one rectangle for drawing and clipping, including
+  their vertical centering offset. Clipping at the title's original top cuts off
+  the smaller subtitle's lower glyph rows.
 * On touch hardware, INX list and app-grid navigation focus follows the last
   input modality: touch hides it, while a physical button restores it. The
   logical selection and viewport remain intact, and FreeInkUI's active touch
@@ -231,3 +242,5 @@ shared icon assets and other themes remain unchanged.
 > User-facing text must use the `tr()` macro — see
 > [hardware-constraints.md](hardware-constraints.md) → Resource Protocol rule 5,
 > and the i18n workflow in [generated-files.md](generated-files.md).
+
+INX SDK layout compatibility and regression coverage: [INX theme compatibility](inx-theme-compatibility.md).

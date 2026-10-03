@@ -28,6 +28,8 @@ constexpr int kMaxValueWidth = 200;
 constexpr int kSideHintY = 345;
 constexpr int kX3SideHintY = 155;
 constexpr int kHintWidth = 80;
+constexpr int kHintBarWidth = kHintWidth * 4 / 5;
+constexpr int kHintBarInset = (kHintWidth - kHintBarWidth) / 2;
 constexpr int kHintBarHeight = 5;
 constexpr int kHintGap = 4;
 
@@ -96,13 +98,14 @@ void InxTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, const ch
         std::min(renderer.getTextWidth(SMALL_FONT_ID, subtitle), std::max(0, rect.width / 2 - rightPadding));
     titleRight -= subtitleWidth + kIconGap;
     if (subtitleWidth > 0) {
-      const GfxRenderer::ClipScope clip(renderer, titleRight + kIconGap, titleTop, subtitleWidth,
-                                        renderer.getLineHeight(SMALL_FONT_ID));
-      renderer.drawText(
-          SMALL_FONT_ID, rect.x + rect.width - rightPadding - subtitleWidth,
-          titleTop +
-              std::max(0, (renderer.getLineHeight(NOTOSERIF_12_FONT_ID) - renderer.getLineHeight(SMALL_FONT_ID)) / 2),
-          subtitle);
+      const int subtitleHeight = renderer.getLineHeight(SMALL_FONT_ID);
+      const Rect subtitleRect{
+          titleRight + kIconGap,
+          titleTop + std::max(0, (renderer.getLineHeight(NOTOSERIF_12_FONT_ID) - subtitleHeight) / 2), subtitleWidth,
+          subtitleHeight};
+      const GfxRenderer::ClipScope clip(renderer, subtitleRect.x, subtitleRect.y, subtitleRect.width,
+                                        subtitleRect.height);
+      renderer.drawText(SMALL_FONT_ID, subtitleRect.x, subtitleRect.y, subtitle);
     }
   }
 
@@ -168,6 +171,7 @@ bool InxTheme::tabIndexFromPoint(const GfxRenderer&, const Rect rect, const std:
 void InxTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                const char* btn4) const {
   if (!buttonHintsVisible()) return;
+  if (drawWheelAndBootButtonHints(renderer, btn1, btn2, btn3, btn4)) return;
 
   const GfxRenderer::Orientation original = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -186,14 +190,14 @@ void InxTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const ch
   for (int i = 0; i < 4; ++i) {
     renderer.fillRect(positions[i], hintY, kHintWidth, buttonHeight, false);
     if (!labels[i] || !*labels[i]) continue;
-    renderer.fillRectDither(positions[i], barY, kHintWidth, kHintBarHeight, Color::DarkGray);
+    renderer.fillRectDither(positions[i] + kHintBarInset, barY, kHintBarWidth, kHintBarHeight, Color::DarkGray);
     drawHintText(renderer, hintLabel(labels[i]), positions[i], hintY, contentBottom);
   }
   renderer.setOrientation(original);
 }
 
 void InxTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const {
-  if (gpio.hasTouch()) return;
+  if (gpio.hasTouch() || gpio.hasWheelAndBootButtons()) return;
   constexpr int width = InxMetrics::values.sideButtonHintsWidth;
   constexpr int height = 78;
   const int screenWidth = renderer.getScreenWidth();
@@ -320,6 +324,21 @@ void InxTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const int 
     drawDottedSeparator(renderer, rect.x, rowY + kRowHeight - 1, rect.width);
   }
   drawSideScrollBar(renderer, rect, buttonCount, pageStart, pageItems);
+}
+
+InxTheme::MenuRowGeometry InxTheme::getMenuRowGeometry(const GfxRenderer&, const Rect& rect, const int selectedIndex,
+                                                       const int rowCount) const {
+  // Mirror of InxTheme::drawButtonMenu: rows start at rect.y, step by the
+  // fixed row height and are paged.
+  const int pageItems = InxMenuGeometry::pageItems(rect.height);
+  const int pageStart = InxMenuGeometry::pageStart(selectedIndex, rowCount, rect.height);
+  return {rect.y,
+          kRowHeight,
+          kRowHeight,
+          pageStart,
+          std::min(rowCount - pageStart, pageItems),
+          rect.x + kRowPadding,
+          rect.x + rect.width};
 }
 
 void InxTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,

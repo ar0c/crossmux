@@ -58,11 +58,11 @@ class NightlyTargetTest(unittest.TestCase):
     def test_versions_are_nightly_release_candidates(self):
         self.assertEqual(
             nightly_targets.version_for('1.5.7', 'waveshare_epaper_397', 'nightly', 'global', '12345678'),
-            '1.5.7-waveshare-epaper-397-rc+1234567',
+            '1.5.7-1234567-ws397-rc',
         )
         self.assertEqual(
             nightly_targets.version_for('1.5.7', 'waveshare_epaper_397', 'nightly', 'zh-CN', '12345678'),
-            '1.5.7-waveshare-epaper-397-rc+1234567',
+            '1.5.7-1234567-ws397-rc',
         )
         self.assertNotIn(
             'beta',
@@ -72,6 +72,16 @@ class NightlyTargetTest(unittest.TestCase):
             nightly_targets.version_for('1.5.8', 'xteink_x4_pro', 'stable', 'global', '1234567'),
             '1.5.8',
         )
+        self.assertEqual(
+            nightly_targets.version_for('1.6.0', 'xteink_x4_pro', 'nightly', 'global', 'abcdef0'),
+            '1.6.0-abcdef0-x4pro-rc',
+        )
+        self.assertLess(len(nightly_targets.version_for(
+            '1.6.0', 'waveshare_epaper_397', 'nightly', 'global', 'abcdef0', 'local'
+        )), 32)
+        for revision in ('unknown', '123456', '123456g'):
+            with self.subTest(revision=revision), self.assertRaises(ValueError):
+                nightly_targets.version_for('1.6.0', 'waveshare_epaper_397', 'nightly', 'global', revision)
 
     def test_workflow_packages_one_binary_set(self):
         workflow = (ROOT / '.github/workflows/nightly.yml').read_text()
@@ -87,6 +97,14 @@ class NightlyTargetTest(unittest.TestCase):
         self.assertIn('for legacy_asset in firmware.bin firmware-cn.bin', workflow)
         self.assertNotIn('--flavor', hardware_workflow)
         self.assertIn('(cd "dist/nightly/$target" && sha256sum --check *-SHA256SUMS)', hardware_workflow)
+
+    def test_dispatch_can_publish_x4_without_building_waveshare(self):
+        workflow = (ROOT / '.github/workflows/nightly.yml').read_text()
+        self.assertIn('release_target:', workflow)
+        self.assertIn('default: auto', workflow)
+        self.assertIn('xteink_x4_pro|waveshare_epaper_397)', workflow)
+        self.assertIn('target_args=(--only-target "$RELEASE_TARGET")', workflow)
+        self.assertIn('--previous-index previous/global/release-index.json', workflow)
 
     def test_workflow_publishes_only_to_fork_github_releases(self):
         workflow = (ROOT / '.github/workflows/nightly.yml').read_text()
@@ -153,6 +171,24 @@ class NightlyTargetTest(unittest.TestCase):
                 {key: value for key, value in manifests[0].items() if key != 'flavor'},
                 {key: value for key, value in manifests[1].items() if key != 'flavor'},
             )
+
+            local_output = root / 'dist/local-waveshare'
+            local_tree = 'b' * 40
+            local_version = '1.5.7-bbbbbbb-ws397-local'
+            with (
+                mock.patch.object(package_nightly_target, 'verify_partition_csv'),
+                mock.patch.object(package_nightly_target, 'find_boot_app0', return_value=boot_app0),
+                mock.patch.object(package_nightly_target, 'git_value', side_effect=git_value),
+            ):
+                package_nightly_target.package_target(
+                    root, 'waveshare_epaper_397', 'nightly', local_output,
+                    source_sha=local_tree, embedded_version=local_version,
+                )
+            for flavor in nightly_targets.FLAVOR_TOKENS:
+                local = json.loads((local_output / nightly_targets.manifest_name('waveshare_epaper_397', flavor)).read_text())
+                self.assertEqual(local['crossmuxSha'], local_tree)
+                self.assertEqual(local['version'], local_version)
+                self.assertEqual(local['sourceKind'], 'git-tree-local')
 
     def test_stable_package_has_release_version_and_full_s3_install(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -291,6 +327,22 @@ class NightlyIndexTest(unittest.TestCase):
         new=build_nightly_index.build_index(*args,only_target='waveshare_epaper_397',previous=old)
         self.assertEqual(new['targets']['xteink_x4_pro'],old['targets']['xteink_x4_pro'])
         self.assertEqual(new['targets']['waveshare_epaper_397']['variants']['global']['crossmuxSha'],'a'*40)
+
+    def test_x4_partial_release_retains_waveshare(self):
+        self.write_all_pairs(revision='c' * 40)
+        old = build_nightly_index.build_index(
+            self.root, 'global', 'https://github.com/ar0c/crossmux/releases/download/nightly-build-old/',
+            'old', 'old', 'nightly'
+        )
+        for flavor in nightly_targets.FLAVOR_TOKENS:
+            (self.root / nightly_targets.manifest_name('waveshare_epaper_397', flavor)).unlink()
+        self.write_pair('xteink_x4_pro')
+        new = build_nightly_index.build_index(
+            self.root, 'global', 'https://github.com/ar0c/crossmux/releases/download/nightly-build-new/',
+            'new', 'new', 'nightly', only_target='xteink_x4_pro', previous=old
+        )
+        self.assertEqual(new['targets']['waveshare_epaper_397'], old['targets']['waveshare_epaper_397'])
+        self.assertEqual(new['targets']['xteink_x4_pro']['variants']['global']['crossmuxSha'], 'a' * 40)
 
     def test_builds_complete_index(self):
         self.write_all_pairs()

@@ -99,6 +99,10 @@ jobs:
     needs: select_runner
     runs-on: ${{ fromJSON(needs.select_runner.outputs['runs-on']) }}
     steps:
+      - name: Use runner temporary directory
+        # Avoid the self-hosted runner's shared /tmp tmpfs.
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -134,6 +138,7 @@ jobs:
         run: |
           set -euo pipefail
           export CROSSPOINT_RC_HASH="${GITHUB_SHA::7}"
+          export CROSSPOINT_BUILD_KIND=rc
           pio run \
             -e simulator \
             -e x4pro_nightly \

@@ -104,7 +104,10 @@ struct Diagnostic {
     return "invalid";
   }
   int encode(char* out, size_t capacity, unsigned queue, unsigned phase, unsigned issue, unsigned long tick) const {
-    if (!out || capacity < 32) return 0;
+    // A buffer shorter than the fixed JSON prefix cannot hold a valid record.
+    // Return before snprintf so small-capacity callers do not write fragments.
+    constexpr char kJsonPrefix[] = "{\"schema\":3,\"stage\":\"";
+    if (!out || capacity < sizeof(kJsonPrefix)) return 0;
     const int n = std::snprintf(
         out, capacity,
         "{\"schema\":3,\"stage\":\"%s\",\"error\":%d,\"http\":%d,\"detail\":%d,\"queue\":%u,\"phase\":%u,\"issue\":%u,"

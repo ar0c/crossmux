@@ -1189,7 +1189,7 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
                                        EpdFontFamily::BOLD);
       break;
     case State::Failed:
-      UITheme::drawCenteredWrappedText(renderer, textBounds, UI_10_FONT_ID, errorMessage(), 2, true,
+      UITheme::drawCenteredWrappedText(renderer, textBounds, UI_10_FONT_ID, errorMessage(), 4, true,
                                        EpdFontFamily::BOLD);
       break;
   }
