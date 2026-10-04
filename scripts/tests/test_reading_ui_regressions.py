@@ -25,14 +25,14 @@ def run_cpp(program):
     with tempfile.TemporaryDirectory(prefix='reading-ui-') as directory:
         cpp = Path(directory) / 'check.cpp'
         exe = Path(directory) / 'check'
-        cpp.write_text(program)
+        cpp.write_text(program, encoding='utf-8')
         subprocess.run(['c++', '-std=c++20', '-Wall', '-Wextra', '-Werror', str(cpp), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True)
 
 
 class ReadingUiRegressionTest(unittest.TestCase):
     def test_header_subtitle_is_inside_clip(self):
-        source = (ROOT / 'src/components/themes/inx/InxTheme.cpp').read_text()
+        source = (ROOT / 'src/components/themes/inx/InxTheme.cpp').read_text(encoding='utf-8')
         code = method(source, 'void InxTheme::drawHeader(')
         run_cpp(r'''
 #include <algorithm>
@@ -84,7 +84,7 @@ int main() {
 ''')
 
     def test_sync_refresh_survives_wifi_child(self):
-        source = (WEREAD / 'WeReadProgressSyncActivity.cpp').read_text()
+        source = (WEREAD / 'WeReadProgressSyncActivity.cpp').read_text(encoding='utf-8')
         enter = method(source, 'void WeReadProgressSyncActivity::onEnter(')
         callback = method(source, 'void WeReadProgressSyncActivity::onWifiSelectionComplete(')
         render = method(source, 'void WeReadProgressSyncActivity::render(')
@@ -138,7 +138,7 @@ int main() {
 ''')
 
     def test_resource_error_messages_and_layout(self):
-        source = (WEREAD / 'WeReadActivity.cpp').read_text()
+        source = (WEREAD / 'WeReadActivity.cpp').read_text(encoding='utf-8')
         message = method(source, 'const char* WeReadActivity::errorMessage(')
         render = method(source, 'void WeReadActivity::render(')
         error = render.split('    case State::Error: {', 1)[1].split('    case State::LogoutError:', 1)[0]
@@ -237,7 +237,7 @@ int main() {
 
 
     def test_cover_download_creates_directory_before_request(self):
-        source = (ROOT / 'lib/WeReadWebApi/src/WeReadClient.cpp').read_text()
+        source = (ROOT / 'lib/WeReadWebApi/src/WeReadClient.cpp').read_text(encoding='utf-8')
         download = method(source, 'Error Operation::fetchCoverSource(')
         sink = source[source.index('struct FileSink {'):source.index('bool finishFile(')]
         run_cpp(r"""
@@ -357,7 +357,7 @@ int main(int argc,char** argv) {
 
     def test_txt_spacing_keeps_cache_fields_byte_aligned(self):
         import re
-        source = (ROOT / 'src/activities/reader/TxtReaderActivity.cpp').read_text()
+        source = (ROOT / 'src/activities/reader/TxtReaderActivity.cpp').read_text(encoding='utf-8')
         read = method(source, 'bool readPodChecked(')
         write = method(source, 'bool writePodChecked(')
         expression = re.search(

@@ -94,6 +94,7 @@ WeReadProgressContext WeReadProgressSyncActivity::makeContext(const Epub& epub, 
 void WeReadProgressSyncActivity::onEnter() {
   Activity::onEnter();
   timeInputBarrier_ = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+  fullRefreshPending_.store(true);
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
   WeReadTimeSync::Status status;
@@ -527,6 +528,8 @@ void WeReadProgressSyncActivity::launchWifiSelection() {
 }
 
 void WeReadProgressSyncActivity::onWifiSelectionComplete(const bool connected) {
+  // The Wi-Fi child can paint the panel before this activity resumes.
+  fullRefreshPending_.store(true);
   if (resumeTimeAfterWifi_) {
     resumeTimeAfterWifi_ = false;
     state_ = connected ? State::TimeConfirm : State::TimeResult;
@@ -1218,7 +1221,7 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
                                                             : "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
-  renderer.displayBuffer();
+  renderer.displayBuffer(fullRefreshPending_.exchange(false) ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
 }
 
 #endif
