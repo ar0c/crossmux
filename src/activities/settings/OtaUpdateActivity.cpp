@@ -534,7 +534,9 @@ void OtaUpdateActivity::runUpdateInstall() {
     {
       RenderLock lock(*this);
       sdFontSystem.ensureLoaded(renderer, false);
-      failedDetail = res == OtaUpdater::WRONG_DEVICE_ERROR ? tr(STR_FIRMWARE_WRONG_DEVICE) : nullptr;
+      failedDetail = res == OtaUpdater::WRONG_DEVICE_ERROR ? tr(STR_FIRMWARE_WRONG_DEVICE)
+                     : res == OtaUpdater::HTTP_ERROR       ? tr(STR_AUTO_FONT_DOWNLOAD_FAILED)
+                                                           : nullptr;
       state = State::Failed;
     }
     requestUpdate();

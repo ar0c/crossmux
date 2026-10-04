@@ -371,16 +371,25 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     hashOk = false;
   mbedtls_sha256_free(&shaCtx);
 
-  if (wrongChip || wrongBoard || !boardScanner.matched()) {
-    LOG_ERR("OTA", "Firmware install aborted: wrong device");
+  if (wrongChip || wrongBoard) {
+    LOG_ERR("OTA", "Firmware install aborted: wrong device (chip=%d board=%d, received=%zu/%zu)", wrongChip,
+            wrongBoard, processedSize, otaSize);
     esp_ota_abort(otaHandle);
     return WRONG_DEVICE_ERROR;
   }
 
   if (!fetchOk || !flashOk || !hashOk) {
-    LOG_ERR("OTA", "Firmware install failed (%s)", flashOk ? "download" : "flash write");
+    LOG_ERR("OTA", "Firmware install failed (%s, fetch=%d hash=%d, received=%zu/%zu, boardTag=%d)",
+            flashOk ? "download/verification" : "flash write", fetchOk, hashOk, processedSize, otaSize,
+            boardScanner.matched());
     esp_ota_abort(otaHandle);
     return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;
+  }
+
+  if (!boardScanner.matched()) {
+    LOG_ERR("OTA", "Complete firmware image has no matching board tag (%zu bytes)", processedSize);
+    esp_ota_abort(otaHandle);
+    return WRONG_DEVICE_ERROR;
   }
 
   esp_err = esp_ota_end(otaHandle);  // verifies the written image
