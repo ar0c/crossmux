@@ -21,6 +21,7 @@
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "fontIds.h"
+#include "network/OtaDiagnostic.h"
 #include "network/OtaUpdater.h"
 #include "util/ButtonNavigator.h"
 
@@ -531,6 +532,7 @@ void OtaUpdateActivity::runUpdateInstall() {
 
   if (res != OtaUpdater::OK) {
     LOG_DBG("OTA", "Update failed: %d", res);
+    OtaDiagnostic::checkpoint("ui_install_error", updater.getProcessedSize(), updater.getTotalSize(), 0, res);
     {
       RenderLock lock(*this);
       sdFontSystem.ensureLoaded(renderer, false);
@@ -547,7 +549,9 @@ void OtaUpdateActivity::runUpdateInstall() {
     RenderLock lock(*this);
     state = State::Finished;
   }
+  OtaDiagnostic::checkpoint("finish_draw_start", updater.getProcessedSize(), updater.getTotalSize());
   requestUpdateAndWait();
+  OtaDiagnostic::checkpoint("finish_draw_done", updater.getProcessedSize(), updater.getTotalSize());
   // Hold the completion screen briefly so the user sees it, then restart.
   delay(3000);
   {
@@ -634,6 +638,7 @@ void OtaUpdateActivity::loop() {
       return;
     }
     case State::ShuttingDown:
+      OtaDiagnostic::checkpoint("reboot_pending", updater.getProcessedSize(), updater.getTotalSize());
       ESP.restart();
       return;
     case State::WifiSelection:

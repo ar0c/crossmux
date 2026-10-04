@@ -23,6 +23,7 @@
 #include "CrossPointSettings.h"
 #include "FirmwareBoardTag.h"
 #include "FirmwareFlasher.h"
+#include "OtaDiagnostic.h"
 
 namespace {
 constexpr size_t MAX_RELEASE_JSON = 8192;
@@ -267,6 +268,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return UPDATE_OLDER_ERROR;
   }
 
+  OtaDiagnostic::begin(otaSize, 0);
+
   // esp_https_ota is hardwired to esp-tls/mbedTLS, whose precompiled build on this
   // package can't negotiate TLS 1.3 (see SecureClient.h). Drive the OTA partition
   // ourselves and stream the firmware through HttpDownloader, which runs over
@@ -275,20 +278,26 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   const esp_partition_t* updatePartition = esp_ota_get_next_update_partition(nullptr);
   if (!updatePartition) {
     LOG_ERR("OTA", "No OTA partition available");
+    OtaDiagnostic::checkpoint("no_partition", 0, otaSize);
     return INTERNAL_UPDATE_ERROR;
   }
+  const uint32_t targetSlot = updatePartition->address;
   if (otaSize == 0 || otaSize > updatePartition->size) {
     LOG_ERR("OTA", "Fork image does not fit OTA partition: %zu > %u", otaSize,
             static_cast<unsigned>(updatePartition->size));
+    OtaDiagnostic::checkpoint("size_rejected", 0, otaSize, targetSlot);
     return INTERNAL_UPDATE_ERROR;
   }
 
   esp_ota_handle_t otaHandle = 0;
+  OtaDiagnostic::checkpoint("ota_begin_start", 0, otaSize, targetSlot);
   esp_err_t esp_err = esp_ota_begin(updatePartition, OTA_SIZE_UNKNOWN, &otaHandle);
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_ota_begin failed: %s", esp_err_to_name(esp_err));
+    OtaDiagnostic::checkpoint("ota_begin_error", 0, otaSize, targetSlot, esp_err);
     return INTERNAL_UPDATE_ERROR;
   }
+  OtaDiagnostic::checkpoint("ota_begin_done", 0, otaSize, targetSlot);
 
   /* For better timing and connectivity, we disable power saving for WiFi */
   esp_wifi_set_ps(WIFI_PS_NONE);
@@ -307,12 +316,14 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   mbedtls_sha256_context shaCtx;
   mbedtls_sha256_init(&shaCtx);
   if (mbedtls_sha256_starts(&shaCtx, 0) != 0) {
+    OtaDiagnostic::checkpoint("sha_start_error", 0, otaSize, targetSlot);
     mbedtls_sha256_free(&shaCtx);
     esp_ota_abort(otaHandle);
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     return INTERNAL_UPDATE_ERROR;
   }
   bool hashOk = true;
+  OtaDiagnostic::checkpoint("fetch_start", 0, otaSize, targetSlot);
   const bool fetchOk = HttpDownloader::fetchVerifiedUrl(otaUrl, [&](const uint8_t* data, size_t len) {
     if (len > otaSize - processedSize) {
       hashOk = false;
@@ -349,6 +360,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
       return false;  // abort the transfer
     }
     processedSize += len;
+    if (processedSize == otaSize) {
+      // The final HTTP cleanup and UI repaint still follow this callback.
+      OtaDiagnostic::checkpoint("body_complete", processedSize, otaSize, targetSlot);
+    }
     // Fire the callback only on whole-percent change. Per-chunk updates wake the
     // render task, whose framebuffer work contends with TLS on the internal arena,
     // and e-ink can't repaint faster than a percent tick anyway.
@@ -361,6 +376,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     }
     return true;
   });
+  OtaDiagnostic::checkpoint(fetchOk ? "fetch_done" : "fetch_error", processedSize, otaSize, targetSlot);
 
   /* Return back to default power saving for WiFi in case of failing */
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
@@ -370,10 +386,13 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
       std::memcmp(actualDigest, otaSha256.data(), otaSha256.size()) != 0)
     hashOk = false;
   mbedtls_sha256_free(&shaCtx);
+  OtaDiagnostic::checkpoint(hashOk ? "digest_ok" : "digest_error", processedSize, otaSize, targetSlot);
 
   if (wrongChip || wrongBoard) {
     LOG_ERR("OTA", "Firmware install aborted: wrong device (chip=%d board=%d, received=%zu/%zu)", wrongChip,
             wrongBoard, processedSize, otaSize);
+    OtaDiagnostic::checkpoint("device_rejected", processedSize, otaSize, targetSlot,
+                              (wrongChip ? 1 : 0) | (wrongBoard ? 2 : 0));
     esp_ota_abort(otaHandle);
     return WRONG_DEVICE_ERROR;
   }
@@ -382,27 +401,36 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     LOG_ERR("OTA", "Firmware install failed (%s, fetch=%d hash=%d, received=%zu/%zu, boardTag=%d)",
             flashOk ? "download/verification" : "flash write", fetchOk, hashOk, processedSize, otaSize,
             boardScanner.matched());
+    OtaDiagnostic::checkpoint("install_error", processedSize, otaSize, targetSlot,
+                              (!fetchOk ? 1 : 0) | (!flashOk ? 2 : 0) | (!hashOk ? 4 : 0));
     esp_ota_abort(otaHandle);
     return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;
   }
 
   if (!boardScanner.matched()) {
     LOG_ERR("OTA", "Complete firmware image has no matching board tag (%zu bytes)", processedSize);
+    OtaDiagnostic::checkpoint("board_tag_missing", processedSize, otaSize, targetSlot);
     esp_ota_abort(otaHandle);
     return WRONG_DEVICE_ERROR;
   }
 
+  OtaDiagnostic::checkpoint("ota_end_start", processedSize, otaSize, targetSlot);
   esp_err = esp_ota_end(otaHandle);  // verifies the written image
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_ota_end failed: %s", esp_err_to_name(esp_err));
+    OtaDiagnostic::checkpoint("ota_end_error", processedSize, otaSize, targetSlot, esp_err);
     return INTERNAL_UPDATE_ERROR;
   }
+  OtaDiagnostic::checkpoint("ota_end_done", processedSize, otaSize, targetSlot);
 
+  OtaDiagnostic::checkpoint("boot_select_start", processedSize, otaSize, targetSlot);
   esp_err = esp_ota_set_boot_partition(updatePartition);
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_ota_set_boot_partition failed: %s", esp_err_to_name(esp_err));
+    OtaDiagnostic::checkpoint("boot_select_error", processedSize, otaSize, targetSlot, esp_err);
     return INTERNAL_UPDATE_ERROR;
   }
+  OtaDiagnostic::checkpoint("boot_select_done", processedSize, otaSize, targetSlot);
 
   LOG_INF("OTA", "Update completed");
   return OK;

@@ -36,6 +36,40 @@ pio run -t uploadfs
 
 ## Monitoring and Debugging
 
+### OTA install journal (ar0c)
+
+An OTA attempt writes `/ota-diagnostic.jsonl` at the SD-card root. Each JSON
+line is flushed before the next risky step; a reset or rollback normally leaves the last
+completed stage available through Wi-Fi File Transfer or by reading the card.
+Download the file **before retrying OTA**, since the next attempt replaces it.
+The journal contains firmware version, boot-relative milliseconds, received and
+expected byte counts, target partition offset, numeric error code, and heap
+counters. It contains no firmware URL, Wi-Fi password, or account data. If SD
+is unavailable, no journal is written; a failed file open or write is logged
+over serial. The OTA operation continues.
+
+`body_complete` means the expected number of bytes reached the flash writer,
+but the HTTP completion check may still fail. `fetch_done` means the HTTP body
+passed that check; `digest_ok` means the expected SHA-256 matched.
+`ota_end_start`/`ota_end_done` bracket ESP image validation, and
+`boot_select_start`/`boot_select_done` bracket the boot-partition change.
+`finish_draw_start`/`finish_draw_done` bracket the completion screen repaint;
+`reboot_pending` is flushed just before `ESP.restart()`. A diagnostic-enabled
+new image that mounts SD appends `boot_started`, then `setup_done` when setup
+returns. A missing later stage narrows where execution stopped; it does not by
+itself prove that particular call caused the white screen. For `install_error`,
+the `code` bitmask is 1 for failed HTTP completion, 2 for flash write failure,
+and 4 for digest/size mismatch. For `device_rejected`, bit 1 means wrong chip
+and bit 2 means wrong board. Other nonzero codes are the ESP error or updater
+result at that stage. `target_slot` is zero in UI and boot records; earlier
+installer records hold the actual target partition offset.
+
+The firmware already running on the device executes an OTA installation. An
+older firmware without this journal cannot diagnose the update that installs
+the journal-enabled image. Install the diagnostic-enabled X4 Pro image through
+SD once, verify its boot, and only then use OTA for the next diagnostic run.
+No build or public OTA index proves this physical-device behavior.
+
 ### Manual screen diagnostic export (ar0c)
 
 Settings → System → About → **Export screen diagnostics** writes the latest

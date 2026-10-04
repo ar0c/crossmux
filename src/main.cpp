@@ -53,6 +53,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
+#include "network/OtaDiagnostic.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
@@ -604,6 +605,7 @@ void setup() {
     return;
   }
 
+  OtaDiagnostic::recordBoot();
   HalSystem::checkPanic();
 
   if (gpio.hasTouch()) SETTINGS.readerMenuStyle = CrossPointSettings::READER_MENU_TOOLBAR;
@@ -810,6 +812,7 @@ void setup() {
   // Ensure we're not still holding the power button before leaving setup
   waitForPowerRelease();
   allowSleepAt = millis() + 2000;
+  OtaDiagnostic::recordSetupDone();
 }
 
 void loop() {
