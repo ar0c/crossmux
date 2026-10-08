@@ -104,7 +104,9 @@ void seedStorage() {
   Storage = {};
   Storage.files = {WeReadStore::kSessionPath, WeReadStore::kShelfPath,
                    WeReadStore::kShelfPartPath, WeReadBrowse::kCacheRoot,
-                   "/WeRead/book.epub", "/.crosspoint/weread/disclaimer.accepted"};
+                   "/WeRead/book.epub", "/.crosspoint/weread/disclaimer.accepted",
+                   "/.crosspoint/weread/managed-account", "/WeReadSync/service.conf",
+                   "/.crosspoint/weread/time/account/source/day.wrs1"};
   activityManager.apps = 0;
   logs.clear();
 }
@@ -118,7 +120,9 @@ int main() {
   assert(!success.shelfFile_.open && success.shelfCount_ == 0);
   assert(success.shelfSelected_ == 0 && success.shelfFrameInvalidated_);
   assert(Storage.files == std::set<std::string>({"/WeRead/book.epub",
-                                                "/.crosspoint/weread/disclaimer.accepted"}));
+                                                "/.crosspoint/weread/disclaimer.accepted",
+                                                "/.crosspoint/weread/managed-account", "/WeReadSync/service.conf",
+                                                "/.crosspoint/weread/time/account/source/day.wrs1"}));
   assert(logs.empty());
   success.performLogout(); // Already deleted: logout is idempotent.
   assert(activityManager.apps == 2 && Storage.removals.size() == 4);
@@ -133,7 +137,7 @@ int main() {
   assert(logs.size() == 1 && logs[0].find(WeReadStore::kSessionPath) != std::string::npos);
   failed.mappedInput.back = true;
   failed.handleLogoutErrorInput();
-  assert(failed.state_ == WeReadActivity::State::Home && Storage.files.size() == 6);
+  assert(failed.state_ == WeReadActivity::State::Home && Storage.files.size() == 9);
   failed.mappedInput = {};
   failed.mappedInput.confirm = true;
   Storage.failures.clear();
@@ -151,6 +155,8 @@ int main() {
     assert(Storage.removals.size() == 4); // Try every cache even when one removal fails.
     assert(warning.shelfCount_ == 0 && !warning.shelfFile_.open);
     assert(Storage.exists("/WeRead/book.epub") && Storage.exists("/.crosspoint/weread/disclaimer.accepted"));
+    assert(Storage.exists("/.crosspoint/weread/managed-account") && Storage.exists("/WeReadSync/service.conf"));
+    assert(Storage.exists("/.crosspoint/weread/time/account/source/day.wrs1"));
     assert(logs.size() == 1 && logs[0].find(path) != std::string::npos);
     warning.acknowledgeWarning();
     assert(activityManager.apps == 0); // Wait for an explicit acknowledgment.
@@ -169,7 +175,7 @@ int main() {
   cancelled.promptLogout();
   assert(cancelled.resultHandler);
   cancelled.resultHandler({true});
-  assert(Storage.removals.empty() && Storage.files.size() == 6 && activityManager.apps == 0);
+  assert(Storage.removals.empty() && Storage.files.size() == 9 && activityManager.apps == 0);
   assert(cancelled.operation_.resets == 0 && cancelled.shelfFile_.open);
   cancelled.promptLogout();
   cancelled.resultHandler({false});
