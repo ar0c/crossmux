@@ -1,5 +1,8 @@
 # Build System & Build Flags
 
+> Current scope (2026-10-08): only Waveshare ePaper 3.97 development/Nightly firmware is maintained, built, checked and packaged. X4 Pro instructions below describe retired history, not an active build/release target. Previous releases/backups are retained. Embedded hyphenation patterns are English-only; Chinese uses existing CJK breaking without a dictionary. UI translations and font glyph coverage are unchanged. No Stable firmware target is configured.
+
+
 > Deep reference for [AGENTS.md](../../AGENTS.md). Covers PlatformIO usage, the
 > build environments, the critical build flags that change firmware behavior, and
 > personal local overrides.
@@ -52,36 +55,23 @@ prebuilt `dio_opi` TinyUSB core to fit the existing 6.25 MiB OTA partitions.
 
 ### ar0c fork identity
 
-The `x4pro` development target uses `YYMMDD-HHMMSS-ar0c-<base>-x4pro`
-(China-time build stamp; base version read from `platformio.ini`). Startup, About, and `/api/status`
-share `CROSSPOINT_VERSION`. The startup/About firmware name is `crossmux-ar0c`,
-with English fallback for other UI languages. Hardware model, chip, MAC,
-statistics, partition layout, and USB descriptors are unchanged.
-
-On a successful development image build, `scripts/git_branch.py` exports an
-identical `crossmux-ar0c-*.bin` copy beside PlatformIO's internal `firmware.bin`.
-X4 Pro uses `crossmux-ar0c-YYMMDD-HHMMSS-<image-sha256-prefix8>-x4pro.bin`;
-other development targets include the base version, device, Git revision, and
-image digest. The digest distinguishes local uncommitted builds sharing the
-same Git revision; these are local development artifacts, not a tagged release.
-Commit the intended source when explicitly requested for a revision-based release.
-Build targets retain their existing runtime version generation;
-upstream OTA endpoints are not redirected by this branding change.
+The `waveshare_epaper_397` development target uses `<base>-<revision7>-ws397-dev`.
+Startup, About and `/api/status` share `CROSSPOINT_VERSION` and the `crossmux-ar0c`
+firmware name. Successful builds export an identical digest-named application
+binary beside PlatformIO's `firmware.bin`; revision plus image digest identifies
+local development artifacts. X4 Pro builds and exports are retired.
 
 * **Standard**: C++20 (`-std=c++2a`). No Exceptions, No RTTI.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.
 * **Environments** (in `platformio.ini`):
-  * `x4pro`: Default X4 Pro development build (LOG_LEVEL=2, serial enabled)
-  * `x4pro-gh_release`: X4 Pro stable release build
-  * `x4pro-gh_release_rc`, `x4pro_nightly`: X4 Pro release candidate and Nightly
   * `waveshare_epaper_397`: Waveshare ePaper 3.97 development build
   * `waveshare_epaper_397_nightly`: Waveshare Nightly build
   * `simulator`: Native desktop simulator for UI development
 
-The two S3 environments are separate hardware binaries, each with one unified
-language firmware. Routine CI and Hardware CI build only these boards.
+Development and Nightly environments build the same Waveshare board, with one unified
+language firmware. Routine CI and Hardware CI build only this physical board.
 
-Bluetooth Page Turner Beta is compiled into both hardware targets,
+Bluetooth Page Turner Beta is compiled into the Waveshare hardware target,
 including development, Nightly, release-candidate, and stable builds.
 The runtime Bluetooth switch defaults to off; native simulators use SDK stubs.
 Both S3 hardware profiles inherit the PSRAM and IPC configuration and retain
@@ -119,7 +109,7 @@ export PLATFORMIO_CORE_DIR="$PWD/.platformio/ble-psram"
 export PLATFORMIO_BUILD_DIR="$PWD/.pio/ble-psram-build"
 export PLATFORMIO_BUILD_CACHE_DIR="$PWD/.cache/ble-psram"
 export IDF_COMPONENT_CACHE_PATH="$PWD/.cache/ble-psram-idf-components"
-pio run -e x4pro_nightly
+pio run -e waveshare_epaper_397_nightly
 pio run -e waveshare_epaper_397_nightly
 ```
 
@@ -227,12 +217,12 @@ These flags in `platformio.ini` fundamentally affect firmware behavior:
 **Example** `platformio.local.ini`:
 ```ini
 # platformio.local.ini (gitignored)
-[env:x4pro]
+[env:waveshare_epaper_397]
 upload_port = COM7              # Windows: COMx, Linux: /dev/ttyUSBx
 monitor_port = COM7
 
 build_flags =
-  ${x4pro_hardware.build_flags}
+  ${waveshare_epaper_397_hardware.build_flags}
   -DMY_DEBUG_FLAG=1             # Personal debug flags
   -DTEST_FEATURE_ENABLED=1
 ```

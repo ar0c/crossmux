@@ -16,7 +16,7 @@
 - **AirPage**: scan to upload content, then display BMP/JPEG images with manual refresh or foreground live delivery; images can become a sleep screen. [Usage and network behavior](./src/activities/apps/README.md#airpage).
 - **WeRead**: QR login, bookshelf browsing, EPUB downloads for offline reading, and progress sync. Available in the China content profile. [WeRead guide (Chinese)](./src/activities/apps/weread/README.md).
 - **Reading analytics and standby**: reading statistics, heatmaps, profiles and achievements; clock and Chinese almanac faces. [Analytics guide](./src/activities/apps/reading-stats/README.md).
-- **Languages and development**: 33 UI languages in one firmware per hardware target, plus desktop simulators for UI development.
+- **Languages and development**: 35 UI languages in one firmware per hardware target, plus desktop simulators for UI development.
 
 > **WeRead security:** this unofficial Web protocol may change. Device traffic is encrypted, but its client does not verify the server certificate or hostname; use it only on a trusted network. The native simulator verifies certificates through the host trust store. See the [transport details](./docs/engineering/chinese-build.md#weread-transport).
 
@@ -24,12 +24,11 @@
 
 | Device | Chip | Published channels |
 |---|---|---|
-| Xteink X4 Pro | ESP32-S3 | Stable, Nightly |
 | Waveshare ePaper 3.97 | ESP32-S3 | Nightly |
 
-This fork builds and publishes only these two ESP32-S3 devices. Each needs its own board-specific image. This table describes configured release targets, not hardware acceptance. See [device variants](./docs/engineering/device-variants.md) for target-specific limitations.
+This fork builds and publishes only Waveshare ePaper 3.97 firmware. This table describes configured release targets, not hardware acceptance. See [device variants](./docs/engineering/device-variants.md) for target-specific limitations.
 
-Use [Stable](https://github.com/ar0c/crossmux/releases/tag/stable) for X4 Pro, or [Nightly](https://github.com/ar0c/crossmux/releases/tag/nightly) for development builds. The [target table](./scripts/nightly_targets.py) defines channels and artifact names; [release architecture](./docs/engineering/firmware-release.md) explains packaging and OTA. Current source version and build environments live in [platformio.ini](./platformio.ini).
+Use [Nightly](https://github.com/ar0c/crossmux/releases/tag/nightly) for Waveshare builds. Existing X4 Pro releases are historical and remain available. The [target table](./scripts/nightly_targets.py) defines channels and artifact names; [release architecture](./docs/engineering/firmware-release.md) explains packaging and OTA. Current source version and build environments live in [platformio.ini](./platformio.ini).
 
 ## Install firmware
 
@@ -37,7 +36,7 @@ Use [Stable](https://github.com/ar0c/crossmux/releases/tag/stable) for X4 Pro, o
 2. Back up your SD card data before changing firmware. Use the matching installation package; an application-only `firmware.bin` is not a complete first-install image.
 3. For S3 installation and recovery, follow the matching [device documentation](./docs/engineering/device-variants.md) and release instructions.
 
-To build an S3 image from source, use the [development commands](#development-quick-start) below. Only X4 Pro has a Stable channel in this fork. In-device Check Updates reads this fork's GitHub Releases; a channel needs a published `release-index.json` before it can offer an update. See the [OTA safety notes](./docs/engineering/firmware-release.md#consumers-and-safety).
+To build an S3 image from source, use the [development commands](#development-quick-start) below. New firmware packaging is Waveshare Nightly only. In-device Check Updates reads this fork's GitHub Releases; a channel needs a published `release-index.json` before it can offer an update. See the [OTA safety notes](./docs/engineering/firmware-release.md#consumers-and-safety).
 
 ### USB-locked Xteink devices
 
@@ -62,29 +61,19 @@ cd crossmux
 # If submodules were not initialized:
 git submodule update --init --recursive
 
-# X4 Pro development build (also the default)
-pio run -e x4pro
+# Waveshare 3.97 development build (also the default)
+pio run -e waveshare_epaper_397
 
-# X4 Pro stable build
-pio run -e x4pro-gh_release
+# Waveshare 3.97 Nightly build
+pio run -e waveshare_epaper_397_nightly
 
 # Waveshare 3.97 experimental build
 pio run -e waveshare_epaper_397
 ```
 
-The X4 Pro stable application binary is `.pio/build/x4pro-gh_release/firmware.bin`. For Waveshare, use `waveshare_epaper_397`.
+The application binary is `.pio/build/waveshare_epaper_397/firmware.bin`. English hyphenation patterns are embedded; Chinese retains CJK line breaking. Other automatic hyphenation dictionaries are omitted. Font glyphs and all 35 UI languages are retained.
 
-For Read Pico (小纸 Pico):
-
-Until FreeInk SDK PR #35 is merged, first follow the temporary SDK checkout in the [Read Pico guide](./docs/engineering/read-pico.md#current-implementation--2026-09-30).
-
-```bash
-pio run -e readpico
-```
-
-On Windows, set `PYTHONIOENCODING=utf-8` before running `pio`, otherwise the build can stall when PlatformIO prints the Arabic i18n language row.
-
-The application is `.pio/build/readpico/firmware.bin`. First installation is a **full-table flash** — `bootloader@0x0`, `partitions@0x8000`, `boot_app0@0xe000`, `app@0x10000` — after a verified full-chip (16 MiB) backup, because the repository partition table and the board's factory `partitions_16M.csv` disagree at `0xE000` and use different app-slot sizes. This target is **build-only in this round**: it is absent from the Nightly/OTA/Web release mappings, and no hardware acceptance has been recorded yet. See the [Read Pico guide](./docs/engineering/read-pico.md) for the pin map, the frozen build flags, and the pending acceptance checklist.
+On Windows, set `PYTHONUTF8=1` before running `pio`.
 
 ### Desktop simulator
 
@@ -95,8 +84,6 @@ pio run -e simulator -t run_simulator
 ```
 
 The [CrossMux simulator fork](https://github.com/0x1abin/crosspoint-simulator) is pinned in `platformio.ini`. It previews UI and input flows; it does not validate display waveforms, power consumption, or physical hardware timing.
-
-Read Pico fits its window to the desktop while retaining full-resolution BMP screenshots. Mouse input supports tap, hold and swipe; Up/Escape/Down represent the three capacitive keys, and only Power (`P`) wakes from sleep. Native sixteen-level images and SD UI fonts follow the Read Pico paths. See the [device guide](./docs/engineering/read-pico.md#desktop-simulator) for validation details.
 
 ### Checks and debugging
 

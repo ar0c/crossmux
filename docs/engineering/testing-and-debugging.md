@@ -1,5 +1,8 @@
 # Testing, Debugging & Verification
 
+> Current scope (2026-10-08): only Waveshare ePaper 3.97 development/Nightly firmware is maintained, built, checked and packaged. X4 Pro instructions below describe retired history, not an active build/release target. Previous releases/backups are retained. Embedded hyphenation patterns are English-only; Chinese uses existing CJK breaking without a dictionary. UI translations and font glyph coverage are unchanged. No Stable firmware target is configured.
+
+
 > Deep reference for [AGENTS.md](../../AGENTS.md). Build/quality commands, the
 > crash playbook, the agent vs human verification split, CI awareness, and live
 > serial debugging. For the contributor-facing quick version see
@@ -17,7 +20,7 @@ pio run
 pio run -t upload
 
 # Build specific environment
-pio run -e x4pro-gh_release
+pio run -e waveshare_epaper_397_nightly
 pio run -e waveshare_epaper_397
 
 # Build and run a native device simulator
@@ -187,7 +190,7 @@ lightweight collaborators for no-PSRAM and PSRAM policies. It covers allocation
 failure before a Section exists, one CSS retry, target preservation and repeated
 failures; it is not a full Activity or device-lifecycle integration test.
 Build firmware with
-`pio run -e x4pro -e waveshare_epaper_397`.
+`pio run -e waveshare_epaper_397`.
 
 Hardware acceptance still requires **both X3 and X4**: open the reported EPUB
 with a cold section cache using LXGW WenKai size 18, turn across chapters, and
@@ -303,10 +306,10 @@ and physical-device acceptance.
 
 | Workflow | File | Purpose |
 |----------|------|---------|
-| Core Build Check | `.github/workflows/ci.yml` | Builds `default` (shared X3/X4) and `x4pro` |
-| Hardware CI | `.github/workflows/hardware-ci.yml` | Builds all simulators and global S3 targets for hardware-sensitive changes or manual runs |
+| Core Build Check | `.github/workflows/ci.yml` | Builds only Waveshare 3.97 firmware |
+| Hardware CI | `.github/workflows/hardware-ci.yml` | Builds and checks the Waveshare Nightly package for hardware-sensitive changes or manual runs |
 | Format Check | `.github/workflows/pr-formatting-check.yml` | Validates clang-format |
-| Firmware Release | `.github/workflows/nightly.yml` | Stable releases from SemVer tags and scheduled/manual Nightly releases |
+| Firmware Release | `.github/workflows/nightly.yml` | Manual Waveshare-only Nightly releases; previous published assets retained |
 
 **Rules**:
 - **Fix CI failures BEFORE** requesting review

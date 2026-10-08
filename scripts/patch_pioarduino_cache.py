@@ -13,7 +13,7 @@ if "--prepare-platform" in sys.argv:
     from platformio.project.config import ProjectConfig
 
     config = ProjectConfig.get_instance()
-    package = PlatformPackageManager().install(config.get("env:x4pro", "platform"), skip_dependencies=True)
+    package = PlatformPackageManager().install(config.get("env:waveshare_epaper_397", "platform"), skip_dependencies=True)
     platform_file = Path(package.path) / "platform.py"
     source = platform_file.read_text(encoding="utf-8")
     old_tools = 'COMMON_IDF_PACKAGES = [\n    "tool-cmake",\n    "tool-ninja",\n    "tool-scons",'

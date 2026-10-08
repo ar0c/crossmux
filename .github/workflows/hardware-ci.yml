@@ -95,7 +95,7 @@ jobs:
       runner_status_token: ${{ secrets.H2O_RUNNER_TOKEN }}
 
   build:
-    name: Build simulator, X4 Pro and Waveshare 3.97
+    name: Build Waveshare 3.97
     needs: select_runner
     runs-on: ${{ fromJSON(needs.select_runner.outputs['runs-on']) }}
     steps:
@@ -140,20 +140,18 @@ jobs:
           key: pio-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-cache-${{ runner.os }}-
 
-      - name: Build simulator and supported S3 hardware
+      - name: Build Waveshare 3.97 hardware
         run: |
           set -euo pipefail
           export CROSSPOINT_RC_HASH="${GITHUB_SHA::7}"
           export CROSSPOINT_BUILD_KIND=rc
           pio run \
-            -e simulator \
-            -e x4pro_nightly \
             -e waveshare_epaper_397_nightly | tee pio.log
 
       - name: Record firmware stats
         run: |
           {
-            echo "## Simulator and S3 hardware build stats"
+            echo "## Waveshare 3.97 hardware build stats"
             echo '```text'
             grep -E '^Processing |RAM:\s|Flash:\s' pio.log || true
             echo '```'
@@ -162,7 +160,7 @@ jobs:
       - name: Verify hardware packages
         run: |
           set -euo pipefail
-          for target in xteink_x4_pro waveshare_epaper_397; do
+          for target in waveshare_epaper_397; do
             python3 scripts/package_nightly_target.py "$target" --channel nightly
             (cd "dist/nightly/$target" && sha256sum --check *-SHA256SUMS)
           done

@@ -6,17 +6,6 @@ FIRMWARE_NAME = 'crossmux-ar0c'
 
 
 TARGETS = {
-    'xteink_x4_pro': {
-        'deviceSlug': 'x4pro',
-        'versionSlug': 'x4pro',
-        'models': ['xteink_x4_pro'],
-        'boardTag': 'x4pro',
-        'chip': 'ESP32-S3',
-        'chipId': 0x0009,
-        'environments': {'stable': 'x4pro-gh_release', 'nightly': 'x4pro_nightly'},
-        'supportedChannels': ['stable', 'nightly'],
-        'fullInstall': True,
-    },
     'waveshare_epaper_397': {
         'deviceSlug': 'waveshare-epaper-397',
         'versionSlug': 'ws397',
@@ -48,6 +37,8 @@ def environment_for(target_id, channel, flavor):
 
 def version_for(base_version, target_id, channel, flavor, short_sha, build_kind='rc'):
     target = TARGETS[target_id]
+    if channel not in target['supportedChannels']:
+        raise ValueError('unsupported firmware channel')
     if channel == 'stable':
         return base_version
     if channel != 'nightly':

@@ -72,6 +72,27 @@ def current_index() -> bytes:
         return (Path(temporary) / "release-index.json").read_bytes()
 
 
+def previous_index_is_usable(previous: object) -> bool:
+    # Older complete indexes may contain retired boards; keep their bytes for rollback.
+    return (isinstance(previous, dict) and previous.get("schemaVersion") == 1
+            and previous.get("channel") == CHANNEL and isinstance(previous.get("targets"), dict)
+            and isinstance(previous["targets"].get(TARGET), dict))
+
+
+def verify_restored_waveshare(index_url: str, previous: bytes, expected_sha: str) -> None:
+    # Exact full-index readback was checked by rollback/wait_public_index. Validate
+    # the maintained board's manifests/assets while preserving retired pointers.
+    restored = json.loads(previous)
+    if not previous_index_is_usable(restored):
+        raise ValueError("the previous Nightly index has no Waveshare target")
+    scoped = {**restored, "targets": {TARGET: restored["targets"][TARGET]}}
+
+    def fetch(url: str) -> bytes:
+        return canonical_json(scoped) if url == index_url else fetch_bytes(url)
+
+    verify_release(index_url, expected_sha, CHANNEL, fetch=fetch, only_target=TARGET)
+
+
 def source_tree() -> tuple[str, str, str]:
     if git("diff", "--name-only"):
         raise ValueError("tracked files have unstaged edits; stage the intended source snapshot first")
@@ -135,7 +156,7 @@ def prepare(args: argparse.Namespace) -> None:
     notes = validate_notes(json.loads(args.notes_json.read_text(encoding="utf-8")))
     previous_bytes = current_index()
     previous = json.loads(previous_bytes)
-    if previous.get("schemaVersion") != 1 or previous.get("channel") != CHANNEL or set(previous.get("targets", {})) != set(TARGETS):
+    if not previous_index_is_usable(previous):
         raise ValueError("the current Nightly index is incomplete")
     tag = f"nightly-build-{tree}-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-1"
     if not BUILD_TAG.fullmatch(tag):
@@ -172,8 +193,9 @@ def prepare(args: argparse.Namespace) -> None:
     candidate = build_index(build, "global",
                             f"https://github.com/{REPO}/releases/download/{tag}/",
                             updated_at, tag, CHANNEL, notes, TARGET, previous)
-    if candidate["targets"]["xteink_x4_pro"] != previous["targets"]["xteink_x4_pro"]:
-        raise ValueError("X4 Pro pointer changed during Waveshare-only packaging")
+    # The new index is Waveshare-only; saved previous bytes retain retired pointers for rollback.
+    if set(candidate["targets"]) != {TARGET}:
+        raise ValueError("unexpected firmware target during Waveshare-only packaging")
     candidate_bytes = canonical_json(candidate)
     (output / "release-index.json").write_bytes(candidate_bytes)
     verify_prepared(candidate_bytes, build, tag, tree)
@@ -284,7 +306,7 @@ def rollback(args: argparse.Namespace) -> None:
         raise RuntimeError("GitHub rollback index readback differs from the backup")
     wait_public_index(previous, args.wait_seconds)
     old_sha = json.loads(previous)["targets"][TARGET]["variants"]["global"]["crossmuxSha"]
-    verify_release(f"{PUBLIC_INDEX}?local={int(time.time())}", old_sha, CHANNEL, only_target=TARGET)
+    verify_restored_waveshare(f"{PUBLIC_INDEX}?local={int(time.time())}", previous, old_sha)
     print(f"Restored the previous Nightly index from before {state['buildTag']}")
 
 

@@ -13,39 +13,18 @@ class ForkIdentityTest(unittest.TestCase):
         self.assertEqual(filename, "crossmux-ar0c-260915-181930-408dfcd-x4pro-1.5.8.bin")
         self.assertLess(len(version.encode()), 32)
 
-    def test_x4pro_build_exports_exact_image_with_matching_version(self):
+    def test_retired_x4pro_has_no_export_action(self):
         root = Path(__file__).resolve().parents[2]
-        module = runpy.run_path(str(root / "scripts/git_branch.py"))
-
+        module = runpy.run_path(str(root / 'scripts/git_branch.py'))
         class Env(dict):
             def Append(self, **values):
                 self.update(values)
-
             def AddPostAction(self, target, action):
                 self.action = action
-
         env = Env(PIOENV='x4pro', PROJECT_DIR=str(root))
         module['inject_version'](env)
-        sha = module['get_git_short_sha'](str(root))
-        injected = env['CPPDEFINES'][0][1]
-        stamp = injected.split('ar0c')[0].strip('\\"').rstrip('-')
-        version, _ = module['x4pro_identity'](module['get_base_version'](str(root)), sha, stamp)
-        self.assertIn(version, env['CPPDEFINES'][0][1])
-        with tempfile.TemporaryDirectory() as directory:
-            image = Path(directory) / 'firmware.bin'
-            image.write_bytes(b'test image bytes')
-
-            class Node:
-                def get_abspath(self):
-                    return str(image)
-
-            env.action([Node()], [], env)
-            filename = module['x4pro_artifact_name'](stamp, image)
-            self.assertTrue(filename.startswith('crossmux-ar0c-' + stamp + '-' +
-                                                hashlib.sha256(image.read_bytes()).hexdigest()[:8]))
-            self.assertEqual((image.parent / filename).read_bytes(), image.read_bytes())
-            image.write_bytes(b'different uncommitted build')
-            self.assertNotEqual(filename, module['x4pro_artifact_name'](stamp, image))
+        self.assertNotIn('CPPDEFINES', env)
+        self.assertFalse(hasattr(env, 'action'))
 
     def test_other_development_targets_export_branded_images(self):
         root = Path(__file__).resolve().parents[2]

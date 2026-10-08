@@ -29,5 +29,5 @@ def patch_user_settings(path: Path) -> None:
     print(f"Patched wolfSSL settings: {path.relative_to(PROJECT_DIR)}")
 
 
-for settings in PROJECT_DIR.glob(".pio/libdeps/*/Arduino-wolfSSL/src/user_settings.h"):
+for settings in PROJECT_DIR.glob(f".pio/libdeps/{env['PIOENV']}/Arduino-wolfSSL/src/user_settings.h"):
     patch_user_settings(settings)

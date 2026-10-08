@@ -45,7 +45,10 @@ byte arrays, and emits headers under
 `SerializedHyphenationPatterns` descriptor so the reader can keep the automaton
 in flash.
 
-A convenient script `update_hyphenation.sh` is used to update all languages.
+The script `update_hyphenation.sh` updates the retained English table only.
+Chinese has no embedded Liang table and uses existing CJK line breaking. The
+other ten language tables were retired from firmware on 2026-10-08. This
+policy does not remove font glyphs, UI translations, or user SD lookup dictionaries.
 To use it, run:
 
 ```sh

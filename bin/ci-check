@@ -18,7 +18,7 @@ echo "Running cppcheck..."
 pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
 
 echo "Building X4 Pro and Waveshare 3.97 firmware..."
-pio run -e x4pro -e waveshare_epaper_397
+pio run -e waveshare_epaper_397
 
 echo "Running host unit tests..."
 cmake -S test -B build/test -G Ninja -DCMAKE_BUILD_TYPE=Release

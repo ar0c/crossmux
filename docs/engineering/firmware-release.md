@@ -1,28 +1,18 @@
 # Firmware Release Architecture
 
+> Current scope (2026-10-08): only Waveshare ePaper 3.97 development/Nightly firmware is maintained, built, checked and packaged. X4 Pro instructions below describe retired history, not an active build/release target. Previous releases/backups are retained. Embedded hyphenation patterns are English-only; Chinese uses existing CJK breaking without a dictionary. UI translations and font glyph coverage are unchanged. No Stable firmware target is configured.
+
+
 ## Fork firmware name
 
-The firmware's startup/About name and all new exported firmware packages use
-`crossmux-ar0c`. Local `x4pro` builds export
-`crossmux-ar0c-YYMMDD-HHMMSS-<image-sha256-prefix8>-x4pro.bin`. The stamp uses China
-time and is captured once at build setup. The digest is computed from the final
-image, so distinct uncommitted builds cannot silently share a Git-only filename.
-Other development targets export `crossmux-ar0c-<base-version>-<device>-<git-sha>-<image-sha>.bin`.
-PlatformIO keeps its internal `firmware.bin` because the build and package scripts
-consume it. Published install assets use `crossmux-ar0c-<device>-<segment>.bin`;
-manifests record those exact names, while their URLs and board tags still
-identify the matching device.
-The runtime version on subsequent builds is
-`YYMMDD-HHMMSS-ar0c-<base-version>-x4pro`, checked against the 32-byte limit.
-The base upstream version is not artificially incremented. Identity/export tests are in
-`scripts/tests/test_fork_identity.py`.
-
-Nightly versions put the changing seven-character source revision immediately
-after the base version: `1.6.0-<revision>-ws397-rc` or
-`1.6.0-<revision>-x4pro-rc`. A local Waveshare test build ends in `-local`
-instead. `ws397` is only a short display label; the OTA target and board tag
-retain the full Waveshare identity. These versions fit the 31-character ESP
-application descriptor field and match the published manifest exactly.
+The firmware's startup/About name and new packages use `crossmux-ar0c`.
+Local `waveshare_epaper_397` builds use `<base>-<revision7>-ws397-dev` and export
+`crossmux-ar0c-<base>-waveshare-epaper-397-<revision>-<image-digest8>.bin`.
+PlatformIO retains its internal `firmware.bin` for packaging. Nightly versions
+use `<base>-<revision7>-ws397-rc`; local staged-tree Nightly versions end in
+`-local`. The exact embedded version must match a published manifest.
+X4 Pro identity helpers remain solely for validating historical filenames;
+no current build environment or export action produces X4 Pro images.
 
 The previously built full time-sync image (SHA-256 beginning `d9bc65ce`) used
 the historical name `260915-181930-d9bc65ce-ar0c-x4pro.bin`, based on its recorded build output time.
@@ -32,11 +22,7 @@ firmware file. Old device packages are backed up on Windows before removal;
 accounting `.bin` receipts, book data and the running application are not firmware
 package cleanup targets.
 
-This fork has two release channels, `stable` and `nightly`, managed by one
-channel-aware pipeline. Hardware identity is not a release channel. Both channels
-contain ESP32-S3 images only: X4 Pro is the stable target, and X4 Pro plus
-Waveshare ePaper 3.97 are in Nightly. Other device build profiles have been
-removed from this fork.
+New releases use the Waveshare-only Nightly pipeline. Existing Stable/X4 Pro releases are historical and remain available; no new Stable target is configured.
 
 ## Canonical targets
 
@@ -46,17 +32,10 @@ runtime models, artifact slug, embedded board tag, per-channel PlatformIO
 environments, chip, install capability, and supported channels. The workflow,
 packager, index builder, and tests import this table rather than copy it.
 
-X4 Pro stable uses `x4pro-gh_release`. X4 Pro and Waveshare ePaper 3.97 each
-produce a separate ESP32-S3 Nightly image. Each image is aliased by the compatibility `global` and
-`zh-CN` pointers.
-
-Read Pico uses `readpico_nightly`, with artifact slug and board tag `readpico`.
-The model list accepts both `readpico` and the SDK runtime name `read_pico`.
-Its full-install package uses the existing 16 MB S3 partition
-profile. The Web flasher displays it as **MindReset Read Pico**; Stable OTA returns
-`unsupported_channel`. First installation replaces the factory partition layout
-and requires a complete Flash backup. See [Read Pico](read-pico.md) for hardware
-evidence and the outstanding physical acceptance checks.
+Waveshare ePaper 3.97 is the sole canonical firmware target. Its development
+and Nightly environments use the same ESP32-S3 board tag. Compatibility
+`global` and `zh-CN` manifests alias one unified image. X4 Pro and Read Pico
+are not current build, package or release targets. Shared HAL code stays available.
 
 ### Firmware-write progress rendering
 
@@ -116,20 +95,12 @@ The fork publishes to its GitHub Releases only, in this order:
 
 Every target selected for a channel must build successfully before publication.
 CI resolves every manifest and verifies each distinct asset's size and SHA-256.
-If a previous Nightly index exists, cleanup protects its referenced builds.
-The first Nightly run has no previous index and skips cleanup. Stable builds are
-retained.
-
-The index is the `release-index.json` asset of the rolling `stable` or
-`nightly` GitHub Release in `ar0c/crossmux`. Binaries and both compatibility
-manifests live in an immutable `<channel>-build-<sha>-<run>-<attempt>` GitHub
-Release. Both variants reference the same binaries. After Stable verification, the version tag
-also receives the board-specific `x4pro` full-install assets. The rolling
-release removes obsolete generic C3 `firmware.bin` and `firmware-cn.bin` assets.
-
-At steady state, GitHub retains the current build and any build referenced by
-the previous index. Failed builds do not trigger cleanup. No fork workflow writes
-to `crossmux.cn`, COS, or another release service.
+Previous Nightly indexes are saved as evidence. The current workflow does
+not delete retired firmware assets or historical builds. The rolling Nightly
+index advertises only Waveshare; immutable older releases stay accessible.
+Firmware plus both compatibility manifests live in an immutable
+`nightly-build-<sha>-<run>-<attempt>` GitHub Release. No workflow in this scope
+writes to COS or `crossmux.cn`.
 
 ## Index contract and failure behavior
 
@@ -219,16 +190,10 @@ does not provide signed metadata or a cryptographic rollback counter.
 
 ### Managed-session development branch
 
-A Nightly workflow dispatch from `codex/weread-managed-session` or its
-`codex/weread-managed-session-1.6.0` successor packages only
-Waveshare 3.97 by default. An explicit `release_target=xteink_x4_pro`
-workflow dispatch packages only X4 Pro for a requested test release. It
-requires the previous complete Nightly index and preserves the other
-device's immutable manifest pointers exactly. Publish verification checks all
-preserved assets/hashes and requires the current SHA only for the selected target. Retention
-keeps builds referenced by the previous index. On main or other ordinary release
-branches the canonical matrix applies again; supported devices are unchanged.
-Partial mode is Nightly-only and fails without a valid previous index.
+Every branch uses the same Waveshare-only Nightly matrix. Dispatch accepts
+`auto` or `waveshare_epaper_397`; X4 Pro selection is rejected. A first release
+does not require a previous index. Local prepared releases retain previous
+index bytes for rollback without rewriting retired firmware artifacts.
 
 ### Local Waveshare Nightly test release
 
@@ -253,8 +218,10 @@ python scripts/manual_nightly_release.py rollback --prepared <prepared-directory
 Preparation builds `waveshare_epaper_397_nightly` with an embedded
 `1.6.0-<tree7>-ws397-local`-style version, checks that
 version in the ESP32-S3 image, packages the four install segments and two
-manifests, and verifies the candidate index including the preserved X4 Pro
-assets. The actual base version comes from `platformio.ini`. Publication
+manifests, and verifies only the Waveshare candidate index and assets. The
+saved previous index may include retired X4 Pro pointers; its full bytes are
+retained for rollback, which verifies exact index readback and Waveshare assets.
+The actual base version comes from `platformio.ini`. Publication
 refuses a changed rolling index, uploads an immutable build first, verifies
 its assets, moves the GitHub Nightly index last, then waits for and verifies
 the public K3s mirror. This is a shared Nightly channel: other Waveshare

@@ -14,6 +14,28 @@ import manual_nightly_release as manual
 
 
 class ManualNightlyReleaseTest(unittest.TestCase):
+    def test_previous_two_board_index_remains_usable_for_rollback(self):
+        old = {"schemaVersion": 1, "channel": "nightly", "targets": {
+            "xteink_x4_pro": {"historical": True}, manual.TARGET: {"targetId": manual.TARGET}}}
+        self.assertTrue(manual.previous_index_is_usable(old))
+        self.assertFalse(manual.previous_index_is_usable({**old, "targets": {"xteink_x4_pro": {}}}))
+        self.assertFalse(manual.previous_index_is_usable({**old, "channel": "stable"}))
+
+    def test_rollback_verification_preserves_full_index_and_scopes_asset_checks(self):
+        old = {"schemaVersion": 1, "channel": "nightly", "targets": {
+            "xteink_x4_pro": {"historical": True}, manual.TARGET: {"targetId": manual.TARGET}}}
+        previous = manual.canonical_json(old)
+        index_url = manual.PUBLIC_INDEX + "?local=1"
+        def verify(url, sha, channel, *, fetch, only_target):
+            self.assertEqual(url, index_url)
+            self.assertEqual(only_target, manual.TARGET)
+            self.assertEqual(set(json.loads(fetch(url))["targets"]), {manual.TARGET})
+            self.assertEqual(fetch("https://example.com/firmware.bin"), b"real asset")
+        with mock.patch.object(manual, "verify_release", side_effect=verify), mock.patch.object(
+            manual, "fetch_bytes", return_value=b"real asset"):
+            manual.verify_restored_waveshare(index_url, previous, "a" * 40)
+        self.assertEqual(previous, manual.canonical_json(old))
+
     def test_embedded_version_must_match_the_source_tree(self):
         version = "1.6.0-1234567-ws397-local"
         with tempfile.TemporaryDirectory() as temporary:

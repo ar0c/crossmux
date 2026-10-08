@@ -16,7 +16,7 @@
 - **AirPage**：扫码上传内容，通过手动刷新或前台实时投送显示 BMP/JPEG 图片，也可将图片设为休眠画面。[操作与联网行为](./src/activities/apps/README.md#airpage)。
 - **微信读书**：扫码登录、浏览书架、下载 EPUB 离线阅读和同步进度，在 China 内容区显示。[微信读书说明](./src/activities/apps/weread/README.md)。
 - **阅读分析与待机**：阅读统计、热力图、档案与成就，以及时钟和老黄历表盘。[阅读分析说明](./src/activities/apps/reading-stats/README.md)。
-- **语言与开发**：每个硬件目标使用包含 33 种 UI 语言的统一固件，并提供桌面模拟器辅助开发。
+- **语言与开发**：每个硬件目标使用包含 35 种 UI 语言的统一固件，并提供桌面模拟器辅助开发。
 
 > **微信读书安全提示**：非公开 Web 协议可能变化。真机传输经过加密，但客户端不验证服务器证书与主机名，请仅在可信网络中使用。原生模拟器通过主机信任库验证证书，详见[传输说明](./docs/engineering/chinese-build.md#weread-transport)。
 
@@ -24,7 +24,6 @@
 
 | 设备 | 芯片 | 发布渠道 |
 |---|---|---|
-| Xteink X4 Pro | ESP32-S3 | Stable、Nightly |
 | Waveshare ePaper 3.97 | ESP32-S3 | Nightly |
 
 此 fork 只构建和发布以上两款 ESP32-S3 设备。每款设备使用独立固件；发布配置不代表全部功能已通过实机验收。各设备限制见[设备变体说明](./docs/engineering/device-variants.md)。
@@ -62,29 +61,19 @@ cd crossmux
 # 如果尚未初始化子模块：
 git submodule update --init --recursive
 
-# X4 Pro 开发构建（也是默认目标）
-pio run -e x4pro
+# 微雪 3.97 开发构建（也是默认目标）
+pio run -e waveshare_epaper_397
 
-# X4 Pro 稳定版构建
-pio run -e x4pro-gh_release
+# 微雪 3.97 Nightly 构建
+pio run -e waveshare_epaper_397_nightly
 
 # 微雪 3.97 实验性构建
 pio run -e waveshare_epaper_397
 ```
 
-X4 Pro 稳定版应用固件位于 `.pio/build/x4pro-gh_release/firmware.bin`。微雪设备使用 `waveshare_epaper_397`。
+微雪应用固件位于 `.pio/build/waveshare_epaper_397/firmware.bin`。内嵌断词词库仅保留英文；中文没有独立断词表，继续使用 CJK 换行规则。中英字体字形和全部 35 种 UI 翻译保持不变。
 
-Read Pico（小纸 Pico）构建命令：
-
-FreeInk SDK PR #35 合入前，请先按[设备指南](./docs/engineering/read-pico.md#current-implementation--2026-09-30)临时切换 SDK，再构建。
-
-```bash
-pio run -e readpico
-```
-
-Windows 上运行 `pio` 前请先设置 `PYTHONIOENCODING=utf-8`，否则 PlatformIO 打印阿拉伯语 i18n 语言行时可能编码崩溃、构建静默卡住。
-
-应用固件位于 `.pio/build/readpico/firmware.bin`。首次安装为**整表烧录**——`bootloader@0x0`、`partitions@0x8000`、`boot_app0@0xe000`、`app@0x10000`——且须先有一份已核验的整片（16 MiB）备份，因为本仓库分区表与板厂出厂 `partitions_16M.csv` 在 `0xE000` 冲突且 app 槽大小不同。本轮该目标**仅提供构建**：未加入 Nightly/OTA/Web 发布映射，也尚无实机验收记录。引脚表、冻结的构建参数与待办验收清单见 [Read Pico 设备指南](./docs/engineering/read-pico.md)。
+Windows 运行 `pio` 前请设置 `PYTHONUTF8=1`。
 
 ### 桌面模拟器
 

@@ -97,8 +97,8 @@ Run `scripts/test_weread_service.ps1`: pure journal crash/torn-tail checks,
 production client parsing and authenticated HTTPS transport boundary tests
 (including the required receive-buffer preflight),
 and production worker tests with internal RAM and PSRAM paths. The tests make
-no real network requests or reading-time increments. Build with `pio run -e
-x4pro` or `pio run -e waveshare_epaper_397` for the matching board; verify the
+no real network requests or reading-time increments. Build with
+`pio run -e waveshare_epaper_397`; verify the
 version-first exported image and its SHA-256 before upload.
 
 The local device status is the last explicit readback. To see newer cloud

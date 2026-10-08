@@ -20,6 +20,7 @@ FIRMWARE_NAME = 'crossmux-ar0c'
 
 
 def x4pro_identity(base_version, short_sha, build_stamp):
+    # Historical identity validation only; no supported build/export calls this.
     if not re.fullmatch(r'\d+\.\d+\.\d+', base_version) or not re.fullmatch(r'[0-9a-f]{7,12}', short_sha):
         raise ValueError('Fork identity requires a numeric base version and a real git revision')
     if not re.fullmatch(r'\d{6}-\d{6}', build_stamp):
@@ -112,23 +113,17 @@ def inject_version(env):
     pioenv = env['PIOENV']
     # Only applies to development environments; release envs set the
     # version via build_flags in platformio.ini and are unaffected.
-    if pioenv not in ('waveshare_epaper_397', 'x4pro'):
+    if pioenv != 'waveshare_epaper_397':
         return
 
     project_dir = env['PROJECT_DIR']
     base_version = get_base_version(project_dir)
     short_sha = get_git_short_sha(project_dir)
-    build_stamp = None
-    if pioenv == 'x4pro':
-        build_stamp = datetime.now(timezone(timedelta(hours=8))).strftime('%y%m%d-%H%M%S')
-        version_string, _ = x4pro_identity(base_version, short_sha, build_stamp)
-    else:
-        version_string = f'{base_version}-{short_sha[:7]}-ws397-dev'
+    version_string = f'{base_version}-{short_sha[:7]}-ws397-dev'
 
     def export_firmware(target, source, env):
         image = Path(target[0].get_abspath())
-        filename = (x4pro_artifact_name(build_stamp, image) if build_stamp else
-                    dev_artifact_name(base_version, pioenv, short_sha, image))
+        filename = dev_artifact_name(base_version, pioenv, short_sha, image)
         destination = image.parent / filename
         shutil.copyfile(image, destination)
         print(f'{FIRMWARE_NAME} firmware: {destination}')

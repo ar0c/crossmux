@@ -1,8 +1,8 @@
-"""Prioritize image size during the two supported boards' existing LTO link.
+"""Apply the reviewed link-only -Oz policy to Waveshare's existing LTO link.
 
 Compile-time flags, features, resources and partition sizes stay unchanged.
-The pinned GCC 14 toolchain supports -Oz; setting it after the platform's
-link setup overrides its default optimization level for LTO code generation.
+The pinned GCC 14 toolchain supports -Oz. The prior measured image saving
+from this link-only flag was zero; dictionary pruning provides the new margin.
 """
 
 Import("env")
