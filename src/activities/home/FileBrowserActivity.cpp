@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <Utf8.h>
 
 #include <algorithm>
 
@@ -16,6 +17,7 @@
 #include "RecentBooksStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "components/icons/inx_library.h"
@@ -41,6 +43,8 @@ std::string joinPath(const std::string& parent, const std::string& name) {
 }
 }  // namespace
 
+void formatFileName(const std::string& filename, char* buffer, size_t bufferSize);
+void formatFileExtension(const std::string& filename, char* buffer, size_t bufferSize);
 std::string getFileName(std::string filename);
 std::string getFileExtension(const std::string& filename);
 
@@ -51,6 +55,7 @@ FileBrowserActivity::FileBrowserActivity(GfxRenderer& renderer, MappedInputManag
       basepath(initialPath.empty() ? "/" : std::move(initialPath)) {}
 
 void FileBrowserActivity::loadFiles() {
+  prewarmedStart = -1;
   files.clear();
 
   auto root = Storage.open(basepath.c_str());
@@ -92,7 +97,7 @@ void FileBrowserActivity::loadFiles() {
         case Mode::Books:
           if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
               FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-              FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename)) {
+              FsHelpers::hasImageExtension(filename)) {
             files.emplace_back(filename);
           }
           break;
@@ -117,6 +122,13 @@ void FileBrowserActivity::loadFiles() {
 // ListItem) per file each time it's called.
 void FileBrowserActivity::rebuildRowItems() {
   rowsUseFileIcons = UITheme::getInstance().getTheme().showsFileIcons();
+  if (!UITheme::getInstance().hasMainTabs()) {
+    rowNames.clear();
+    rowExtensions.clear();
+    rowItems.clear();
+    gridLabels.clear();
+    return;
+  }
   rowNames.resize(files.size());
   rowExtensions.resize(files.size());
   rowItems.clear();
@@ -167,16 +179,14 @@ bool FileBrowserActivity::usesIconLayout() const {
 
 void FileBrowserActivity::drawIconGrid(UiScreen& screen, const fui::Rect rect) const {
   const int start = InxGridGeometry::pageStart(nav.selected, files.size());
-  const int cellWidth = rect.width / InxGridGeometry::columns;
-  const int cellHeight = rect.height / InxGridGeometry::rows;
   constexpr int iconSize = 72;
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const bool showSelection = showMainTabContentSelection();
   for (int slot = 0; slot < InxGridGeometry::itemsPerPage && start + slot < listCount(); ++slot) {
     const int index = start + slot;
-    const int column = slot % InxGridGeometry::columns;
-    const int row = slot / InxGridGeometry::columns;
-    const Rect cell{rect.x + column * cellWidth + 4, rect.y + row * cellHeight + 4, cellWidth - 8, cellHeight - 8};
+    Rect cell = InxGridGeometry::cellBounds(slot, rect.width, rect.height);
+    cell.x += rect.x;
+    cell.y += rect.y;
     const bool selected = showSelection && index == nav.selected;
     if (selected) renderer.fillRect(cell.x, cell.y, cell.width, cell.height, true);
     const UIIcon type = UITheme::getFileIcon(files[index]);
@@ -345,9 +355,17 @@ void FileBrowserActivity::showEditMenu() {
   const std::string entry = cleanEntryName(files[nav.selected]);
   if (FsHelpers::isProtectedPathComponent(entry)) return;
 
-  const char* actions[] = {tr(STR_RENAME), tr(STR_MOVE), tr(STR_DELETE)};
-  editPopup.show(entry.c_str(), actions, static_cast<int>(std::size(actions)), 0,
-                 [this](const int index) { executeEditAction(static_cast<EditAction>(index)); });
+  if (UITheme::getInstance().hasMainTabs()) {
+    const char* actions[] = {tr(STR_RENAME), tr(STR_MOVE), tr(STR_DELETE)};
+    editPopup.show(entry.c_str(), actions, static_cast<int>(std::size(actions)), 0,
+                   [this](const int index) { executeEditAction(static_cast<EditAction>(index)); });
+  } else {
+    constexpr StrId actions[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_RENAME, StrId::STR_MOVE};
+    static constexpr EditAction order[] = {EditAction::Open, EditAction::Delete, EditAction::Rename, EditAction::Move};
+    editPopup.show(StrId::STR_FILENAME, actions, static_cast<int>(std::size(actions)), 0, [this](const int index) {
+      if (index >= 0 && index < static_cast<int>(std::size(order))) executeEditAction(order[index]);
+    });
+  }
   requestUpdate();
 }
 
@@ -363,6 +381,9 @@ void FileBrowserActivity::executeEditAction(const EditAction action) {
       if (!files.empty() && nav.selected >= 0 && nav.selected < listCount()) {
         promptDelete(selectedPath(), files[nav.selected]);
       }
+      return;
+    case EditAction::Open:
+      activateSelected();
       return;
   }
 }
@@ -567,7 +588,11 @@ void FileBrowserActivity::activateIndex(const int index) {
 void FileBrowserActivity::onRowLongPress(const int index) {
   (void)index;  // base already synced nav.selected to the pressed row
   app.clearTapFlash();
-  showEditMenu();
+  if (mode != Mode::Books && !UITheme::getInstance().hasMainTabs()) {
+    activateSelected();
+  } else {
+    showEditMenu();
+  }
 }
 
 void FileBrowserActivity::activateSelected() {
@@ -593,7 +618,8 @@ void FileBrowserActivity::activateSelected() {
     return;
   }
 
-  if (mode == Mode::Books && browserState == BrowserState::Browsing && mappedInput.getHeldTime() >= GO_HOME_MS) {
+  if (UITheme::getInstance().hasMainTabs() && mode == Mode::Books && browserState == BrowserState::Browsing &&
+      mappedInput.getHeldTime() >= GO_HOME_MS) {
     showEditMenu();
     return;
   }
@@ -651,6 +677,13 @@ bool FileBrowserActivity::handleCustomInput() {
 }
 
 bool FileBrowserActivity::handleButtons() {
+  if (!UITheme::getInstance().hasMainTabs() && mode == Mode::Books && browserState == BrowserState::Browsing &&
+      mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, GO_HOME_MS)) {
+    app.clearTapFlash();
+    showEditMenu();
+    return true;
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     activateSelected();
     return true;
@@ -717,9 +750,10 @@ std::string getFileExtension(const std::string& filename) {
 
 void FileBrowserActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Content below the GUI.drawHeader band, above the button hints.
-  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
-                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  const Rect content = pageContentRect();
+  screen.setContentMarginFromScreen(fui::Insets{
+      static_cast<int16_t>(content.y), static_cast<int16_t>(renderer.getScreenWidth() - content.x - content.width),
+      static_cast<int16_t>(renderer.getScreenHeight() - content.y - content.height), static_cast<int16_t>(content.x)});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   // Full path band at the bottom: separator on top, left-truncated so the
@@ -774,15 +808,16 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   }
 
   fui::ListProps props;
-  props.items = rowItems.data();
-  props.count = static_cast<uint16_t>(rowItems.size());
+  props.rowProvider = &FileBrowserActivity::provideRow;
+  props.rowProviderCtx = this;
+  props.count = static_cast<uint16_t>(files.size());
   props.action = ACTION_ROW;
   // Tap opens/navigates; long-press prompts delete (physical buttons stay in loop()).
   props.inputMask = fui::InputTouch | fui::InputLongPress;
   props.valueInset = 8;  // air between the extension and the row edge
   // Match the pre-FreeInkUI file-list size while keeping two-line wrapping for
   // long names.
-  fui::TextStyle label = screen.theme().bodyText;
+  fui::TextStyle label = UITheme::getInstance().hasMainTabs() ? screen.theme().bodyText : screen.theme().smallText;
   label.maxLines = 2;
   props.labelText = label;
   // The trailing value here is just the short extension: skip the balanced
@@ -791,8 +826,9 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   // Wrapped two-line names shrink how many rows fit a page, so the last row
   // of a page can end up in leftover space: draw it as a partial preview so
   // files past the fold are visibly present, not silently absent.
-  props.partialTrailingRow = true;
+  props.partialTrailingRow = UITheme::getInstance().hasMainTabs();
   syncListViewport(screen, props);
+  prewarmRowGlyphs(nav.top);
   screen.list(props);
 }
 
@@ -833,7 +869,72 @@ void FileBrowserActivity::render(RenderLock&& lock) {
 }
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {
-  for (size_t i = 0; i < files.size(); i++)
-    if (files[i] == name) return i;
-  return 0;
+  const auto found = std::find(files.begin(), files.end(), name);
+  return found == files.end() ? 0 : static_cast<size_t>(found - files.begin());
+}
+
+void formatFileName(const std::string& filename, char* buffer, const size_t bufferSize) {
+  if (filename.empty()) {
+    buffer[0] = '\0';
+    return;
+  }
+  const bool isDirectory = filename.back() == '/';
+  const size_t dot = isDirectory ? filename.size() - 1 : filename.rfind('.');
+  const int length = static_cast<int>(dot == std::string::npos ? filename.size() : dot);
+  const char* format = isDirectory && !UITheme::getInstance().getTheme().showsFileIcons() ? "[%.*s]" : "%.*s";
+  snprintf(buffer, bufferSize, format, length, filename.c_str());
+  // Compose only the display copy; filesystem lookup needs the raw entry bytes.
+  utf8ComposeNfcInPlace(buffer);
+}
+
+void formatFileExtension(const std::string& filename, char* buffer, const size_t bufferSize) {
+  buffer[0] = '\0';
+  if (filename.empty() || filename.back() == '/') return;
+  if (const char* extension = strrchr(filename.c_str(), '.')) snprintf(buffer, bufferSize, "%s", extension);
+}
+
+void FileBrowserActivity::provideRow(void* ctx, const uint16_t index, fui::ListItem& item) {
+  auto* self = static_cast<FileBrowserActivity*>(ctx);
+  if (index >= self->files.size()) return;
+  const std::string& entry = self->files[index];
+  if (entry == MOVE_HERE_ENTRY) {
+    item.label = tr(STR_MOVE_HERE);
+    item.actionValue = static_cast<int16_t>(index);
+    return;
+  }
+  formatFileName(entry, self->rowNameBuf, sizeof(self->rowNameBuf));
+  item.label = self->rowNameBuf;
+  formatFileExtension(entry, self->rowExtBuf, sizeof(self->rowExtBuf));
+  if (self->rowExtBuf[0] != '\0') {
+    item.value = self->rowExtBuf;
+  }
+  item.icon = listIconFor(UITheme::getFileIcon(entry));
+  item.actionValue = static_cast<int16_t>(index);
+}
+
+void FileBrowserActivity::prewarmRowGlyphs(const int start) {
+  const int total = static_cast<int>(files.size());
+  int clamped = start;
+  if (clamped > total - PREWARM_WINDOW) clamped = total - PREWARM_WINDOW;
+  if (clamped < 0) clamped = 0;
+  if (clamped == prewarmedStart) return;
+  prewarmedStart = clamped;
+  const int count = total - clamped < PREWARM_WINDOW ? total - clamped : PREWARM_WINDOW;
+
+  struct PrewarmCtx {
+    FileBrowserActivity* self;
+    int first;
+    int count;
+  } prewarmCtx{this, clamped, count};
+  renderer.prewarmFallbackText(
+      uiScaleSpec().smallFontId,
+      [](const void* ctx, uint32_t i) -> const char* {
+        auto* c = const_cast<PrewarmCtx*>(static_cast<const PrewarmCtx*>(ctx));
+        if (i < static_cast<uint32_t>(c->count)) {
+          formatFileName(c->self->files[c->first + i], c->self->rowNameBuf, sizeof(c->self->rowNameBuf));
+          return c->self->rowNameBuf;
+        }
+        return c->self->basepath.c_str();
+      },
+      &prewarmCtx, static_cast<uint32_t>(count) + 1);
 }

@@ -32,6 +32,22 @@ Install packages through PlatformIO; do not copy a mutable/customized framework
 from another checkout. An explicit `PLATFORMIO_CORE_DIR` still overrides this
 default for the isolated cache-switch tests below.
 
+## Tool initialization
+
+Use pioarduino 6.2.0 with pinned platform 55.03.311. In a new project-local
+tool directory, install the Core and prepare its installer before building:
+
+```bash
+python -m pip install pioarduino==6.2.0
+python scripts/patch_pioarduino_cache.py --prepare-platform
+```
+
+Preparation removes the platform installer's SCons replacement; the Core still
+supplies SCons. Keep each build job's tool directory isolated and include
+`.platformio` in its path for the framework-restoration check. Ubuntu cppcheck
+also needs `libpcre3`. X4 Pro and Waveshare use application LTO with their
+prebuilt `dio_opi` TinyUSB core to fit the existing 6.25 MiB OTA partitions.
+
 ## Build Environment
 
 ### ar0c fork identity
@@ -114,7 +130,7 @@ nonzero PSRAM capacity and a successful allocator probe before connection tests.
 
 ## Windows middleware compatibility
 
-The pinned pioarduino 55.03.37 Windows dispatcher ignores middleware file
+The pinned pioarduino Windows dispatcher ignores middleware file
 patterns and temporarily replaces `Object()` with a function returning `None`.
 This breaks BLE generated-source compilation and per-library configuration.
 `scripts/patch_windows_middleware.py` applies a hash-guarded, idempotent repair
@@ -150,6 +166,14 @@ keys are Up/Down, `P` is Power, mouse input provides touch, and `S` sleeps.
 This simulator covers UI, input, RTC state,
 and sleep/wake flows. It does not emulate EPD waveforms or ghosting, bus timing,
 SDMMC contention, PSRAM, or power consumption.
+
+Read Pico uses its 103,968-byte B/W framebuffer, sixteen-level image transactions,
+and the same 12/12/14 pt SD UI font selection as the hardware. The window fits the
+usable desktop area without upscaling; screenshots retain the logical panel size
+and current rotation, independent of the window's scale or HiDPI density. Existing
+device window and screenshot behavior is retained. Read Pico has no frontlight or
+Home key; Up/Escape/Down represent its capacitive strip, `P` is Power, and only
+Power wakes it. See [the device guide](read-pico.md#desktop-simulator).
 
 ## Critical Build Flags
 These flags in `platformio.ini` fundamentally affect firmware behavior:
@@ -224,3 +248,28 @@ build_flags =
 - Use `${base.build_flags}` to extend (not replace) base flags
 
 See also: [getting-started](../contributing/getting-started.md) for first-time toolchain setup, [testing-and-debugging.md](testing-and-debugging.md) for build/monitor commands.
+
+### Fixed local integration builds (2026-10-02)
+
+The SDK/Simulator/Reader pins are `98b4e427`, `20e73803`, and `38280863`.
+Use the real source exports recorded by `sync-upstream start --local-rehearsal`;
+record their complete Git tree fingerprints with validation artifacts. The SDK
+fork includes all six ReadPico fixes through `e3550ec`. Production dependency
+commits remain unchanged during rehearsal; the ignored local PlatformIO config
+selects reviewed exports. No commit, push, PR or flashing is part of this stage.
+
+Validate `default`, `gh_release`, `readpico`, `readpico_nightly`, and `metalio_eink4`,
+and all six existing simulator environments. Only the explicit ReadPico profiles
+use high-density metrics. Keep host tests, whole-page visuals, Flash/static RAM,
+and physical-device acceptance as separate results.
+
+The integrated SD catalog retains at most 48KiB of row/container data and checks
+32KiB free-heap plus 4KiB contiguous headroom before growth. Installed discovery
+is bounded to 32 entries, reuses root lookup instead of keeping every seen name,
+and rejects excess picker/history growth with a log. Manifest/title/description
+inputs are bounded; JSON rows accept 768-byte fields, 64 bundle files and 4KiB
+total captured text, with 32 nesting/path segments and 128-byte keys. Browse
+responses remain on SD (up to 1MiB), while API responses retain the upstream
+48KiB cap and fallible Arduino String reserve. TLS is released before downloads
+and on exit. These limits protect C3 shared code; simulator heap numbers are
+synthetic and do not verify hardware runtime headroom.

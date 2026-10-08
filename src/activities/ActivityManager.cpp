@@ -7,6 +7,7 @@
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <Memory.h>
+#include <VectorFontSupport.h>
 
 #include <algorithm>
 
@@ -19,6 +20,7 @@
 #include "apps/buddy/BuddyActivity.h"
 #include "apps/calculator/CalculatorActivity.h"
 #include "apps/sokoban/SokobanGameActivity.h"
+#include "components/SubpageLayout.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include "apps/chinese-chess/ChineseChessMenuActivity.h"
 #endif
@@ -37,19 +39,23 @@
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
+#include "components/HeaderBackTapTarget.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/InxRecentActivity.h"
 #include "home/RecentBooksActivity.h"
+#include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "network/UsbDriveActivity.h"
+#include "plugins/PluginCatalogActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FrontlightPanelActivity.h"
 #include "util/FullScreenMessageActivity.h"
 #include "util/ImageViewerActivity.h"
+#include "util/UserGuide.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -61,18 +67,21 @@ void ActivityManager::begin() {
 #else
   constexpr BaseType_t renderTaskCore = 0;
 #endif
-  // A4 prewarms fonts, decodes covers and runs Bidi in this task; keep its
-  // measured stack allowance local to that experimental target.
-#if FREEINK_DEVICE_EEGO_A4
-  constexpr uint32_t kRenderTaskStackBytes = 16384;
+#if CROSSPOINT_VECTOR_FONTS || FREEINK_DEVICE_EEGO_A4
+  // FreeType rasterization runs on this task, and the deepest observed chain
+  // is a glyph fault DURING LAYOUT: expat + parser + line-layout frames
+  // (~3.5KB on Xtensa) with the scan converter's FT_RENDER_POOL_SIZE (4KB)
+  // stack-resident band pool on top — a measured ~8KB peak that trips the
+  // canary on an 8KB stack. Vector-font boards all have PSRAM-class RAM.
+  constexpr uint32_t renderTaskStackBytes = 16384;
 #else
-  constexpr uint32_t kRenderTaskStackBytes = 8192;
+  constexpr uint32_t renderTaskStackBytes = 8192;
 #endif
   xTaskCreatePinnedToCore(&renderTaskTrampoline, "ActivityManagerRender",
-                          kRenderTaskStackBytes,  // Stack size (see above)
-                          this,                   // Parameters
-                          1,                      // Priority
-                          &renderTaskHandle,      // Task handle
+                          renderTaskStackBytes,  // Stack size
+                          this,                  // Parameters
+                          1,                     // Priority
+                          &renderTaskHandle,     // Task handle
                           renderTaskCore  // Keep long renders/cover decodes off CPU 0's idle watchdog when available
   );
   assert(renderTaskHandle != nullptr && "Failed to create render task");
@@ -84,23 +93,31 @@ void ActivityManager::renderTaskTrampoline(void* param) {
 }
 
 void ActivityManager::renderTaskLoop() {
+  auto waitTicks = portMAX_DELAY;
+  uint32_t idleGeneration = 0;
   while (true) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    // Acquire the lock before reading currentActivity to avoid a TOCTOU race
-    // where the main task deletes the activity between the null-check and render().
+    const bool foreground = ulTaskNotifyTake(pdTRUE, waitTicks) != 0;
+    // ponytail: one idle attempt per render, including cancellations and I/O
+    // failures; re-arm after quiet input only if measured cache hit rate needs it.
+    waitTicks = portMAX_DELAY;
     RenderLock lock;
-    // Skip rendering when a Push/Pop/Replace is pending: the main task is
-    // waiting to acquire this lock to swap currentActivity. Rendering the
-    // old activity here would re-hold the lock for the entire render duration,
-    // starving the main task and freezing the device.
     if (currentActivity && pendingAction.load() == PendingAction::None) {
-      HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
-      // Night mode is a global output polarity applied to every activity.
-      // The sleep screen forces normal polarity itself (SleepActivity).
-      display.setInverted(SETTINGS.screenInverted != 0);
-      currentActivity->render(std::move(lock));
+      HalPowerManager::Lock powerLock;
+      if (foreground) {
+        // Some renderers release the lock, so read activity-owned metadata
+        // before calling them. Input during the render also cancels its idle pass.
+        const auto delayMs = currentActivity->idleRenderDelayMs();
+        idleGeneration = idleRenderGeneration.load(std::memory_order_relaxed);
+        display.setInverted(SETTINGS.screenInverted != 0);
+        currentActivity->render(std::move(lock));
+        if (delayMs != 0) waitTicks = pdMS_TO_TICKS(delayMs);
+      } else if (!idleRenderCancelled(idleGeneration)) {
+        currentActivity->renderIdle(idleGeneration);
+      }
     }
-    // Notify any task blocked in requestUpdateAndWait() that the render is done.
+    // An idle timeout must never acknowledge requestUpdateAndWait(): its
+    // notification may have arrived while the idle callback was cancelling.
+    if (!foreground) continue;
     TaskHandle_t waiter = nullptr;
     taskENTER_CRITICAL(&activityManagerSpinlock);
     waiter = waitingTaskHandle;
@@ -123,7 +140,10 @@ void ActivityManager::loop() {
     if (currentActivity && currentActivity->isReaderActivity()) requestUpdate();
   }
 #endif
-  if (mappedInput.consumeSuppressedRelease()) return;
+  if (mappedInput.consumeSuppressedRelease()) {
+    resetHomeStandbyInput();
+    return;
+  }
 
   if (currentActivity && currentActivity->requiresExclusiveStorageLoop()) {
     currentActivity->loop();
@@ -137,8 +157,12 @@ void ActivityManager::loop() {
   }
 
   if (currentActivity && pendingAction.load() == PendingAction::None) {
-    if (handleMainTabInput()) return;
+    if (handleMainTabInput()) {
+      resetHomeStandbyInput();
+      return;
+    }
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
+      resetHomeStandbyInput();
       if (currentActivity->handleHomeGesture()) {
         return;
       }
@@ -148,14 +172,21 @@ void ActivityManager::loop() {
 
     // Touch users can also open the global control center from the status bar.
     bool statusBarTap = false;
-    if (mappedInput.hasTouch() &&
-        (currentActivity->name == "Home" || currentActivity->name == "FileBrowser" ||
-         currentActivity->name == "Settings" || currentActivity->name == "NetworkModeSelection")) {
+    if (mappedInput.hasTouch()) {
       int tx = 0;
       int ty = 0;
-      statusBarTap = mappedInput.wasScreenTapped(tx, ty) && ty < 44;
+      if (currentActivity->usesMainTabBar()) {
+        const Rect status = currentActivity->mainTabLayout().statusBar;
+        statusBarTap = mappedInput.wasScreenTapped(tx, ty) && tx >= status.x && tx < status.x + status.width &&
+                       ty >= status.y && ty < status.y + status.height;
+      } else if (currentActivity->name == "Home" || currentActivity->name == "FileBrowser" ||
+                 currentActivity->name == "Settings" || currentActivity->name == "NetworkModeSelection") {
+        statusBarTap =
+            mappedInput.wasScreenTapped(tx, ty) && ty >= 0 && ty < 44 && !HeaderBackTapTarget::contains(tx, ty);
+      }
     }
     if (currentActivity->name != "FrontlightPanel" && (statusBarTap || mappedInput.wasLightPanelGesture())) {
+      resetHomeStandbyInput();
       auto panel = makeUniqueNoThrow<FrontlightPanelActivity>(renderer, mappedInput);
       if (!panel) {
         LOG_ERR("ACT", "OOM: frontlight panel (%u bytes)", static_cast<unsigned>(sizeof(FrontlightPanelActivity)));
@@ -166,7 +197,7 @@ void ActivityManager::loop() {
     }
 
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
-    currentActivity->loop();
+    if (!handleHomeStandbyInput()) currentActivity->loop();
   }
 
   while (pendingAction.load() != PendingAction::None) {
@@ -207,6 +238,7 @@ void ActivityManager::loop() {
       } else {
         currentActivity = std::move(stackActivities.back());
         stackActivities.pop_back();
+        resetHomeStandbyInput();
         LOG_DBG("ACT", "Popped from activity stack, new size = %zu", stackActivities.size());
         // Handle result if necessary
         if (currentActivity->resultHandler) {
@@ -244,10 +276,14 @@ void ActivityManager::loop() {
       } else if (pendingAction.load() == PendingAction::Push) {
         // Move current activity to stack
         stackActivities.push_back(std::move(currentActivity));
+        // The parent's header back rect must not route taps on the pushed
+        // screen (which may draw no header of its own).
+        HeaderBackTapTarget::clear();
         LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
       }
       pendingAction.store(PendingAction::None);
       currentActivity = std::move(pendingActivity);
+      resetHomeStandbyInput();
 
       // Drop any one-shot tap/release edge events the outgoing activity already
       // consumed this frame. The SDK's InputManager clears these in update(),
@@ -276,19 +312,66 @@ void ActivityManager::loop() {
   }
 }
 
+void ActivityManager::resetHomeStandbyInput() {
+  standbyBackState = mappedInput.isPressed(MappedInputManager::Button::Back) ? StandbyBackState::WaitingForRelease
+                                                                             : StandbyBackState::Idle;
+}
+
+bool ActivityManager::handleHomeStandbyInput() {
+  const bool eligible =
+      currentActivity && (currentActivity->isHomeActivity() ||
+                          (currentActivity->usesMainTabBar() && currentActivity->mainTab() == MainTab::Recent &&
+                           mainTabFocus == MainTabFocus::Tabs));
+  if (!eligible || !SETTINGS.standbyShortcutEnabled) {
+    resetHomeStandbyInput();
+    return false;
+  }
+
+  const bool pressed = mappedInput.wasPressed(MappedInputManager::Button::Back);
+  const bool released = mappedInput.wasReleased(MappedInputManager::Button::Back);
+  // Touch Back gestures publish a complete pair in one frame, independent of
+  // an inherited physical hold. They remain usable through the release barrier.
+  if (pressed && released) {
+    standbyBackState = StandbyBackState::Idle;
+    goToStandby();
+    return true;
+  }
+
+  switch (standbyBackState) {
+    case StandbyBackState::Idle:
+      if (pressed) standbyBackState = StandbyBackState::Pressed;
+      break;
+    case StandbyBackState::Pressed:
+      if (released) {
+        standbyBackState = StandbyBackState::Idle;
+        goToStandby();
+        return true;
+      }
+      if (!mappedInput.isPressed(MappedInputManager::Button::Back)) standbyBackState = StandbyBackState::Idle;
+      break;
+    case StandbyBackState::WaitingForRelease:
+      if (!mappedInput.isPressed(MappedInputManager::Button::Back)) standbyBackState = StandbyBackState::Idle;
+      break;
+  }
+  // Home Activities no longer handle Back themselves; ignored releases must
+  // still allow independent touch input, including on the release frame.
+  return false;
+}
+
 bool ActivityManager::handleMainTabInput() {
   if (!currentActivity || !currentActivity->usesMainTabBar()) return false;
 
   const MainTab currentTab = currentActivity->mainTab();
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int tabTop = metrics.topPadding;
-  const int tabBottom = tabTop + metrics.headerHeight;
+  const Rect tabBar = currentActivity->mainTabLayout().tabBar;
+  const auto insideTabs = [&tabBar](const int x, const int y) {
+    return x >= tabBar.x && x < tabBar.x + tabBar.width && y >= tabBar.y && y < tabBar.y + tabBar.height;
+  };
 
   int x = 0;
   int y = 0;
   if (mappedInput.wasScreenTapped(x, y)) {
-    if (y >= tabTop && y < tabBottom) {
-      const MainTab target = MainTabs::fromX(x, renderer.getScreenWidth());
+    if (insideTabs(x, y)) {
+      const MainTab target = MainTabs::fromX(x - tabBar.x, tabBar.width);
       if (target != MainTab::None) {
         mainTabFocus = MainTabFocus::Content;
         if (target != currentTab)
@@ -305,7 +388,7 @@ bool ActivityManager::handleMainTabInput() {
     return false;
   }
 
-  if (mainTabFocus == MainTabFocus::Tabs && mappedInput.wasScreenTouchDown(x, y) && (y < tabTop || y >= tabBottom)) {
+  if (mainTabFocus == MainTabFocus::Tabs && mappedInput.wasScreenTouchDown(x, y) && !insideTabs(x, y)) {
     mainTabFocus = MainTabFocus::Content;
     requestUpdate();
     return false;
@@ -355,12 +438,10 @@ bool ActivityManager::handleMainTabInput() {
         return true;
       }
 
+      // Recent's Back is owned by the shared home Standby handler.
+      if (currentTab == MainTab::Recent) return false;
       if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-        const MainTab target = MainTabs::backTarget(currentTab);
-        if (target != MainTab::None)
-          goToMainTab(target);
-        else if (SETTINGS.standbyShortcutEnabled)
-          goToStandby();
+        goToMainTab(MainTabs::backTarget(currentTab));
         return true;
       }
       return mappedInput.isPressed(MappedInputManager::Button::Back);
@@ -383,9 +464,15 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
     currentActivity->onExit();
     currentActivity.reset();
   }
+  // The outgoing screen's header back button must not eat taps on the next
+  // screen; the next header draw re-records it.
+  HeaderBackTapTarget::clear();
 }
 
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
+  cancelIdleRender();
+  mappedInput.resetHomeButtonInput();
+  standbyBackState = StandbyBackState::Idle;
   // Note: no lock here, this is usually called by loop() and we may run into deadlock
   if (currentActivity) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
@@ -395,11 +482,18 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   } else {
     // No current activity, safe to launch immediately
     currentActivity = std::move(newActivity);
+    resetHomeStandbyInput();
     currentActivity->onEnter();
   }
 }
 
 void ActivityManager::goToFileTransfer() { replaceActivityWith<CrossPointWebServerActivity>(); }
+
+void ActivityManager::goToJoinNetwork() {
+  // Post heap-defrag reboot: enter the web-server activity straight in Join
+  // Network mode (skips mode selection, does not reboot again).
+  replaceActivityWith<CrossPointWebServerActivity>(/*startInJoinNetwork=*/true);
+}
 
 void ActivityManager::goToUsbDrive() {
 #if FREEINK_CAP_USB_MSC
@@ -447,6 +541,15 @@ void ActivityManager::goToMainTab(const MainTab tab) {
   }
 }
 
+void ActivityManager::goToLibrary() {
+  auto activity = makeUniqueNoThrow<LibraryListActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: library activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
 void ActivityManager::goToBrowser() {
   const auto& servers = OPDS_STORE.getServers();
   // Skip the server picker when there's only one server configured
@@ -457,12 +560,16 @@ void ActivityManager::goToBrowser() {
   }
 }
 
+void ActivityManager::goToPlugins(bool showOpds) {
+  replaceActivityWith<PluginCatalogActivity>(showOpds, /*rootMode=*/true);
+}
+
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     goToFileBrowser("/");
     return;
   }
-  if (FsHelpers::hasBmpExtension(path) || FsHelpers::hasPngExtension(path)) {
+  if (FsHelpers::hasImageExtension(path)) {
     replaceActivityWith<ImageViewerActivity>(std::move(path));
     return;
   }
@@ -487,6 +594,9 @@ void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::
 }
 
 void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
+  if (!CrossPointSettings::requiresOnboarding(SETTINGS.onboardingVersion)) {
+    UserGuide::installIfPending(static_cast<Language>(SETTINGS.language) == Language::ZH_CN);
+  }
   if (SETTINGS.uiTheme == CrossPointSettings::UI_THEME::INX) {
     mainTabFocus = MainTabFocus::Tabs;
     mainTabEntryReleasePending = false;
@@ -497,8 +607,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
     const auto& activityName = currentActivity->name;
     if (activityName == "FileBrowser") {
       initialMenuItem = HomeMenuItem::FILE_BROWSER;
-    } else if (activityName == "RecentBooks") {
-      initialMenuItem = HomeMenuItem::RECENTS;
+    } else if (activityName == "Library") {
+      initialMenuItem = HomeMenuItem::LIBRARY;
     } else if (activityName == "OpdsBookBrowser") {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
@@ -548,6 +658,9 @@ void ActivityManager::goToWeRead() { replaceActivityWith<WeReadActivity>(); }
 #endif
 
 void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
+  cancelIdleRender();
+  mappedInput.resetHomeButtonInput();
+  standbyBackState = StandbyBackState::Idle;
   if (pendingActivity) {
     // Should never happen in practice
     LOG_ERR("ACT", "pendingActivity while pushActivity is not expected");
@@ -558,6 +671,9 @@ void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
 }
 
 void ActivityManager::popActivity() {
+  cancelIdleRender();
+  mappedInput.resetHomeButtonInput();
+  standbyBackState = StandbyBackState::Idle;
   if (pendingActivity) {
     // Should never happen in practice
     LOG_ERR("ACT", "pendingActivity while popActivity is not expected");
@@ -598,7 +714,10 @@ bool ActivityManager::deferBluetoothStart() const {
          (currentActivity && currentActivity->deferBluetoothStart());
 }
 
-bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
+bool ActivityManager::handleForcedRefresh() {
+  cancelIdleRender();
+  return currentActivity && currentActivity->handleForcedRefresh();
+}
 
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 
@@ -609,7 +728,14 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
   return {};
 }
 
+void ActivityManager::prepareForSleep() {
+  RenderLock lock;
+  for (const auto& activity : stackActivities) activity->prepareForSleep();
+  if (currentActivity) currentActivity->prepareForSleep();
+}
+
 void ActivityManager::requestUpdate(bool immediate) {
+  cancelIdleRender();
   if (immediate) {
     if (renderTaskHandle) {
       xTaskNotify(renderTaskHandle, 1, eIncrement);
@@ -621,6 +747,7 @@ void ActivityManager::requestUpdate(bool immediate) {
   }
 }
 void ActivityManager::requestUpdateAndWait() {
+  cancelIdleRender();
   if (!renderTaskHandle) {
     return;
   }
@@ -651,15 +778,12 @@ void ActivityManager::requestUpdateAndWait() {
 
 // RenderLock
 
-RenderLock::RenderLock() {
-  xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
-  isLocked = true;
+RenderLock::RenderLock(Mode mode) {
+  isLocked = xSemaphoreTake(activityManager.renderingMutex, mode == Mode::Try ? 0 : portMAX_DELAY) == pdTRUE;
+  assert((mode == Mode::Try || isLocked) && "Blocking render lock acquisition failed");
 }
 
-RenderLock::RenderLock([[maybe_unused]] Activity&) {
-  xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
-  isLocked = true;
-}
+RenderLock::RenderLock(Activity&) : RenderLock(Mode::Blocking) {}
 
 RenderLock::~RenderLock() {
   if (isLocked) {

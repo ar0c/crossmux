@@ -50,6 +50,39 @@ X4 Pro stable uses `x4pro-gh_release`. X4 Pro and Waveshare ePaper 3.97 each
 produce a separate ESP32-S3 Nightly image. Each image is aliased by the compatibility `global` and
 `zh-CN` pointers.
 
+Read Pico uses `readpico_nightly`, with artifact slug and board tag `readpico`.
+The model list accepts both `readpico` and the SDK runtime name `read_pico`.
+Its full-install package uses the existing 16 MB S3 partition
+profile. The Web flasher displays it as **MindReset Read Pico**; Stable OTA returns
+`unsupported_channel`. First installation replaces the factory partition layout
+and requires a complete Flash backup. See [Read Pico](read-pico.md) for hardware
+evidence and the outstanding physical acceptance checks.
+
+### Firmware-write progress rendering
+
+OTA and SD firmware updates draw an initial progress frame, refresh after at
+least another 10 percentage points (jumping directly to the latest value), and
+finish the 100% frame before continuing. The progress callback updates byte
+snapshots under `RenderLock`, releases the lock, then calls
+`requestUpdateAndWait()`. Flash erase/write and the subsequent boot-partition
+switch must wait for that frame: overlapping Flash operations can suspend
+Read Pico's display feeder tasks during a panel refresh. Render methods always
+submit a complete frame; they do not throttle after clearing the framebuffer.
+
+OTA rendering reads only the locked snapshots, not the updater's live counters.
+Progress bars clamp completed bytes to the reported total; an unknown/zero
+total displays 0%. Download progress reaching 100% does not mean installation
+succeeded: the completion page is shown only after firmware verification and
+boot-partition selection succeed. No additional heap buffer is allocated.
+
+Run `python3 scripts/tests/test_firmware_update_refresh.py` for the production
+callback, Flash-operation ordering, failure-path and theme-render regressions,
+alongside `test_font_preload_refresh.py` and `test_download_memory_lifecycle.py`.
+Device acceptance must record the installed firmware hash and serial log,
+repeat Read Pico OTA through the completion page and expected reboot, and check
+interrupted-download recovery plus the SD update path. Builds and host tests do
+not establish physical display or reboot acceptance.
+
 ## Publishing
 
 ### Owner-authorized direct releases

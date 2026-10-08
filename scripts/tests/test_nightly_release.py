@@ -1,3 +1,4 @@
+import configparser
 import hashlib
 import json
 import sys
@@ -19,6 +20,31 @@ import verify_nightly_release
 
 
 class NightlyTargetTest(unittest.TestCase):
+    def test_boot_app0_uses_the_active_platformio_core(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / 'home'
+            custom_core = root / 'isolated-core'
+            relative = Path('packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin')
+            default_asset = root / '.platformio' / relative
+            custom_asset = custom_core / relative
+            for asset in (default_asset, custom_asset):
+                asset.parent.mkdir(parents=True)
+                asset.write_bytes(b'boot_app0')
+            with mock.patch.object(Path, 'home', return_value=home):
+                for override, expected in (('', default_asset), (str(custom_core), custom_asset)):
+                    with self.subTest(core_dir=override), mock.patch.dict(
+                        'os.environ', {'PLATFORMIO_CORE_DIR': override}
+                    ):
+                        self.assertEqual(package_nightly_target.find_boot_app0(root), expected)
+                with mock.patch.dict('os.environ', {}, clear=True):
+                    self.assertEqual(package_nightly_target.find_boot_app0(root), default_asset)
+                custom_asset.unlink()
+                with mock.patch.dict('os.environ', {'PLATFORMIO_CORE_DIR': str(custom_core)}):
+                    with self.assertRaises(SystemExit) as error:
+                        package_nightly_target.find_boot_app0(root)
+                    self.assertIn(str(custom_asset), str(error.exception))
+
     def test_fetch_retries_incomplete_reads(self):
         response = mock.MagicMock()
         response.__enter__.return_value.read.side_effect = [
@@ -499,6 +525,66 @@ class NightlyRetentionTest(unittest.TestCase):
             ),
             [obsolete],
         )
+
+    def test_keeps_historical_builds_when_targets_change(self):
+        current = f'nightly-build-{"a" * 40}-10-1'
+        previous = f'nightly-build-{"b" * 40}-9-1'
+        previous_fallback = f'nightly-build-{"c" * 40}-8-1'
+        obsolete = f'nightly-build-{"d" * 40}-7-1'
+        for storage in ('github', 'cos'):
+            candidates = '\n'.join((current, previous, previous_fallback, obsolete, 'stable', 'nightly'))
+            for change in ('added', 'retired'):
+                with self.subTest(storage=storage, change=change):
+                    index = self.previous_index(storage, previous, previous_fallback)
+                    if change == 'added':
+                        del index['targets']['waveshare_epaper_397']
+                        # The earlier one-board index references only the
+                        # fallback build; the other candidate has no owner.
+                        expected_obsolete = sorted((previous, obsolete))
+                    else:
+                        target = index['targets'].pop('xteink_x4_pro')
+                        target['targetId'] = 'retired_device'
+                        index['targets']['retired_device'] = target
+                        expected_obsolete = [obsolete]
+                    self.assertEqual(
+                        nightly_retention.obsolete_builds(storage, current, index, candidates),
+                        expected_obsolete,
+                    )
+
+    def test_rejects_malformed_historical_indexes(self):
+        current = f'nightly-build-{"a" * 40}-10-1'
+        previous = f'nightly-build-{"b" * 40}-9-1'
+        cases = (
+            (('schemaVersion',), 2),
+            (('channel',), 'stable'),
+            (('targets',), None),
+            (('targets',), []),
+            (('targets',), {}),
+            (('targets', 'xteink_x4_pro', 'targetId'), 'wrong_target'),
+            (('targets', 'xteink_x4_pro', 'variants'), {'global': {}}),
+            (('targets', 'xteink_x4_pro', 'variants', 'global'), {}),
+            (('targets', 'xteink_x4_pro', 'variants', 'global', 'manifestUrl'), 'https://example.com/firmware.bin'),
+        )
+        for storage in ('github', 'cos'):
+            for path, value in cases:
+                with self.subTest(storage=storage, path=path, value=value):
+                    index = self.previous_index(storage, previous, previous)
+                    entry = index
+                    for key in path[:-1]:
+                        entry = entry[key]
+                    entry[path[-1]] = value
+                    with self.assertRaises(ValueError):
+                        nightly_retention.obsolete_builds(storage, current, index, current)
+
+    def test_rejects_empty_target_identity(self):
+        current = f'nightly-build-{"a" * 40}-10-1'
+        previous = f'nightly-build-{"b" * 40}-9-1'
+        for storage in ('github', 'cos'):
+            index = self.previous_index(storage, previous, previous)
+            index['targets'][''] = index['targets'].pop('xteink_x4_pro')
+            index['targets']['']['targetId'] = ''
+            with self.subTest(storage=storage), self.assertRaisesRegex(ValueError, 'variant set'):
+                nightly_retention.obsolete_builds(storage, current, index, current)
 
     def test_rejects_unexpected_previous_url_and_incomplete_listing(self):
         current = f'nightly-build-{"a" * 40}-10-1'

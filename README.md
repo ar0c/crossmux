@@ -74,6 +74,18 @@ pio run -e waveshare_epaper_397
 
 The X4 Pro stable application binary is `.pio/build/x4pro-gh_release/firmware.bin`. For Waveshare, use `waveshare_epaper_397`.
 
+For Read Pico (小纸 Pico):
+
+Until FreeInk SDK PR #35 is merged, first follow the temporary SDK checkout in the [Read Pico guide](./docs/engineering/read-pico.md#current-implementation--2026-09-30).
+
+```bash
+pio run -e readpico
+```
+
+On Windows, set `PYTHONIOENCODING=utf-8` before running `pio`, otherwise the build can stall when PlatformIO prints the Arabic i18n language row.
+
+The application is `.pio/build/readpico/firmware.bin`. First installation is a **full-table flash** — `bootloader@0x0`, `partitions@0x8000`, `boot_app0@0xe000`, `app@0x10000` — after a verified full-chip (16 MiB) backup, because the repository partition table and the board's factory `partitions_16M.csv` disagree at `0xE000` and use different app-slot sizes. This target is **build-only in this round**: it is absent from the Nightly/OTA/Web release mappings, and no hardware acceptance has been recorded yet. See the [Read Pico guide](./docs/engineering/read-pico.md) for the pin map, the frozen build flags, and the pending acceptance checklist.
+
 ### Desktop simulator
 
 Install SDL2 and curl (plus OpenSSL development headers on Linux), place EPUBs in `fs_/books/`, then run:
@@ -83,6 +95,8 @@ pio run -e simulator -t run_simulator
 ```
 
 The [CrossMux simulator fork](https://github.com/0x1abin/crosspoint-simulator) is pinned in `platformio.ini`. It previews UI and input flows; it does not validate display waveforms, power consumption, or physical hardware timing.
+
+Read Pico fits its window to the desktop while retaining full-resolution BMP screenshots. Mouse input supports tap, hold and swipe; Up/Escape/Down represent the three capacitive keys, and only Power (`P`) wakes from sleep. Native sixteen-level images and SD UI fonts follow the Read Pico paths. See the [device guide](./docs/engineering/read-pico.md#desktop-simulator) for validation details.
 
 ### Checks and debugging
 

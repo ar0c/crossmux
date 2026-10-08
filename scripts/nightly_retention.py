@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-from nightly_targets import FLAVOR_TOKENS, TARGETS
+from nightly_targets import FLAVOR_TOKENS
 
 
 BUILD_ID = r'[0-9a-f]{40}-[0-9]+-[0-9]+'
@@ -26,8 +26,9 @@ def referenced_builds(index, storage, repository='0x1abin/crossmux'):
     if not isinstance(index, dict) or index.get('schemaVersion') != 1 or index.get('channel') != 'nightly':
         raise ValueError('invalid previous Nightly index envelope')
     targets = index.get('targets')
-    if not isinstance(targets, dict) or set(targets) != set(TARGETS):
-        raise ValueError('previous Nightly index does not contain the canonical target set')
+    # Historical targets can differ after devices are added or retired.
+    if not isinstance(targets, dict) or not targets:
+        raise ValueError('previous Nightly index must contain a nonempty target map')
 
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('invalid GitHub repository')
@@ -38,7 +39,7 @@ def referenced_builds(index, storage, repository='0x1abin/crossmux'):
     builds = set()
     for target_id, entry in targets.items():
         variants = entry.get('variants') if isinstance(entry, dict) else None
-        if not isinstance(entry, dict) or entry.get('targetId') != target_id or not isinstance(
+        if not target_id or not isinstance(entry, dict) or entry.get('targetId') != target_id or not isinstance(
             variants, dict
         ) or set(variants) != set(FLAVOR_TOKENS):
             raise ValueError(f'invalid previous {target_id} variant set')

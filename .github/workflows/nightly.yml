@@ -134,6 +134,10 @@ jobs:
     name: ${{ matrix.targetId }} (${{ needs.prepare.outputs.channel }})
     runs-on: ${{ fromJSON(needs.select_runner.outputs['runs-on']) }}
     steps:
+      - name: Isolate PlatformIO toolchains
+        run: echo "PLATFORMIO_CORE_DIR=$RUNNER_TEMP/.platformio-$GITHUB_RUN_ID-$GITHUB_JOB-${{ matrix.targetId }}" >> "$GITHUB_ENV"
+      - name: Use runner temporary directory
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -145,7 +149,10 @@ jobs:
           version: latest
           enable-cache: false
       - name: Install PlatformIO Core
-        run: uv pip install --system -U pioarduino==6.1.19
+        run: uv pip install --system -U pioarduino==6.2.0
+
+      - name: Prepare platform tools
+        run: python scripts/patch_pioarduino_cache.py --prepare-platform
       - name: Set seven-character build revision
         run: |
           echo "CROSSPOINT_RC_HASH=${GITHUB_SHA::7}" >> "$GITHUB_ENV"

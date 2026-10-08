@@ -74,6 +74,18 @@ pio run -e waveshare_epaper_397
 
 X4 Pro 稳定版应用固件位于 `.pio/build/x4pro-gh_release/firmware.bin`。微雪设备使用 `waveshare_epaper_397`。
 
+Read Pico（小纸 Pico）构建命令：
+
+FreeInk SDK PR #35 合入前，请先按[设备指南](./docs/engineering/read-pico.md#current-implementation--2026-09-30)临时切换 SDK，再构建。
+
+```bash
+pio run -e readpico
+```
+
+Windows 上运行 `pio` 前请先设置 `PYTHONIOENCODING=utf-8`，否则 PlatformIO 打印阿拉伯语 i18n 语言行时可能编码崩溃、构建静默卡住。
+
+应用固件位于 `.pio/build/readpico/firmware.bin`。首次安装为**整表烧录**——`bootloader@0x0`、`partitions@0x8000`、`boot_app0@0xe000`、`app@0x10000`——且须先有一份已核验的整片（16 MiB）备份，因为本仓库分区表与板厂出厂 `partitions_16M.csv` 在 `0xE000` 冲突且 app 槽大小不同。本轮该目标**仅提供构建**：未加入 Nightly/OTA/Web 发布映射，也尚无实机验收记录。引脚表、冻结的构建参数与待办验收清单见 [Read Pico 设备指南](./docs/engineering/read-pico.md)。
+
 ### 桌面模拟器
 
 安装 SDL2 与 curl（Linux 还需 OpenSSL 开发头文件），将 EPUB 放入 `fs_/books/`，然后运行：
@@ -83,6 +95,8 @@ pio run -e simulator -t run_simulator
 ```
 
 [CrossMux 模拟器 fork](https://github.com/0x1abin/crosspoint-simulator) 的版本固定在 `platformio.ini` 中。它用于预览 UI 和输入流程，不能验证显示波形、耗电或实际硬件时序。
+
+Read Pico 窗口自动适应桌面大小，BMP 截图保留原始分辨率。鼠标支持点按、长按和滑动；上箭头/Escape/下箭头对应三个电容键，睡眠后仅电源键 `P` 可以唤醒。原生十六级灰阶图片和 SD 界面字体使用 Read Pico 的处理路径。验证详情见[设备指南](./docs/engineering/read-pico.md#desktop-simulator)。
 
 ### 检查与调试
 

@@ -12,15 +12,21 @@
 #include "I18n.h"
 #include "InxItemLayout.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 #include "components/icons/inx_apps.h"
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+#include "components/icons/uiChromeIcons.h"
+#else
 #include "components/icons/inx_tabs.h"
+#endif
 #include "fontIds.h"
+#include "util/TimeUtils.h"
 
 namespace {
-constexpr int kIconSize = 38;
+constexpr int kIconSize = UiHighDpiProfile::enabled ? UiHighDpiProfile::navigationIconSize : 38;
 constexpr int kUnderlineHeight = 5;
-constexpr int kRowHeight = 66;
-constexpr int kRowPadding = 20;
+constexpr int kRowHeight = InxMenuGeometry::rowHeight;
+constexpr int kRowPadding = UiHighDpiProfile::enabled ? UiHighDpiProfile::contentPadding : 20;
 constexpr int kListIconSize = 24;
 constexpr int kMenuIconSize = 32;
 constexpr int kIconGap = 10;
@@ -50,15 +56,35 @@ const char* hintLabel(const char* label) {
 const uint8_t* iconForTab(const MainTab tab) {
   switch (tab) {
     case MainTab::Recent:
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+      return icon_tab_recent_56.bits;
+#else
       return InxRecentTabIcon;
+#endif
     case MainTab::Library:
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+      return icon_tab_library_56.bits;
+#else
       return InxLibraryTabIcon;
+#endif
     case MainTab::Settings:
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+      return icon_tab_settings_56.bits;
+#else
       return InxSettingsTabIcon;
+#endif
     case MainTab::Statistics:
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+      return icon_tab_statistics_56.bits;
+#else
       return InxStatisticsTabIcon;
+#endif
     case MainTab::Apps:
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+      return icon_tab_apps_56.bits;
+#else
       return InxAppsTabIcon;
+#endif
     case MainTab::None:
       return nullptr;
   }
@@ -80,7 +106,9 @@ void drawDottedSeparator(const GfxRenderer& renderer, const int x, const int y, 
 }
 }  // namespace
 
-void InxTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, const char* title, const char* subtitle) const {
+void InxTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, const char* title, const char* subtitle,
+                          bool) const {
+  constexpr int titleFont = UiHighDpiProfile::enabled ? UI_12_FONT_ID : NOTOSERIF_12_FONT_ID;
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
 
   const bool showBatteryPercentage =
@@ -88,7 +116,7 @@ void InxTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, const ch
   const int batteryX = rect.x + rect.width - 12 - InxMetrics::values.batteryWidth;
   drawBatteryRight(renderer,
                    Rect{batteryX, rect.y + 5, InxMetrics::values.batteryWidth, InxMetrics::values.batteryHeight},
-                   showBatteryPercentage);
+                   showBatteryPercentage, UiHighDpiProfile::enabled ? SMALL_FONT_ID : STATUS_NUMERIC_FONT_ID);
 
   const int titleTop = rect.y + InxMetrics::values.batteryBarHeight;
   const int rightPadding = InxMetrics::values.contentSidePadding;
@@ -99,10 +127,9 @@ void InxTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, const ch
     titleRight -= subtitleWidth + kIconGap;
     if (subtitleWidth > 0) {
       const int subtitleHeight = renderer.getLineHeight(SMALL_FONT_ID);
-      const Rect subtitleRect{
-          titleRight + kIconGap,
-          titleTop + std::max(0, (renderer.getLineHeight(NOTOSERIF_12_FONT_ID) - subtitleHeight) / 2), subtitleWidth,
-          subtitleHeight};
+      const Rect subtitleRect{titleRight + kIconGap,
+                              titleTop + std::max(0, (renderer.getLineHeight(titleFont) - subtitleHeight) / 2),
+                              subtitleWidth, subtitleHeight};
       const GfxRenderer::ClipScope clip(renderer, subtitleRect.x, subtitleRect.y, subtitleRect.width,
                                         subtitleRect.height);
       renderer.drawText(SMALL_FONT_ID, subtitleRect.x, subtitleRect.y, subtitle);
@@ -111,8 +138,8 @@ void InxTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, const ch
 
   if (title && *title && titleRight > rect.x + kRowPadding) {
     const GfxRenderer::ClipScope clip(renderer, rect.x + kRowPadding, titleTop, titleRight - rect.x - kRowPadding,
-                                      renderer.getLineHeight(NOTOSERIF_12_FONT_ID));
-    renderer.drawText(NOTOSERIF_12_FONT_ID, rect.x + kRowPadding, titleTop, title, true, EpdFontFamily::BOLD);
+                                      renderer.getLineHeight(titleFont));
+    renderer.drawText(titleFont, rect.x + kRowPadding, titleTop, title, true, EpdFontFamily::BOLD);
   }
   renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
 }
@@ -215,10 +242,12 @@ void InxTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topB
   }
 }
 
-int InxTheme::getListRowStep(const bool) const { return kRowHeight; }
+int InxTheme::getListRowStep(const bool hasSubtitle) const {
+  return UiHighDpiProfile::enabled && hasSubtitle ? UiHighDpiProfile::subtitleRowHeight : kRowHeight;
+}
 
-int InxTheme::getListPageItems(const int contentHeight, const bool) const {
-  return std::max(1, contentHeight / kRowHeight);
+int InxTheme::getListPageItems(const int contentHeight, const bool hasSubtitle) const {
+  return std::max(1, contentHeight / getListRowStep(hasSubtitle));
 }
 
 void InxTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int itemCount, const int selectedIndex,
@@ -230,6 +259,7 @@ void InxTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int 
                         const std::function<bool(int index)>& rowHeading) const {
   if (itemCount <= 0 || rect.height <= 0) return;
 
+  const int rowHeight = getListRowStep(rowSubtitle != nullptr);
   const int pageItems = getListPageItems(rect.height, rowSubtitle != nullptr);
   const int pageStart = selectedIndex >= 0 ? selectedIndex / pageItems * pageItems : 0;
   const int pageEnd = std::min(itemCount, pageStart + pageItems);
@@ -240,14 +270,24 @@ void InxTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int 
 
   for (int index = pageStart; index < pageEnd; ++index) {
     const int slot = index - pageStart;
-    const int rowY = rect.y + slot * kRowHeight;
+    const int rowY = rect.y + slot * rowHeight;
     const bool selected = selectionVisible && index == selectedIndex;
-    if (selected) renderer.fillRect(rect.x, rowY, rect.width, kRowHeight, true);
+    if (selected) renderer.fillRect(rect.x, rowY, rect.width, rowHeight, true);
 
     int textX = rect.x + kRowPadding;
     if (rowIcon) {
-      if (const uint8_t* bitmap = iconForName(rowIcon(index), iconSize)) {
-        const int iconY = rowY + (kRowHeight - iconSize) / 2;
+      if (UiHighDpiProfile::enabled) {
+        const auto bitmap = listIconFor(rowIcon(index), UiHighDpiProfile::controlIconSize);
+        if (bitmap) {
+          freeink::ui::GfxRendererTarget target(renderer, true);
+          target.bitmap(
+              freeink::ui::Rect{static_cast<int16_t>(textX), static_cast<int16_t>(rowY + (rowHeight - 48) / 2), 48, 48},
+              bitmap, freeink::ui::BitmapMode::Center,
+              freeink::ui::Paint::solid(selected ? freeink::ui::Color::White : freeink::ui::Color::Black));
+          textX += 48 + kIconGap;
+        }
+      } else if (const uint8_t* bitmap = iconForName(rowIcon(index), iconSize)) {
+        const int iconY = rowY + (rowHeight - iconSize) / 2;
         if (selected)
           renderer.drawIconInverted(bitmap, textX, iconY, iconSize);
         else
@@ -267,22 +307,25 @@ void InxTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int 
     const auto titleStyle = heading ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
     const int textWidth = std::max(1, contentRight - kRowPadding - textX - valueWidth);
     const std::string title = renderer.truncatedText(titleFont, rowTitle(index).c_str(), textWidth, titleStyle);
-    const int titleY = rowY + (rowSubtitle ? 12 : (kRowHeight - renderer.getLineHeight(titleFont)) / 2);
+    const int titleY = rowY + (rowSubtitle ? (UiHighDpiProfile::enabled ? 20 : 12)
+                                           : (rowHeight - renderer.getLineHeight(titleFont)) / 2);
     renderer.drawText(titleFont, textX, titleY, title.c_str(), !selected, titleStyle);
 
     if (rowSubtitle) {
       const std::string subtitle = renderer.truncatedText(SMALL_FONT_ID, rowSubtitle(index).c_str(), textWidth);
-      renderer.drawText(SMALL_FONT_ID, textX, rowY + 36, subtitle.c_str(), !selected);
+      renderer.drawText(SMALL_FONT_ID, textX,
+                        rowY + (UiHighDpiProfile::enabled ? 20 + renderer.getLineHeight(titleFont) + 6 : 36),
+                        subtitle.c_str(), !selected);
     }
     if (!value.empty()) {
       const int valueX = contentRight - kRowPadding - renderer.getTextWidth(UI_10_FONT_ID, value.c_str());
-      const int valueY = rowY + (kRowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+      const int valueY = rowY + (rowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
       renderer.drawText(UI_10_FONT_ID, valueX, valueY, value.c_str(), !selected);
     }
     if (rowDimmed && rowDimmed(index) && !selected) {
-      drawDitherMask(renderer, textX, rowY, std::max(0, contentRight - textX), kRowHeight - 1);
+      drawDitherMask(renderer, textX, rowY, std::max(0, contentRight - textX), rowHeight - 1);
     }
-    drawDottedSeparator(renderer, rect.x, rowY + kRowHeight - 1, rect.width);
+    drawDottedSeparator(renderer, rect.x, rowY + rowHeight - 1, rect.width);
   }
 
   drawSideScrollBar(renderer, rect, itemCount, pageStart, pageItems);
@@ -347,15 +390,15 @@ void InxTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
 
   const int optionCount = static_cast<int>(options.size());
   const int selected = std::clamp(selectedIndex, 0, optionCount - 1);
-  const int visibleRows = InxOptionGeometry::visibleRows(optionCount);
+  const auto layout =
+      InxOptionGeometry::layout(UITheme::getInstance().getScreenSafeArea(renderer, true, false), optionCount, selected);
+  const int visibleRows = layout.rows;
   const int maxStart = optionCount - visibleRows;
-  const int start = InxOptionGeometry::start(selected, optionCount);
-  const int screenWidth = renderer.getScreenWidth();
-  const int screenHeight = renderer.getScreenHeight();
-  const int panelWidth = std::max(1, std::min(screenWidth - 24, 360));
-  const int panelHeight = InxOptionGeometry::headerHeight + visibleRows * InxOptionGeometry::rowHeight;
-  const int panelX = (screenWidth - panelWidth) / 2;
-  const int panelY = std::max(0, (screenHeight - panelHeight) / 2);
+  const int start = layout.first;
+  const int panelWidth = layout.panel.width;
+  const int panelHeight = layout.panel.height;
+  const int panelX = layout.panel.x;
+  const int panelY = layout.panel.y;
   const bool selectionVisible = UITheme::getInstance().showSelectionCursor();
 
   renderer.fillRect(panelX, panelY, panelWidth, panelHeight, false);
@@ -369,7 +412,10 @@ void InxTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
     const int optionIndex = start + slot;
     const int rowY = panelY + InxOptionGeometry::headerHeight + slot * InxOptionGeometry::rowHeight;
     const bool isSelected = selectionVisible && optionIndex == selected;
-    if (isSelected) renderer.fillRect(panelX + 2, rowY, panelWidth - 4, InxOptionGeometry::rowHeight, true);
+    if (isSelected) {
+      const Rect row = layout.optionRect(slot);
+      renderer.fillRect(row.x, row.y, row.width, row.height, true);
+    }
     const std::string option = renderer.truncatedText(UI_10_FONT_ID, options[optionIndex].c_str(), panelWidth - 44);
     const int textY = rowY + (InxOptionGeometry::rowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
     renderer.drawText(UI_10_FONT_ID, panelX + 18, textY, option.c_str(), !isSelected,
@@ -394,19 +440,49 @@ void InxTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
 
 void InxTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, const MainTab selected) const {
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
-  const int tabCount = static_cast<int>(MainTabs::values.size());
-  const int iconY = rect.y + std::max(0, (rect.height - kIconSize) / 2);
+  constexpr int bottomIconInset = UiHighDpiProfile::enabled ? 18 : 6;
+  const bool tabsAtBottom = SETTINGS.inxTabPosition == CrossPointSettings::INX_TAB_BOTTOM;
+  const int iconY =
+      rect.y + std::max(0, tabsAtBottom ? rect.height - kIconSize - bottomIconInset : (rect.height - kIconSize) / 2);
+  const int indicatorY = tabsAtBottom ? rect.y : rect.y + rect.height - kUnderlineHeight;
 
   for (size_t i = 0; i < MainTabs::values.size(); ++i) {
     const MainTab tab = MainTabs::values[i];
-    const int left = rect.x + rect.width * static_cast<int>(i) / tabCount;
-    const int right = rect.x + rect.width * (static_cast<int>(i) + 1) / tabCount;
+    const auto bounds = MainTabs::tabBounds(static_cast<int>(i), rect.width);
+    const int left = rect.x + bounds.left;
+    const int right = rect.x + bounds.right;
     const int iconX = left + (right - left - kIconSize) / 2;
     if (const uint8_t* icon = iconForTab(tab)) drawInxIcon(renderer, icon, iconX, iconY);
     if (tab == selected) {
-      renderer.fillRect(iconX, rect.y + rect.height - kUnderlineHeight, kIconSize, kUnderlineHeight);
+      renderer.fillRect(iconX, indicatorY, kIconSize, kUnderlineHeight);
     }
   }
 
-  renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
+  if (!tabsAtBottom) {
+    renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
+  }
+}
+
+void InxTheme::drawMainTabStatusBar(const GfxRenderer& renderer, const Rect rect) const {
+  if (rect.width <= 0 || rect.height <= 0) return;
+  constexpr int numericFontId = UiHighDpiProfile::enabled ? SMALL_FONT_ID : STATUS_NUMERIC_FONT_ID;
+  constexpr int edgeInset = UiHighDpiProfile::enabled ? UiHighDpiProfile::contentPadding : 12;
+  constexpr int batteryTextOffset = 6;  // drawBatteryRight offsets the icon below the text origin.
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const bool tabsAtBottom = SETTINGS.inxTabPosition == CrossPointSettings::INX_TAB_BOTTOM;
+  // The battery cap and numeric glyphs include the positioning edge pixel.
+  const int right = std::min(rect.x + rect.width - 1, renderer.getScreenWidth() - edgeInset);
+  const int textY = UiHighDpiProfile::enabled ? rect.y + (rect.height - renderer.getLineHeight(numericFontId)) / 2
+                    : tabsAtBottom            ? std::max(rect.y, edgeInset) - batteryTextOffset
+                                   : std::min(rect.y + rect.height - 1, renderer.getScreenHeight() - edgeInset) -
+                                         metrics.batteryHeight - batteryTextOffset;
+  const GfxRenderer::ClipScope clip(renderer, rect.x, rect.y, rect.width, rect.height);
+  if (tabsAtBottom) {
+    char time[9] = "--:--";
+    TimeUtils::formatCurrentTime(time, sizeof(time), SETTINGS.clockFormat == 1);
+    renderer.drawText(numericFontId, std::max(rect.x, edgeInset), textY, time);
+  }
+  drawBatteryRight(renderer, Rect{right - metrics.batteryWidth, textY, metrics.batteryWidth, metrics.batteryHeight},
+                   SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS,
+                   numericFontId);
 }

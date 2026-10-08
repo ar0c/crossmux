@@ -2,7 +2,6 @@
 #include <Epub.h>
 #include <I18n.h>
 
-#include <array>
 #include <string>
 #include <vector>
 
@@ -28,7 +27,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
     GO_HOME,
     SYNC,
     DELETE_CACHE,
-    DICTIONARY
+    DICTIONARY,
+    IMAGE_SCALING  // Legacy action ID; image scaling remains in Settings.
   };
 
   struct MenuItem {
@@ -40,14 +40,10 @@ class EpubReaderMenuActivity final : public UiListActivity {
 
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
-                                  const uint8_t currentOrientation, const uint8_t initialPageTurnRate,
-                                  const bool hasFootnotes, bool hasBookmarks);
+                                  const uint8_t currentOrientation, const bool hasFootnotes, bool hasBookmarks);
 
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
-#if FREEINK_DEVICE_EEGO_A4
-  bool skipLoopDelay() override { return true; }  // Keep CPU at full speed for responsive touch
-#endif
 
  private:
   // Row storage: menuItems is at most MAX_MENU_ITEMS, so a
@@ -74,19 +70,14 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // Fixed menu layout
   std::vector<MenuItem> menuItems;
 
-  OptionPopup optionPopup;
+  OptionPopup optionPopup{true};
   std::string title = "Reader Menu";
   uint8_t pendingOrientation = 0;
   uint8_t selectedPageTurnOption = 0;
-  uint8_t customPageTurnRate = 15;
   const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED,
                                                 StrId::STR_LANDSCAPE_CCW};
-  const std::array<const char*, 5> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "3", "6", "12",
-                                                     I18N.get(StrId::STR_CUSTOM)};
+  const std::vector<const char*> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "1", "3", "6", "12"};
   int currentPage = 0;
   int totalPages = 0;
   int bookProgressPercent = 0;
-#if FREEINK_DEVICE_EEGO_A4
-  bool firstRender = true;
-#endif
 };
