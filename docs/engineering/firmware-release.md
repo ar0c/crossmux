@@ -125,8 +125,9 @@ five minutes and mirrors changed builds into `/home/ar0c/crossmux-ota-dist`. Aft
 `POST /hooks/release` to synchronize immediately. Stable notifications run only
 after the versioned Stable release succeeds. The handler rejects stale or invalid
 HMAC-SHA256 signatures and checks the requested build ID; both entry points use
-one file lock. The scheduled job remains the fallback. Nightly accepts the two
-S3 targets and Stable accepts X4 Pro. Each mirror checks every manifest against
+one file lock. The scheduled job remains the fallback. Nightly accepts the
+maintained Waveshare-only index and historical two-board indexes. Stable accepts
+historical X4 Pro content; its scheduled job remains suspended. Each mirror checks every manifest against
 the rolling index and checks every
 binary's length and SHA-256. It writes an immutable build directory before
 atomically replacing the rolling index. The serving Pod mounts that directory
@@ -135,11 +136,21 @@ read-only and exposes only the release download paths. The Ingress for
 release has not been published, so the Stable mirror CronJob is suspended until
 that release exists.
 
-For a Waveshare-only Nightly release, the mirror accepts X4 Pro pointers to an
-older immutable build only when that target entry exactly matches the previous
-published index. It verifies assets under each pointer's own build directory
-before replacing the rolling index. A changed preserved target or missing
-immutable asset keeps the old public index in place.
+Historical partial Nightly indexes can retain X4 Pro pointers to an older
+immutable build when that target entry exactly matches the previous published
+index. The mirror stores exact verified source indexes in a private
+`.verified-indexes` directory, seeding the currently mirrored index on upgrade.
+This permits rollback from a Waveshare-only index to a previously verified
+two-board index, including mixed-build pointers. Rollback still verifies every
+manifest, binary hash and existing immutable file. Changed preserved targets,
+unknown target sets or missing immutable assets keep the old public index in place.
+
+The upstream integration candidate does not include the original development
+worktree's new 16-item WeRead batch handoff. Both use the unchanged WRS1/v2
+service-journal byte format and immutable per-range job IDs. Existing backend
+single-job endpoints remain supported; this is source-level compatibility
+evidence, not physical handoff, sleep or cloud-credit acceptance. An OTA update
+from that private development firmware returns to the earlier single-job flow.
 
 The public OTA contract is
 `https://ooo.ar0c.com/releases/download/<channel>/release-index.json` with

@@ -23,11 +23,30 @@ TARGETS = {
                 'waveshare_epaper_397': ('waveshare_epaper_397', 'waveshare-epaper-397')},
     'stable': {'xteink_x4_pro': ('x4pro', 'x4pro')},
 }
+# Retired targets remain readable for historical releases and rollback only.
+ALLOWED_TARGET_SETS = {
+    'nightly': ({'waveshare_epaper_397'}, set(TARGETS['nightly'])),
+    'stable': (set(TARGETS['stable']),),
+}
 BUILD_TAG = re.compile(r'^(nightly|stable)-build-[0-9a-f]{40}-[0-9]+-[0-9]+$')
 FILENAME = re.compile(r'^[a-z0-9][a-z0-9._-]{0,127}$')
 SHA256 = re.compile(r'^[0-9a-f]{64}$')
 MAX_JSON = 65536
 MAX_BINARY = 16 * 1024 * 1024
+
+
+def index_record(root, index, remember=False):
+    """Keep exact verified source indexes outside the public download paths."""
+    data = (json.dumps(index, sort_keys=True, ensure_ascii=False) + '\n').encode()
+    path = root / '.verified-indexes' / (hashlib.sha256(data).hexdigest() + '.json')
+    if remember:
+        path.parent.mkdir(exist_ok=True)
+        if not path.exists():
+            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as pending:
+                pending.write(data)
+                pending_name = pending.name
+            os.replace(pending_name, path)
+    return path.is_file() and path.read_bytes() == data
 
 
 def fetch(url, limit):
@@ -57,7 +76,7 @@ def mirror_channel(root, channel):
     if index.get('schemaVersion') != 1 or index.get('channel') != channel:
         raise ValueError('invalid rolling index')
     targets = index.get('targets')
-    if not isinstance(targets, dict) or set(targets) != set(TARGETS[channel]):
+    if not isinstance(targets, dict) or set(targets) not in ALLOWED_TARGET_SETS[channel]:
         raise ValueError('unexpected target set')
     build_id = index.get('buildId')
     if not isinstance(build_id, str) or not BUILD_TAG.fullmatch(build_id) or not build_id.startswith(channel + '-'):
@@ -79,9 +98,15 @@ def mirror_channel(root, channel):
             for entry in published.get('targets', {}).values()
             for pointer in entry.get('variants', {}).values()
         }
+        # Seed rollback history from an existing verified mirror on first upgrade.
+        # Every rollback still verifies all manifests, hashes and immutable bytes.
+        if all((root / tag).is_dir() for tag in referenced_tags):
+            index_record(root, published, remember=True)
         if published == index and all((root / tag).is_dir() for tag in referenced_tags):
             return build_id, 0
 
+    historical_index = index_record(root, index)
+    source_index = json.loads(json.dumps(index))
     with tempfile.TemporaryDirectory(prefix='.staging-', dir=root) as temp:
         staging = Path(temp)
         mirrored = {}
@@ -100,7 +125,8 @@ def mirror_channel(root, channel):
             if len(tags) != 1:
                 raise ValueError('target variants point to different builds')
             target_tag = tags.pop()
-            if target_tag != build_id and (channel != 'nightly' or previous_targets.get(target_id) != entry):
+            if target_tag != build_id and (channel != 'nightly' or
+                                          (previous_targets.get(target_id) != entry and not historical_index)):
                 raise ValueError('preserved target differs from the previous index')
             build_staging = staged_builds.setdefault(target_tag, staging / target_tag)
             build_staging.mkdir(exist_ok=True)
@@ -150,6 +176,7 @@ def mirror_channel(root, channel):
             else:
                 os.replace(staged_dir, build_dir)
 
+    index_record(root, source_index, remember=True)
     channel_dir = root / channel
     channel_dir.mkdir(exist_ok=True)
     index_bytes = (json.dumps(index, ensure_ascii=False, indent=2) + '\n').encode()
