@@ -99,6 +99,52 @@ int main() {
   assert(c.exchange(v.identity(), j) == ServiceClient::Result::Failed);
   reply.replace(reply.find("\"confirmed_seconds\":0"), 21, "\"confirmed_seconds\":600");
   assert(c.exchange(v.identity(), j) == ServiceClient::Result::Confirmed && j.confirmed() == 600);
+  reply = R"({"account":"123","device_id":"abcdef012345678901234567","time_batch_limit":16})";
+  assert(c.connect("123") && c.supportsBatch());
+  ServiceBatch batch;
+  batch.count = 2;
+  batch.items[0] = {20716, 0, 600, 0, 0, ServiceBatch::Action::Submit};
+  batch.items[1] = {20717, 0, 60, 20, 0, ServiceBatch::Action::Query};
+  const std::string first =
+      R"({"id":"s-source-20716-0-600","book_id":"26435427","source_id":"source","source_date":"2026-09-20","start_seconds":0,"end_seconds":600,"state":"queued","confirmed_seconds":0})";
+  const std::string second =
+      R"({"id":"s-source-20717-0-60","book_id":"26435427","source_id":"source","source_date":"2026-09-21","start_seconds":0,"end_seconds":60,"state":"confirmed","confirmed_seconds":60})";
+  const std::string prefix =
+      R"({"schema":1,"account":"123","device_id":"abcdef012345678901234567","durably_accepted":true,"jobs":[)";
+  const std::string batchReply = prefix + first + "," + second + "]}";
+  responseCode = 202;
+  reply = batchReply;
+  assert(c.exchangeBatch(v.identity(), batch) == ServiceClient::Result::Accepted);
+  assert(batch.items[0].receivedCredit == 0 && batch.items[1].receivedCredit == 60);
+  assert(batch.items[1].receipt == ServiceBatch::Receipt::Confirmed && lastMethod == "POST");
+  assert(lastBody.find("\"action\":\"submit\"") != std::string::npos &&
+         lastBody.find("\"action\":\"query\"") != std::string::npos);
+  const auto immutableBody = lastBody;
+  transportFailure = true;
+  assert(c.exchangeBatch(v.identity(), batch) == ServiceClient::Result::Failed && lastBody == immutableBody);
+  transportFailure = false;
+  for (const auto& invalid :
+       {prefix + second + "," + first + "]}", prefix + first + "]}", prefix + first + "," + first + "]}",
+        batchReply.substr(0, batchReply.size() - 1), batchReply + "{}"}) {
+    reply = invalid;
+    assert(c.exchangeBatch(v.identity(), batch) == ServiceClient::Result::Failed);
+  }
+  for (const auto& replacement :
+       {std::pair{"\"account\":\"123\"", "\"account\":\"999\""},
+        std::pair{"\"durably_accepted\":true", "\"durably_accepted\":false"}, std::pair{"\"schema\":1", "\"schema\":2"},
+        std::pair{"\"confirmed_seconds\":60", "\"confirmed_seconds\":19"}}) {
+    reply = batchReply;
+    reply.replace(reply.find(replacement.first), std::strlen(replacement.first), replacement.second);
+    assert(c.exchangeBatch(v.identity(), batch) == ServiceClient::Result::Failed);
+  }
+  responseCode = 429;
+  reply = R"({"error":"queue_capacity_reached"})";
+  assert(c.exchangeBatch(v.identity(), batch) == ServiceClient::Result::Full);
+  responseCode = 404;
+  assert(c.exchangeBatch(v.identity(), batch) == ServiceClient::Result::Failed);
+  responseCode = 200;
+  reply = batchReply;
+  assert(c.exchangeBatch(v.identity(), batch) == ServiceClient::Result::Accepted && lastBody == immutableBody);
   std::cout << "PASS production service client: TLS entrypoint, account check, stable POST, GET-only recovery, strict "
                "receipts\n";
 }

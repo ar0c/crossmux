@@ -317,8 +317,8 @@ static bool loadSleepFrameBuffer() {
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
 #ifdef ENABLE_CHINESE_VERSION
-  // Drain one in-flight request before sleep tears down Wi-Fi and storage.
-  if (!WeReadTimeSync::prepareToLeaveReading()) {
+  // Finish durable backend handoff before sleep tears down Wi-Fi and storage.
+  if (!WeReadTimeSync::prepareForSleep()) {
     timeSyncSleepPending = true;
     return;
   }

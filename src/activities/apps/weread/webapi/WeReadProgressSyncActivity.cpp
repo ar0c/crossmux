@@ -355,7 +355,17 @@ void WeReadProgressSyncActivity::startTimeUpload() {
         sourceId = owned->source;
       }
       const WeReadTimeSync::Source source{bookId_, sourceId, days, count, totalMs, deviceOwnedTime_};
-      started = WeReadTimeSync::start(source, session->vid);
+      // Font arenas are rebuildable; reclaim them before the worker's internal
+      // RAM guard. Hold the render lock through start so a redraw cannot refill
+      // the caches between reclamation and the checked task allocation.
+      {
+        RenderLock renderBarrier(*this);
+        const unsigned freeBefore = ESP.getFreeHeap(), largestBefore = ESP.getMaxAllocHeap();
+        if (auto* fontCache = renderer.getFontCacheManager()) fontCache->releaseSdFontCaches();
+        LOG_INF("WRTime", "Startup font-cache reclaim free=%u->%u largest=%u->%u", freeBefore, ESP.getFreeHeap(),
+                largestBefore, ESP.getMaxAllocHeap());
+        started = WeReadTimeSync::start(source, session->vid);
+      }
     }
     using Failure = WeReadTimeSync::StartFailure;
     switch (WeReadTimeSync::lastStartFailure()) {
@@ -433,6 +443,9 @@ void WeReadProgressSyncActivity::advanceTimeUpload() {
 }
 
 const char* WeReadProgressSyncActivity::timeMessage() const {
+  // A startup rejection has no worker receipt; keep its concrete reason visible
+  // instead of replacing it with the generic service-mode "handoff paused".
+  if (timeQueueState_ == WeReadTime::TimeQueue::State::Paused && timeDiagnosticText_[0]) return timeDiagnosticText_;
   if (serviceMode_) {
     using Q = WeReadTime::TimeQueue::State;
     if (serviceQueueFull_) return tr(STR_WEREAD_SERVICE_FULL);

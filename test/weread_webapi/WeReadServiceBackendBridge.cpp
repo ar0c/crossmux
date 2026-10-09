@@ -54,12 +54,35 @@ Result requestVerified(const char* url, const RequestOptions& options, const Dat
 }  // namespace WeReadHttpClient
 
 int main(int argc, char** argv) {
-  assert(argc == 3);
+  assert(argc == 3 || argc == 4);
   const std::string cfg = std::string("123\n") + argv[1] + "\n" + argv[2] + "\n";
   fakeStorage::files["/WeReadSync/service.conf"] = {cfg.begin(), cfg.end()};
   using namespace WeReadTime;
   ServiceClient client;
   assert(client.connect("123"));
+  if (argc == 4) {
+    assert(client.supportsBatch());
+    Ledger source;
+    assert(source.bind("123", "26435427", "local-contract-source", 20716));
+    ServiceBatch batch;
+    for (uint32_t i = 0; i < 5; ++i) {
+      batch.items[i].day = 20716 + i;
+      batch.items[i].end = 120 + i;
+      batch.items[i].action = ServiceBatch::Action::Submit;
+    }
+    batch.count = 5;
+    assert(client.exchangeBatch(source.identity(), batch) == ServiceClient::Result::Failed);
+    assert(client.exchangeBatch(source.identity(), batch) == ServiceClient::Result::Accepted);
+    for (auto& item : batch.items) item.action = ServiceBatch::Action::Query;
+    assert(client.exchangeBatch(source.identity(), batch) == ServiceClient::Result::Failed);
+    assert(client.exchangeBatch(source.identity(), batch) == ServiceClient::Result::Accepted);
+    assert(client.exchangeBatch(source.identity(), batch) == ServiceClient::Result::Failed);
+    assert(client.exchangeBatch(source.identity(), batch) == ServiceClient::Result::Failed);
+    for (size_t i = 0; i < batch.count; ++i) assert(batch.items[i].receivedCredit == 0);
+    std::cerr << "PASS real batch client / backend: five durable jobs, lost receipt+restart, immutable retry, "
+                 "query-only recovery, invalid last receipt, missing receipt, revocation\n";
+    return 0;
+  }
   Ledger ledger;
   assert(ledger.bind("123", "26435427", "local-contract-source", 20716));
   SdByteLog log;

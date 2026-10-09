@@ -68,6 +68,14 @@ class ServiceJournal {
       }
     return false;
   }
+  bool select(uint64_t start, uint64_t end) {
+    for (size_t i = 0; i < kMaxPending; ++i)
+      if (tasks_[i].state != State::Empty && tasks_[i].start == start && tasks_[i].end == end) {
+        selected_ = i;
+        return true;
+      }
+    return false;
+  }
   bool selectAccepted(uint64_t from = 0) {
     size_t best = kMaxPending;
     for (size_t i = 0; i < kMaxPending; ++i)

@@ -317,6 +317,137 @@ int main() {
   s = finish();
   assert(s.auditFailed && fakeTransport::reports == 3);
   HalSystem::deviceId = originalId;
+  // The user returns to reading and immediately requests deep sleep while
+  // five dates are in-flight. Sleep must not set the worker's pause flag.
+  fakeStorage::reset();
+  fakeTransport::reset();
+  fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
+  fakeService::confirmed = fakeService::fail = fakeService::review = fakeService::full = false;
+  fakeService::posts = fakeService::gets = fakeService::batchRequests = 0;
+  fakeService::enteredBatch = false;
+  fakeService::blockBatch = true;
+  ReadingDayStats fiveDays[] = {{20716, 210000}, {20717, 1200000}, {20718, 315000}, {20719, 58000}, {20720, 6000}};
+  Sync::Source fiveSource{"b", ownedSourceId, fiveDays, 5, 1789000, true};
+  WiFi.connected = true;
+  assert(Sync::start(fiveSource, "a"));
+  {
+    std::unique_lock<std::mutex> lock(fakeService::mutex);
+    assert(fakeService::cv.wait_for(lock, std::chrono::seconds(3), [] { return fakeService::enteredBatch; }));
+  }
+  const auto sleepStarted = std::chrono::steady_clock::now();
+  assert(!Sync::prepareForSleep() && Sync::active() && Sync::ownsWifi());
+  assert(std::chrono::steady_clock::now() - sleepStarted < std::chrono::milliseconds(100));
+  {
+    std::lock_guard<std::mutex> lock(fakeService::mutex);
+    fakeService::blockBatch = false;
+    fakeService::cv.notify_all();
+  }
+  s = finish();
+  assert(Sync::prepareForSleep());
+  assert(s.queue == TimeQueue::State::Complete && s.totals.pending == 0 && s.totals.servicePending == 1789);
+  assert(fakeService::batchRequests == 1 && fakeService::posts == 5 && fakeTransport::reports == 0);
+  // Re-entering after wake queries receipts in one batch, without resubmission.
+  WiFi.connected = true;
+  fakeService::confirmed = true;
+  assert(Sync::start(fiveSource, "a"));
+  s = finish();
+  assert(s.totals.serviceConfirmed == 1789 && s.totals.servicePending == 0);
+  assert(fakeService::batchRequests == 2 && fakeService::posts == 5 && fakeService::gets == 5);
+  // A lost receipt plus newly accrued time recovers the exact old range before
+  // reserving the successor; two batches, no history reset or fabricated delta.
+  fakeStorage::reset();
+  fakeTransport::reset();
+  fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
+  fakeService::confirmed = false;
+  fakeService::fail = true;
+  fakeService::posts = fakeService::gets = fakeService::batchRequests = 0;
+  ownedDay.readingMs = 125000;
+  ownedSource.totalMs = ownedDay.readingMs;
+  WiFi.connected = true;
+  assert(Sync::start(ownedSource, "a"));
+  s = finish();
+  assert(s.totals.pending == 125 && fakeService::lastStart == 0 && fakeService::lastEnd == 125);
+  ownedDay.readingMs = 250000;
+  ownedSource.totalMs = ownedDay.readingMs;
+  fakeService::fail = false;
+  WiFi.connected = true;
+  assert(Sync::start(ownedSource, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Complete && s.totals.servicePending == 250 && s.totals.pending == 0);
+  assert(fakeService::batchRequests == 3 && fakeService::lastStart == 125 && fakeService::lastEnd == 250);
+  // The 24-slot local ledger can query old receipts before reserving a new
+  // range. Otherwise a full ledger would permanently prevent its own recovery.
+  fakeStorage::reset();
+  fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
+  fakeService::posts = fakeService::gets = fakeService::batchRequests = 0;
+  for (unsigned seconds = 1; seconds <= 24; ++seconds) {
+    ownedDay.readingMs = seconds * 1000;
+    ownedSource.totalMs = ownedDay.readingMs;
+    WiFi.connected = true;
+    assert(Sync::start(ownedSource, "a"));
+    s = finish();
+    assert(s.queue == TimeQueue::State::Complete && s.totals.servicePending == seconds);
+  }
+  ownedDay.readingMs = 25000;
+  ownedSource.totalMs = ownedDay.readingMs;
+  fakeService::confirmed = true;
+  fakeService::batchRequests = 0;
+  WiFi.connected = true;
+  assert(Sync::start(ownedSource, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Complete && s.totals.pending == 0);
+  assert(s.totals.serviceConfirmed == 5 && s.totals.servicePending == 20);
+  assert(fakeService::posts == 25 && fakeService::batchRequests == 2);
+  fakeService::confirmed = false;
+  // More than 16 dates use two bounded batches; crossing the boundary must not
+  // lose the current journal selection or turn new receipts into submissions.
+  fakeStorage::reset();
+  fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
+  fakeService::posts = fakeService::gets = fakeService::batchRequests = 0;
+  ReadingDayStats manyDays[20];
+  for (size_t i = 0; i < 20; ++i) manyDays[i] = {uint32_t(20716 + i), 1000};
+  Sync::Source manySource{"b", ownedSourceId, manyDays, 20, 20000, true};
+  WiFi.connected = true;
+  assert(Sync::start(manySource, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Complete && s.totals.pending == 0 && s.totals.servicePending == 20);
+  assert(fakeService::batchRequests == 2 && fakeService::posts == 20 && fakeService::gets == 0);
+  WiFi.connected = true;
+  assert(Sync::start(manySource, "a"));
+  s = finish();
+  assert(fakeService::batchRequests == 4 && fakeService::posts == 20 && fakeService::gets == 20);
+  // When the between-operation budget expires, retain the finished batch and
+  // the unsent remainder. A later explicit run resumes without replay.
+  fakeStorage::reset();
+  fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
+  fakeService::posts = fakeService::gets = fakeService::batchRequests = 0;
+  fakeService::batchElapsedMs = 60000;
+  WiFi.connected = true;
+  assert(Sync::start(manySource, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Paused && s.totals.pending == 4 && s.totals.servicePending == 16);
+  assert(fakeService::batchRequests == 1 && fakeService::posts == 16 && Sync::prepareForSleep());
+  fakeService::batchElapsedMs = 0;
+  WiFi.connected = true;
+  assert(Sync::start(manySource, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Complete && s.totals.pending == 0 && s.totals.servicePending == 20);
+  assert(fakeService::posts == 20 && fakeService::gets == 16 && fakeService::batchRequests == 3);
+  // Older backends stop before making any WRS1 reservation; never silently
+  // switch a service-owned history back to the direct cloud sender.
+  fakeStorage::reset();
+  fakeStorage::files["/WeReadSync/service.conf"] = {'x'};
+  fakeService::batchSupported = false;
+  fakeService::posts = fakeService::batchRequests = 0;
+  WiFi.connected = true;
+  assert(Sync::start(manySource, "a"));
+  s = finish();
+  assert(s.queue == TimeQueue::State::Paused && s.totals.pending == 20);
+  assert(fakeService::posts == 0 && fakeService::batchRequests == 0 && fakeTransport::reports == 0);
+  for (const auto& file : fakeStorage::files) assert(!file.first.ends_with(".wrs1"));
+  fakeService::batchSupported = true;
+  std::cout << "Batch handoff: five dates in one request, immediate sleep drain, immutable-tail recovery, "
+               "16-item boundary and capability negotiation PASS\n";
   std::cout << "Service handoff: lost receipt retry, no ACK credit, config removal fail closed, readback PASS\n";
   std::cout << "Background lifetime, immutable source, concurrent snapshots, duplicate start, OOM, cooperative pause, "
                "Wi-Fi release and no replay PASS\n";

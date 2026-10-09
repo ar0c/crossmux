@@ -76,6 +76,8 @@ void poll();  // Reap finished work; retain only bounded, credential-free status
 // Defer conflicting navigation/sleep until a requested pause has drained TLS
 // and journal I/O. Never kill a task while it owns an SD or transport lock.
 bool prepareToLeaveReading();
+// Finish service acceptance before sleep; direct uploads pause between operations.
+bool prepareForSleep();
 bool canContinueIn(const char* activityName, bool reader, bool home);
 bool ownsWifi();
 void releaseWifi();

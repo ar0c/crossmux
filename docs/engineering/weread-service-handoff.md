@@ -40,9 +40,10 @@ confirmed seconds and observation time. Every frame has a checksum and
 must follow a legal monotonic transition. A torn tail or changed binding blocks
 the run. Original reading records and legacy journals remain untouched.
 
-The device posts only Reserved records, with a deterministic task ID and the
-same immutable body on every retry. Accepted records use GET only. A missing
-server receipt is an error, not permission to submit again. Only exact matching
+The device submits only Reserved records, with a deterministic task ID and the
+same immutable identity/range on every retry. Accepted records are queried only;
+the legacy client uses GET, while the batch client uses explicit `query` items.
+A missing server receipt is an error, not permission to submit again. Only exact matching
 identity/range and monotonic confirmed seconds advance cached cloud credit.
 A source day allows one unacknowledged Reserved tail and up to 24 outstanding
 tasks. Once the tail is Accepted, a new measured range can be reserved without
@@ -51,13 +52,33 @@ waiting for cloud completion. A 50-minute `[0,3000)` handoff and a later 10-minu
 Partial/out-of-order receipts are summed per task, never inferred as a prefix.
 Reserved time stays in the local-unhanded UI count, not the server-pending count.
 
-Each explicit run recovers the Reserved tail first, reads at most four oldest
-accepted receipts per day, and submits new measured ranges. A valid uncertain
-receipt does not prevent new handoff; the server still freezes cloud execution.
+Each explicit run reads at most four oldest accepted receipts per day and
+recovers any Reserved tail before reserving a successor range. A full local
+task array flushes its readbacks before reserving new time, allowing confirmed
+tasks to free slots. The backend must
+advertise `time_batch_limit: 16` in `/api/v1/device` before any reservation is
+made. A batch POST to `/api/v1/jobs/batch` combines up to 16 immutable `submit`
+or `query` items in one durable transaction. A conflict, missing query or full
+queue rolls back all new jobs in that batch. Query never recreates a job. The
+schema-1 response repeats account/device and ordered range/state/credit fields;
+the client validates the whole response before appending any local receipts.
+Lost responses recover the same reserved IDs, including after backend restart.
+Recovering an older reserved tail may require a second batch for new time.
+A valid uncertain receipt does not prevent new handoff; the server still freezes cloud execution.
 A missing/malformed/regressed receipt stops the run. A full queue retains records
 locally. Cached credit shows its oldest outstanding observation time; the device
 does not continuously poll offline. The run uses a frozen source snapshot:
 reading done after it began requires another explicit handoff.
+
+Returning to reading leaves this asynchronous handoff running. A manual sleep
+request now drains the entire frozen service handoff before Wi-Fi/storage are
+released, rather than pausing the remaining dates. It waits for durable backend
+receipts and local journal flushes, not cloud credit. Direct cloud mode and
+explicit pause retain cooperative cancellation. A 60-second budget checked
+between operations bounds a run; an already-started HTTP request retains its
+15-second timeout and final SD accounting must also finish. On timeout or
+failure, preserved reservations recover on the next explicit sync. No latency
+guarantee is implied for physical TLS, SD or network operation.
 
 Migration is append-only: validate every existing v1 frame and retain it exactly,
 then append v2 frames with the same account/device/source/date/range IDs. No file
@@ -67,7 +88,8 @@ any service ownership support is still unsafe to downgrade to.
 
 The active-task array is fixed (24 entries, no per-task heap allocation), keeping
 the accounting scratch below 6 KiB and the journal below 2 KiB. The service
-worker allocates that journal fallibly in PSRAM, with a fallible internal-memory
+worker allocates one fixed journal plus 16-item/8192-byte request workspace
+(under 12 KiB total) fallibly in PSRAM, with a fallible internal-memory
 fallback, rather than leaving it live on its 8 KiB stack during HTTPS calls.
 Slots are reused only after full confirmation. The existing 8 KiB worker stack,
 fallible job allocation and internal-memory reserves remain. The journal is capped at
@@ -81,10 +103,25 @@ blindly replay device records.
 
 ## Verification and limitations
 
+The progress Activity releases rebuildable resident font caches under the render
+lock immediately before starting a time worker. Rendering cannot refill them
+between that release and startup's checked allocation. The existing 96 KiB
+internal free-memory and 32 KiB contiguous-block reserves remain unchanged; low
+memory still rejects the run before any network request or new reservation.
+Startup failures keep their concrete diagnostic visible in service mode instead
+of replacing it with a generic configuration/network retry message. Serial logs
+record only free/largest-block bytes before and after cache reclamation.
+
 Run `scripts/test_weread_service.ps1`: pure journal crash/torn-tail checks,
 production client parsing and authenticated HTTPS transport boundary tests
 (including the required receive-buffer preflight),
-and production worker tests with internal RAM and PSRAM paths. The tests make
+and production worker tests with internal RAM and PSRAM paths, including immediate
+manual sleep, 20 dates crossing the 16-item boundary, full local slots,
+between-operation timeout recovery and immutable-tail recovery.
+`TestProductionDeviceBatchContract` in the companion service runs the actual
+C++ parser against the Go handler and durable database through the pipe bridge:
+five dates, lost response plus database restart, identical retry, query-only
+recovery, malformed last receipt and revocation. The tests make
 no real network requests or reading-time increments. Build with `pio run -e
 x4pro` or `pio run -e waveshare_epaper_397` for the matching board; verify the
 version-first exported image and its SHA-256 before upload.

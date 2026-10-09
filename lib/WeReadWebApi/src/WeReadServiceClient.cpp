@@ -43,6 +43,7 @@ void persistServiceDiagnostic(const char*, Args...) {}
 struct Response {
   char account[32]{}, device[32]{}, id[128]{}, book[64]{}, source[64]{}, date[16]{}, state[20]{}, key[32]{};
   uint64_t start = 0, end = 0, confirmed = 0;
+  unsigned batchLimit = 0;
   unsigned fields = 0, depth = 0, roots = 0;
   int http = 0;
   bool bad = false, acceptedSeen = false, accepted = false;
@@ -93,6 +94,10 @@ struct Response {
     dest[n] = 0;
   }
   void number(const char* value, size_t n) {
+    if (!std::strcmp(key, "time_batch_limit")) {
+      if (n == 2 && value[0] == '1' && value[1] == '6') batchLimit = 16;
+      return;
+    }
     uint64_t* dest = nullptr;
     unsigned bit = 0;
     if (!std::strcmp(key, "start_seconds")) {
@@ -126,6 +131,138 @@ struct Response {
     *dest = v;
   }
 };
+
+bool batchIdentity(const Identity& source, const ServiceBatch::Item& item, char* job, size_t jobSize, char* date,
+                   size_t dateSize) {
+  const int n = std::snprintf(job, jobSize, "s-%s-%lu-%llu-%llu", source.source, static_cast<unsigned long>(item.day),
+                              static_cast<unsigned long long>(item.start), static_cast<unsigned long long>(item.end));
+  if (n <= 0 || size_t(n) >= jobSize) return false;
+  const std::time_t at = std::time_t(item.day) * 86400;
+  std::tm tm{};
+#ifdef _WIN32
+  if (gmtime_s(&tm, &at)) return false;
+#else
+  if (!gmtime_r(&at, &tm)) return false;
+#endif
+  return std::strftime(date, dateSize, "%Y-%m-%d", &tm) != 0;
+}
+
+struct BatchResponse {
+  const Identity& source;
+  ServiceBatch& batch;
+  const char* account;
+  const char* device;
+  Response item{};
+  char key[32]{};
+  unsigned depth = 0, roots = 0, fields = 0;
+  size_t count = 0;
+  bool bad = false, array = false, arrayEnded = false, review = false;
+
+  void field(unsigned bit) {
+    if (fields & bit) bad = true;
+    fields |= bit;
+  }
+  void string(const char* value, size_t n) {
+    if (depth == 1 && !array) {
+      const char* expected = nullptr;
+      if (!std::strcmp(key, "account")) {
+        field(2);
+        expected = account;
+      } else if (!std::strcmp(key, "device_id")) {
+        field(4);
+        expected = device;
+      }
+      if (!expected || std::strlen(expected) != n || std::memcmp(expected, value, n)) bad = true;
+      return;
+    }
+    if (depth != 2 || !array ||
+        (std::strcmp(item.key, "id") && std::strcmp(item.key, "book_id") && std::strcmp(item.key, "source_id") &&
+         std::strcmp(item.key, "source_date") && std::strcmp(item.key, "state"))) {
+      bad = true;
+      return;
+    }
+    item.string(value, n);
+  }
+  void number(const char* value, size_t n) {
+    if (depth == 1 && !array && !std::strcmp(key, "schema")) {
+      field(1);
+      if (n != 1 || *value != '1') bad = true;
+      return;
+    }
+    if (depth != 2 || !array ||
+        (std::strcmp(item.key, "start_seconds") && std::strcmp(item.key, "end_seconds") &&
+         std::strcmp(item.key, "confirmed_seconds"))) {
+      bad = true;
+      return;
+    }
+    item.number(value, n);
+  }
+  void finishItem() {
+    if (count >= batch.count || item.bad || item.fields != 1020) {
+      bad = true;
+      return;
+    }
+    auto& expected = batch.items[count];
+    char job[128], date[16];
+    if (!batchIdentity(source, expected, job, sizeof(job), date, sizeof(date)) || std::strcmp(item.id, job) ||
+        std::strcmp(item.book, source.book) || std::strcmp(item.source, source.source) ||
+        std::strcmp(item.date, date) || item.start != expected.start || item.end != expected.end ||
+        item.confirmed < expected.credit || item.confirmed > expected.end - expected.start) {
+      bad = true;
+      return;
+    }
+    if (!std::strcmp(item.state, "confirmed"))
+      expected.receipt = ServiceBatch::Receipt::Confirmed;
+    else if (!std::strcmp(item.state, "queued"))
+      expected.receipt = ServiceBatch::Receipt::Queued;
+    else if (!std::strcmp(item.state, "running"))
+      expected.receipt = ServiceBatch::Receipt::Running;
+    else if (!std::strcmp(item.state, "uncertain")) {
+      expected.receipt = ServiceBatch::Receipt::Uncertain;
+      review = true;
+    } else {
+      bad = true;
+      return;
+    }
+    const bool full = expected.receipt == ServiceBatch::Receipt::Confirmed;
+    if (full != (item.confirmed == expected.end - expected.start)) {
+      bad = true;
+      return;
+    }
+    expected.receivedCredit = item.confirmed;
+    ++count;
+  }
+};
+
+bool batchRequestBody(const Identity& source, ServiceBatch& batch) {
+  if (!batch.count || batch.count > ServiceBatch::kMaxItems) return false;
+  size_t used = 0;
+  batch.body[used++] = '{';
+  std::memcpy(batch.body + used, "\"jobs\":[", 8);
+  used += 8;
+  for (size_t i = 0; i < batch.count; ++i) {
+    const auto& item = batch.items[i];
+    Ledger validator;
+    if (!validator.bind(source.account, source.book, source.source, item.day) || item.start >= item.end ||
+        item.end > 86400 || item.credit > item.end - item.start ||
+        (item.action == ServiceBatch::Action::Submit && item.credit))
+      return false;
+    char job[128], date[16];
+    if (!batchIdentity(source, item, job, sizeof(job), date, sizeof(date))) return false;
+    const int n = std::snprintf(
+        batch.body + used, sizeof(batch.body) - used,
+        "%s{\"action\":\"%s\",\"id\":\"%s\",\"book_id\":\"%s\",\"source_id\":\"%s\",\"source_date\":\"%s\","
+        "\"start_seconds\":%llu,\"end_seconds\":%llu}",
+        i ? "," : "", item.action == ServiceBatch::Action::Submit ? "submit" : "query", job, source.book, source.source,
+        date, static_cast<unsigned long long>(item.start), static_cast<unsigned long long>(item.end));
+    if (n <= 0 || size_t(n) >= sizeof(batch.body) - used) return false;
+    used += size_t(n);
+  }
+  if (used + 3 > sizeof(batch.body)) return false;
+  std::memcpy(batch.body + used, "]}", 3);
+  return true;
+}
+
 bool request(const char* path, const char* token, const char* body, Response& response) {
   char url[256], auth[144];
   const int n = std::snprintf(url, sizeof(url), "https://wesync.ar0c.com%s", path);
@@ -244,6 +381,7 @@ bool ServiceClient::configure(const char* account) {
   return true;
 }
 bool ServiceClient::connect(const char* account) {
+  batchLimit_ = 0;
   if (!configure(account)) return false;
   persistServiceDiagnostic("connect_start");
   Response r;
@@ -252,6 +390,7 @@ bool ServiceClient::connect(const char* account) {
   if (!matched) {
     persistServiceDiagnostic("response_identity", -1, r.http, nullptr, 0, 0, r.depth, r.roots, r.fields);
   } else {
+    batchLimit_ = r.batchLimit;
     persistServiceDiagnostic("connected", 0, r.http);
   }
   return matched;
@@ -300,6 +439,109 @@ ServiceClient::Result ServiceClient::exchange(const Identity& id, ServiceJournal
   persistServiceDiagnostic(confirmed ? "confirmed" : "accepted", 0, r.http);
   if (!std::strcmp(r.state, "uncertain")) return Result::Review;
   return confirmed ? Result::Confirmed : Result::Accepted;
+}
+
+ServiceClient::Result ServiceClient::exchangeBatch(const Identity& source, ServiceBatch& batch) {
+  if (!supportsBatch() || std::strcmp(source.account, account_) || !batchRequestBody(source, batch))
+    return Result::Failed;
+  BatchResponse response{source, batch, account_, device_};
+  JsonCallbacks callbacks{};
+  callbacks.ctx = &response;
+  callbacks.onKey = [](void* p, const char* key, size_t n) {
+    auto& r = *static_cast<BatchResponse*>(p);
+    char* target = r.depth == 2 && r.array ? r.item.key : r.key;
+    if ((r.depth != 1 && r.depth != 2) || n >= sizeof(r.key)) {
+      r.bad = true;
+      return;
+    }
+    std::memcpy(target, key, n);
+    target[n] = 0;
+    if (r.depth == 1 && (r.array || (std::strcmp(target, "schema") && std::strcmp(target, "account") &&
+                                     std::strcmp(target, "device_id") && std::strcmp(target, "durably_accepted") &&
+                                     std::strcmp(target, "jobs"))))
+      r.bad = true;
+    if (r.depth == 2 && (!r.array || (std::strcmp(target, "id") && std::strcmp(target, "book_id") &&
+                                      std::strcmp(target, "source_id") && std::strcmp(target, "source_date") &&
+                                      std::strcmp(target, "state") && std::strcmp(target, "start_seconds") &&
+                                      std::strcmp(target, "end_seconds") && std::strcmp(target, "confirmed_seconds"))))
+      r.bad = true;
+  };
+  callbacks.onString = [](void* p, const char* value, size_t n) { static_cast<BatchResponse*>(p)->string(value, n); };
+  callbacks.onNumber = [](void* p, const char* value, size_t n) { static_cast<BatchResponse*>(p)->number(value, n); };
+  callbacks.onBool = [](void* p, bool value) {
+    auto& r = *static_cast<BatchResponse*>(p);
+    if (r.depth != 1 || r.array || std::strcmp(r.key, "durably_accepted") || !value) r.bad = true;
+    r.field(8);
+  };
+  callbacks.onNull = [](void* p) { static_cast<BatchResponse*>(p)->bad = true; };
+  callbacks.onObjectStart = [](void* p) {
+    auto& r = *static_cast<BatchResponse*>(p);
+    if (r.depth == 0) {
+      if (++r.roots != 1) r.bad = true;
+    } else if (r.depth == 1 && r.array)
+      r.item = {};
+    else
+      r.bad = true;
+    ++r.depth;
+  };
+  callbacks.onObjectEnd = [](void* p) {
+    auto& r = *static_cast<BatchResponse*>(p);
+    if (r.depth == 2 && r.array)
+      r.finishItem();
+    else if (r.depth != 1 || r.array)
+      r.bad = true;
+    if (r.depth) --r.depth;
+  };
+  callbacks.onArrayStart = [](void* p) {
+    auto& r = *static_cast<BatchResponse*>(p);
+    if (r.depth != 1 || r.array || std::strcmp(r.key, "jobs")) r.bad = true;
+    r.field(16);
+    r.array = true;
+  };
+  callbacks.onArrayEnd = [](void* p) {
+    auto& r = *static_cast<BatchResponse*>(p);
+    if (r.depth != 1 || !r.array || r.count != r.batch.count) r.bad = true;
+    r.array = false;
+    r.arrayEnded = true;
+  };
+  StreamingJsonParser parser(callbacks);
+  char auth[144];
+  std::snprintf(auth, sizeof(auth), "Bearer %s", token_);
+  WeReadHttpClient::Header headers[] = {
+      {"Authorization", auth}, {"Content-Type", "application/json"}, {"User-Agent", "weread-sync-device/0.1"}};
+  WeReadHttpClient::RequestOptions options;
+  options.method = "POST";
+  options.headers = headers;
+  options.headerCount = 3;
+  options.timeoutMs = 15000;
+  options.body = reinterpret_cast<const uint8_t*>(batch.body);
+  options.bodySize = std::strlen(batch.body);
+  uint8_t readBuffer[512];
+  options.readBuffer = readBuffer;
+  options.readBufferSize = sizeof(readBuffer);
+  WeReadHttpClient::NetworkDiagnostic diagnostic;
+  options.diagnostic = &diagnostic;
+  size_t received = 0;
+  int http = 0;
+  persistServiceDiagnostic("batch_start");
+  const auto result = WeReadHttpClient::requestVerified(
+      "https://wesync.ar0c.com/api/v1/jobs/batch", options,
+      [&](const uint8_t* data, size_t n) {
+        received += n;
+        if (received > ServiceBatch::kMaxItems * 512 + 256) return false;
+        parser.feed(reinterpret_cast<const char*>(data), n);
+        return !parser.hasError() && !response.bad;
+      },
+      {}, http);
+  parser.feed(" ", 1);
+  const bool ok = result == WeReadHttpClient::Result::Ok && (http == 200 || http == 202) && !parser.hasError() &&
+                  !response.bad && response.depth == 0 && response.roots == 1 && response.fields == 31 &&
+                  response.arrayEnded && response.count == batch.count;
+  persistServiceDiagnostic(ok ? "batch_accepted" : "batch_failed", int(result), http, &diagnostic,
+                           unsigned(parser.hasError()), unsigned(response.bad), response.depth, response.roots,
+                           response.fields);
+  if (!ok) return http == 429 ? Result::Full : Result::Failed;
+  return response.review ? Result::Review : Result::Accepted;
 }
 }  // namespace WeReadTime
 #endif

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <ctime>
 
 #include "ReadingStatsStore.h"
 #include "WeReadDeviceTimeSource.h"
@@ -221,12 +222,20 @@ void persistDiagnostic(const Status& status) {
   file.flush();
 }
 
+struct ServiceWorkspace {
+  explicit ServiceWorkspace(WeReadTime::ByteLog& log) : journal(log) {}
+  WeReadTime::ServiceJournal journal;
+  WeReadTime::ServiceBatch batch;
+};
+static_assert(sizeof(ServiceWorkspace) < 12 * 1024, "Batch handoff scratch exceeds fixed budget");
+
 struct Job final : WeReadTime::TimeQueueSource {
   char account[32] = {}, book[64] = {}, sourceId[64] = {};
   std::unique_ptr<ReadingDayStats[]> days;
   size_t dayCount = 0;
   uint64_t totalMs = 0;
   bool deviceOwned = false;
+  bool serviceMode = false;  // Frozen before task start; main-task reads are safe.
   Accounting accounting;
   WeReadTime::SdByteLog log;
   WeReadTime::PacedJournal journal{log};
@@ -264,7 +273,7 @@ struct Job final : WeReadTime::TimeQueueSource {
     current.diagnostic = transport.diagnostic();
   }
   void run() {
-    if (WeReadTime::ServiceClient::configured()) {
+    if (serviceMode) {
       runService();
       return;
     }
@@ -330,9 +339,6 @@ struct Job final : WeReadTime::TimeQueueSource {
     current.queue = Q::Running;
     current.phase = WeReadTime::TimeTransaction::State::Sending;
     publish(current);
-    // Keep the service journal off the 8 KiB task stack: the TLS request path
-    // also needs stack while this journal remains live. It is CPU-only state,
-    // so the supported S3 boards can hold it in PSRAM for this explicit run.
     WeReadTime::ServiceClient client;
     WeReadTime::SdByteLog serviceLog;
     const auto finish = [&](Q result) {
@@ -342,120 +348,147 @@ struct Job final : WeReadTime::TimeQueueSource {
       current.confirmed = current.totals.serviceConfirmed;
       publish(current);
     };
+    // One fixed <=12 KiB journal/batch workspace cannot live on the TLS stack.
+    // It exists only during this explicit run, preferably in PSRAM.
     memory::ByteBuffer serviceStorage;
-    if (memory::psramHasHeadroom(sizeof(WeReadTime::ServiceJournal), sizeof(WeReadTime::ServiceJournal), 32 * 1024))
-      serviceStorage = memory::makePsramByteBufferNoThrow(sizeof(WeReadTime::ServiceJournal));
-    // A fallible internal allocation preserves the no-PSRAM build's service
-    // path without putting this journal back on the task stack.
-    std::unique_ptr<WeReadTime::ServiceJournal> internalService;
-    if (!serviceStorage) internalService = makeUniqueNoThrow<WeReadTime::ServiceJournal>(serviceLog);
+    if (memory::psramHasHeadroom(sizeof(ServiceWorkspace), sizeof(ServiceWorkspace), 32 * 1024))
+      serviceStorage = memory::makePsramByteBufferNoThrow(sizeof(ServiceWorkspace));
+    std::unique_ptr<ServiceWorkspace> internalService;
+    if (!serviceStorage &&
+        memory::hasAllocationHeadroom(ESP.getFreeHeap(), ESP.getMaxAllocHeap(), sizeof(ServiceWorkspace),
+                                      sizeof(ServiceWorkspace), 96 * 1024, 32 * 1024))
+      internalService = makeUniqueNoThrow<ServiceWorkspace>(serviceLog);
     if (!serviceStorage && !internalService) {
-      LOG_ERR("WRTime", "OOM: service journal");
+      LOG_ERR("WRTime", "OOM: service batch workspace");
       finish(Q::Paused);
       return;
     }
-    auto* servicePtr =
-        serviceStorage ? new (serviceStorage.get()) WeReadTime::ServiceJournal(serviceLog) : internalService.get();
-    auto& service = *servicePtr;
+    auto* workspace = serviceStorage ? new (serviceStorage.get()) ServiceWorkspace(serviceLog) : internalService.get();
+    auto& service = workspace->journal;
+    auto& batch = workspace->batch;
     ScopedCleanup serviceCleanup{[&] {
-      if (serviceStorage) service.~ServiceJournal();
+      if (serviceStorage) workspace->~ServiceWorkspace();
     }};
     if (!accounting.audit(source(), account, current.totals)) {
       finish(Q::StorageError);
       return;
     }
-    if (!client.connect(account)) {
+    if (!client.connect(account) || !client.supportsBatch()) {
       finish(Q::Paused);
       return;
     }
-    bool review = false;
-    for (size_t index = 0; index < dayCount; ++index) {
-      if (stopping.load()) {
+    bool review = false, recoveredTail = false;
+    const unsigned long startedAt = millis();
+    constexpr unsigned long handoffBudgetMs = 60000;
+    const auto interrupted = [&] {
+      if (stopping.load() || millis() - startedAt >= handoffBudgetMs) {
         finish(Q::Paused);
-        return;
+        return true;
       }
-      const auto day = days[index].dayOrdinal;
-      // The complete audit above has validated handover and created WRP2 state.
-      if (!log.configure(account, book, sourceId, day, WeReadTime::SdByteLog::Format::Paced30)) {
-        finish(Q::StorageError);
-        return;
-      }
+      return false;
+    };
+    WeReadTime::PacedLedger ledger;
+    const auto loadDay = [&](uint32_t day) {
+      if (!log.configure(account, book, sourceId, day, WeReadTime::SdByteLog::Format::Paced30)) return false;
       uint64_t length = 0;
       uint8_t frame[WeReadTime::PacedLedger::kSize];
-      WeReadTime::PacedLedger ledger;
       if (log.size(length) != WeReadTime::ByteLog::ReadState::Ready || length < sizeof(frame) ||
           !log.read(length - sizeof(frame), frame, sizeof(frame)) || !ledger.decode(frame) ||
           ledger.state() != WeReadTime::PacedLedger::State::Idle ||
           !serviceLog.configure(account, book, sourceId, day, WeReadTime::SdByteLog::Format::Service) ||
           !service.open(ledger.identity(), ledger.measuredMs() / 1000 - ledger.remaining(),
                         ledger.measuredMs() / 1000) ||
-          !service.matchesDevice(client.device())) {
+          !service.matchesDevice(client.device()))
+        return false;
+      return true;
+    };
+    const auto flush = [&] {
+      if (!batch.count) return true;
+      if (interrupted()) return false;
+      const auto result = client.exchangeBatch(ledger.identity(), batch);
+      using R = WeReadTime::ServiceClient::Result;
+      switch (result) {
+        case R::Full:
+          current.serviceQueueFull = true;
+          finish(Q::Paused);
+          return false;
+        case R::Failed:
+          finish(Q::Paused);
+          return false;
+        case R::Review:
+          review = true;
+          break;
+        case R::Accepted:
+        case R::Confirmed:
+          break;
+      }
+      // Validate the complete ordered response before persisting any receipt.
+      // Power loss here leaves the remaining immutable Reserved IDs recoverable.
+      const auto now = std::time(nullptr);
+      for (size_t i = 0; i < batch.count; ++i) {
+        const auto& item = batch.items[i];
+        if (!loadDay(item.day) || !service.select(item.start, item.end) ||
+            !service.accept(item.receipt == WeReadTime::ServiceBatch::Receipt::Confirmed, item.receivedCredit,
+                            now > 0 ? uint64_t(now) : 0)) {
+          finish(Q::StorageError);
+          return false;
+        }
+      }
+      batch.count = 0;
+      return true;
+    };
+    const auto collect = [&](uint32_t day) {
+      if (!batch.add(day, service)) {
         finish(Q::StorageError);
-        return;
+        return false;
       }
-      // Recover the immutable unacknowledged tail first. Earlier accepted
-      // tasks need only readback; they do not gate the next measured range.
-      uint64_t queryUntil = UINT64_MAX;
-      if (service.selectReserved()) {
-        queryUntil = service.start();
-        const auto result = client.exchange(ledger.identity(), service);
-        if (result == WeReadTime::ServiceClient::Result::Full) {
-          current.serviceQueueFull = true;
-          finish(Q::Paused);
-          return;
-        }
-        if (result == WeReadTime::ServiceClient::Result::Failed) {
-          finish(Q::Paused);
-          return;
-        }
-        review |= result == WeReadTime::ServiceClient::Result::Review;
-      }
-      // At most four cached receipts per day per explicit run. The oldest
-      // accepted tasks are queried first, matching the server's FIFO worker.
-      uint64_t cursor = 0;
-      for (unsigned queries = 0; queries < 4 && service.selectAccepted(cursor); ++queries) {
-        if (service.start() >= queryUntil) break;
-        if (stopping.load()) {
-          finish(Q::Paused);
-          return;
-        }
-        cursor = service.end();
-        const auto result = client.exchange(ledger.identity(), service);
-        // A missing or regressed receipt may mean a restored server DB. Stop
-        // new handoffs instead of guessing ownership or recreating the task.
-        if (result == WeReadTime::ServiceClient::Result::Failed) {
-          finish(Q::Paused);
-          return;
-        }
-        review |= result == WeReadTime::ServiceClient::Result::Review;
-      }
-      if (stopping.load()) {
-        finish(Q::Paused);
-        return;
-      }
-      if (!service.unacknowledged() && ledger.remaining() > service.owned()) {
-        if (!service.capacity()) {
-          current.serviceQueueFull = true;
-          finish(Q::Paused);
-          return;
-        }
-        if (!service.reserve(client.device())) {
+      return batch.count < WeReadTime::ServiceBatch::kMaxItems || flush();
+    };
+    // Combine old receipts with one reserved/new range per date. Recovering
+    // an older tail may expose one more range, collected in the second round.
+    for (unsigned pass = 0; pass < 2; ++pass) {
+      if (pass && !recoveredTail) break;
+      for (size_t index = 0; index < dayCount; ++index) {
+        if (interrupted()) return;
+        const auto day = days[index].dayOrdinal;
+        if (!loadDay(day)) {
           finish(Q::StorageError);
           return;
         }
-        const auto result = client.exchange(ledger.identity(), service);
-        if (result == WeReadTime::ServiceClient::Result::Full) {
-          current.serviceQueueFull = true;
-          finish(Q::Paused);
-          return;
+        if (!pass) {
+          uint64_t cursor = 0;
+          for (unsigned queries = 0; queries < 4 && service.selectAccepted(cursor); ++queries) {
+            cursor = service.end();
+            if (!collect(day)) return;
+          }
         }
-        if (result == WeReadTime::ServiceClient::Result::Failed) {
-          finish(Q::Paused);
-          return;
+        if (service.selectReserved()) {
+          recoveredTail |= service.end() < ledger.measuredMs() / 1000;
+          if (!collect(day)) return;
+        } else if (ledger.remaining() > service.owned()) {
+          // A full local task array must still query old receipts. Confirmed
+          // tasks can free slots before reserving new measured time.
+          if (!service.capacity() && batch.count) {
+            if (!flush()) return;
+            if (!loadDay(day)) {
+              finish(Q::StorageError);
+              return;
+            }
+          }
+          if (!service.capacity()) {
+            current.serviceQueueFull = true;
+            finish(Q::Paused);
+            return;
+          }
+          if (!service.reserve(client.device())) {
+            finish(Q::StorageError);
+            return;
+          }
+          if (!collect(day)) return;
         }
-        review |= result == WeReadTime::ServiceClient::Result::Review;
+        vTaskDelay(1);
       }
-      vTaskDelay(1);
+      if (!flush()) return;
     }
     // Acceptance ends the device network task; cloud work continues on server.
     finish(review ? Q::Uncertain : Q::Complete);
@@ -512,6 +545,15 @@ bool prepareToLeaveReading() {
   pause();
   poll();
   return !active();
+}
+bool prepareForSleep() {
+  // Complete the frozen service handoff, without waiting for cloud credit.
+  // Direct-mode uploads still pause cooperatively between complete operations.
+  if (job && job->serviceMode) {
+    poll();
+    return !active();
+  }
+  return prepareToLeaveReading();
 }
 bool canContinueIn(const char* activityName, bool reader, bool home) {
   if (reader || home) return true;
@@ -606,12 +648,18 @@ bool start(const Source& source, const char* account) {
   if (memory::psramHasHeadroom(sizeof(Job), sizeof(Job), 32 * 1024))
     externalJob = memory::makePsramByteBufferNoThrow(sizeof(Job));
   const size_t internalJobBytes = externalJob ? 0 : sizeof(Job);
+  const bool serviceMode = WeReadTime::ServiceClient::configured();
+  const size_t serviceScratchBytes =
+      serviceMode && !memory::psramHasHeadroom(sizeof(ServiceWorkspace), sizeof(ServiceWorkspace), 32 * 1024)
+          ? sizeof(ServiceWorkspace)
+          : 0;
   freeHeap = ESP.getFreeHeap();
   largestBlock = ESP.getMaxAllocHeap();
   static_assert(sizeof(ReadingDayStats) <= 16, "Source snapshot day budget changed");
 #if !defined(SIMULATOR)
-  budget = internalJobBytes + source.count * sizeof(ReadingDayStats) + stackBytes + 6 * 1024 + 1024;
-  contiguous = std::max({internalJobBytes, source.count * sizeof(ReadingDayStats), stackBytes});
+  budget =
+      internalJobBytes + source.count * sizeof(ReadingDayStats) + stackBytes + 6 * 1024 + 1024 + serviceScratchBytes;
+  contiguous = std::max({internalJobBytes, source.count * sizeof(ReadingDayStats), stackBytes, serviceScratchBytes});
   if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, 96 * 1024, 32 * 1024)) {
     LOG_ERR("WRTime", "Insufficient heap for background sync and reader (%u bytes)", unsigned(budget));
     return fail(StartFailure::Headroom);
@@ -640,6 +688,7 @@ bool start(const Source& source, const char* account) {
   next->dayCount = source.count;
   next->totalMs = source.totalMs;
   next->deviceOwned = source.deviceOwned;
+  next->serviceMode = serviceMode;
   strcpy(next->account, account);
   strcpy(next->book, source.book);
   strcpy(next->sourceId, source.source);

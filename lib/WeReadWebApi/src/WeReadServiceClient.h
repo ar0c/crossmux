@@ -1,5 +1,5 @@
 #pragma once
-#include "WeReadServiceJournal.h"
+#include "WeReadServiceBatch.h"
 
 namespace WeReadTime {
 class ServiceClient {
@@ -13,8 +13,12 @@ class ServiceClient {
   // Runtime-only transport credential; never log or persist it outside config.
   const char* bearer() const { return token_; }
   Result exchange(const Identity& id, ServiceJournal& journal);
+  // Validate the entire ordered response before the worker persists any receipt.
+  Result exchangeBatch(const Identity& source, ServiceBatch& batch);
+  bool supportsBatch() const { return batchLimit_ >= ServiceBatch::kMaxItems; }
 
  private:
   char account_[32]{}, device_[32]{}, token_[128]{};
+  unsigned batchLimit_ = 0;
 };
 }  // namespace WeReadTime
