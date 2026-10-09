@@ -716,8 +716,7 @@ void WeReadBrowseActivity::render(RenderLock&&) {
       if (error_ == WeReadClient::Error::Unavailable && WeReadClient::ManagedWeReadClient::required()) {
         // Keep the long service hint inside the safe area; low-memory errors still use their existing path.
         const Rect bounds = SubpageLayout::insetHorizontal(content, metrics.contentSidePadding);
-        UITheme::drawCenteredWrappedText(renderer, bounds, UI_10_FONT_ID, errorMessage(), 4, true,
-                                         EpdFontFamily::BOLD);
+        UITheme::drawCenteredWrappedText(renderer, bounds, UI_10_FONT_ID, errorMessage(), 4, true, EpdFontFamily::BOLD);
       } else {
         GUI.drawPopup(renderer, errorMessage());
       }

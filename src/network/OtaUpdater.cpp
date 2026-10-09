@@ -211,8 +211,7 @@ bool OtaUpdater::isUpdateNewer() const {
       if (sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch) != 3 ||
           sscanf(CROSSPOINT_VERSION, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch) != 3)
         return false;
-      if (latestMajor < currentMajor ||
-          (latestMajor == currentMajor && latestMinor < currentMinor) ||
+      if (latestMajor < currentMajor || (latestMajor == currentMajor && latestMinor < currentMinor) ||
           (latestMajor == currentMajor && latestMinor == currentMinor && latestPatch < currentPatch))
         return false;
       const std::string_view latestRevision = nightlyRevision(latestVersion);
@@ -372,8 +371,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   mbedtls_sha256_free(&shaCtx);
 
   if (wrongChip || wrongBoard) {
-    LOG_ERR("OTA", "Firmware install aborted: wrong device (chip=%d board=%d, received=%zu/%zu)", wrongChip,
-            wrongBoard, processedSize, otaSize);
+    LOG_ERR("OTA", "Firmware install aborted: wrong device (chip=%d board=%d, received=%zu/%zu)", wrongChip, wrongBoard,
+            processedSize, otaSize);
     esp_ota_abort(otaHandle);
     return WRONG_DEVICE_ERROR;
   }

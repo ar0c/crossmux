@@ -68,16 +68,15 @@ const char* latestVersionLabel(const OtaUpdater& updater) {
 void drawVersionBlock(const GfxRenderer& renderer, const Rect& safeArea, const ThemeMetrics& metrics, const int top,
                       const char* label, const char* version) {
   GUI.drawSubHeader(renderer, Rect{safeArea.x, top, safeArea.width, metrics.tabBarHeight}, label, nullptr);
-  GUI.drawSubHeader(renderer, Rect{safeArea.x, top + metrics.tabBarHeight, safeArea.width, metrics.tabBarHeight}, version,
-                    nullptr);
+  GUI.drawSubHeader(renderer, Rect{safeArea.x, top + metrics.tabBarHeight, safeArea.width, metrics.tabBarHeight},
+                    version, nullptr);
 }
 
 Rect getReadyListRect(const GfxRenderer& renderer) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const Rect content = SubpageLayout::contentRect(safeArea, metrics, true);
-  return Rect{content.x, content.y + metrics.tabBarHeight, content.width,
-              GUI.getListRowStep(false) * READY_ROW_COUNT};
+  return Rect{content.x, content.y + metrics.tabBarHeight, content.width, GUI.getListRowStep(false) * READY_ROW_COUNT};
 }
 }  // namespace
 

@@ -29,8 +29,8 @@
 
 #include <algorithm>
 #include <cctype>
-#include <string_view>
 #include <new>
+#include <string_view>
 #ifndef SIMULATOR
 #include <cerrno>
 #endif

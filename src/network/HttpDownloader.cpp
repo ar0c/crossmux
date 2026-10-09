@@ -4,13 +4,13 @@
 #include <HalMemory.h>
 #include <HalSystem.h>
 #include <Logging.h>
-#include <ResumableFetch.h>
 #include <Memory.h>
+#include <ResumableFetch.h>
+#include <base64.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
-#include <base64.h>
-#include <cstdio>
 
+#include <cstdio>
 #include <functional>
 #include <string>
 
@@ -104,8 +104,9 @@ bool isRedirect(int status) {
 // pushes the whole body through an event callback and reports a chunked body
 // that ends early as ESP_ERR_HTTP_INCOMPLETE_DATA, whereas the read loop streams
 // large/slow files and surfaces a short read directly.
-HttpDownloader::DownloadError runGetVerified(const std::string& url, const std::string& username, const std::string& password,
-                                     const char* userAgent, Sink& sink, const bool allowRedirects = true) {
+HttpDownloader::DownloadError runGetVerified(const std::string& url, const std::string& username,
+                                             const std::string& password, const char* userAgent, Sink& sink,
+                                             const bool allowRedirects = true) {
   WifiPowerSaveGuard psGuard;
   esp_http_client_config_t config = {};
   config.url = url.c_str();
@@ -238,8 +239,8 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
 bool HttpDownloader::fetchVerifiedUrl(const std::string& url, const DataCallback& onData) {
   if (!url.starts_with("https://ooo.ar0c.com/releases/download/")) return false;
   char userAgent[USER_AGENT_CAPACITY];
-  const int length = snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION,
-                              HalSystem::getDeviceModel());
+  const int length =
+      snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION, HalSystem::getDeviceModel());
   if (length < 0 || static_cast<size_t>(length) >= sizeof(userAgent)) return false;
   Sink sink;
   sink.write = onData;

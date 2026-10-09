@@ -235,7 +235,8 @@ std::string getPanicInfo(bool full) {
     // A lockup or hardware watchdog resets without running any panic hook, so
     // the reason and stack come back empty; the reset cause is then the only
     // way to tell those apart from a true panic.
-    info += "\n\nReset reason: " + std::string(resetReasonName(esp_reset_reason())) + " (" + std::to_string(static_cast<unsigned>(esp_reset_reason())) + ")";
+    info += "\n\nReset reason: " + std::string(resetReasonName(esp_reset_reason())) + " (" +
+            std::to_string(static_cast<unsigned>(esp_reset_reason())) + ")";
     info += "\n\nPanic reason: " + std::string(panicMessage);
     info += "\n\nLast logs:\n" + getLastLogs();
     info += "\n\nStack memory:\n";

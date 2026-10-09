@@ -2553,8 +2553,7 @@ void WeReadActivity::render(RenderLock&&) {
       if (error_ == WeReadClient::Error::Unavailable && WeReadClient::ManagedWeReadClient::required()) {
         // Wrapping uses transient UI strings only for this service error; the OOM path below stays allocation-free.
         const Rect bounds = SubpageLayout::insetHorizontal(content, metrics.contentSidePadding);
-        UITheme::drawCenteredWrappedText(renderer, bounds, UI_10_FONT_ID, errorMessage(), 4, true,
-                                         EpdFontFamily::BOLD);
+        UITheme::drawCenteredWrappedText(renderer, bounds, UI_10_FONT_ID, errorMessage(), 4, true, EpdFontFamily::BOLD);
         break;
       }
       if (error_ != WeReadClient::Error::SdCard && error_ != WeReadClient::Error::OutOfMemory) {
