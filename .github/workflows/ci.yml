@@ -17,12 +17,35 @@ env:
   UV_HTTP_RETRIES: 10
 
 jobs:
+  changes:
+    name: Select checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      format: ${{ steps.plan.outputs.format }}
+      analysis: ${{ steps.plan.outputs.analysis }}
+      tests: ${{ steps.plan.outputs.tests }}
+      firmware: ${{ steps.plan.outputs.firmware }}
+      simulator: ${{ steps.plan.outputs.simulator }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: plan
+        name: Select checks from changed paths
+        run: python3 scripts/ci_plan.py plan
+
   select_runner:
+    needs: [changes, clang-format, cppcheck, unit-tests]
+    if: needs.changes.outputs.firmware == 'true'
     uses: ./.github/workflows/select-build-runner.yml
     secrets:
       runner_status_token: ${{ secrets.H2O_RUNNER_TOKEN }}
 
   clang-format:
+    needs: changes
+    if: needs.changes.outputs.format == 'true'
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -43,10 +66,12 @@ jobs:
 
       - name: Run clang-format
         run: |
-          PATH="/usr/lib/llvm-21/bin:$PATH" ./bin/clang-format-fix
-          git diff --exit-code || (echo "Please run 'bin/clang-format-fix' to fix formatting issues" && exit 1)
+          PATH="/usr/lib/llvm-21/bin:$PATH" ./bin/clang-format-fix --check
 
   cppcheck:
+    needs: changes
+    if: needs.changes.outputs.analysis == 'true'
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - name: Isolate PlatformIO toolchains
@@ -89,7 +114,9 @@ jobs:
 
   build-default:
     name: Build Waveshare 3.97
-    needs: select_runner
+    needs: [changes, select_runner, clang-format, cppcheck, unit-tests]
+    if: needs.changes.outputs.firmware == 'true'
+    timeout-minutes: 45
     runs-on: ${{ fromJSON(needs.select_runner.outputs['runs-on']) }}
     steps:
       - name: Isolate PlatformIO toolchains
@@ -130,7 +157,14 @@ jobs:
       - name: Build Waveshare 3.97 firmware
         run: |
           set -euo pipefail
-          pio run -e waveshare_epaper_397 | tee pio.log
+          export CROSSPOINT_RC_HASH="${GITHUB_SHA::7}"
+          pio run -e waveshare_epaper_397_nightly | tee pio.log
+
+      - name: Verify Waveshare hardware package
+        run: |
+          set -euo pipefail
+          python3 scripts/package_nightly_target.py waveshare_epaper_397 --channel nightly
+          (cd dist/nightly/waveshare_epaper_397 && sha256sum --check *-SHA256SUMS)
 
       - name: Extract firmware stats
         run: |
@@ -138,7 +172,7 @@ jobs:
           {
             echo "## Waveshare 3.97 firmware build stats"
             echo '```text'
-            grep -E '^Processing |RAM:\\s|Flash:\\s' pio.log || true
+            grep -E '^Processing |RAM:\s|Flash:\s' pio.log || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -146,10 +180,81 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: crossmux-ar0c-waveshare-epaper-397-firmware.bin
-          path: .pio/build/waveshare_epaper_397/firmware.bin
+          path: .pio/build/waveshare_epaper_397_nightly/firmware.bin
           if-no-files-found: error
 
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: waveshare-build-log
+          path: pio.log
+          if-no-files-found: ignore
+
+  build-simulator:
+    name: Build simulator
+    needs: [changes, clang-format, cppcheck, unit-tests]
+    if: needs.changes.outputs.simulator == 'true'
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Isolate PlatformIO toolchains
+        run: echo "PLATFORMIO_CORE_DIR=$RUNNER_TEMP/.platformio-$GITHUB_RUN_ID-$GITHUB_JOB" >> "$GITHUB_ENV"
+
+      - name: Use runner temporary directory
+        # Avoid the self-hosted runner's shared /tmp tmpfs.
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: false
+
+      - name: Install PlatformIO Core
+        run: uv pip install --system -U pioarduino==6.2.0
+
+      - name: Prepare platform tools
+        run: python scripts/patch_pioarduino_cache.py --prepare-platform
+
+      - name: Cache PlatformIO packages
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLATFORMIO_CORE_DIR }}/.cache
+          key: pio-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-cache-${{ runner.os }}-
+
+      - name: Install simulator build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libssl-dev
+
+      - name: Compile simulator
+        run: |
+          set -euo pipefail
+          pio run -e simulator | tee pio.log
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: simulator-build-log
+          path: pio.log
+          if-no-files-found: ignore
+
   unit-tests:
+    needs: changes
+    if: needs.changes.outputs.tests == 'true'
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -186,22 +291,16 @@ jobs:
       - name: Run hardware packaging tests
         run: python3 -m unittest discover -v -s scripts/tests
 
-  # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
-  # PR requirements.
+  # Keep this required check running even when documentation skips builds.
   test-status:
     name: Test Status
-    needs:
-      - build-default
-      - clang-format
-      - cppcheck
-      - select_runner
-      - unit-tests
+    needs: [changes, clang-format, cppcheck, unit-tests, select_runner, build-default, build-simulator]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Fail because needed jobs failed
-        # Fail if any job failed or was cancelled (skipped jobs are ok)
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
-        run: exit 1
-      - name: Success
-        run: exit 0
+      - uses: actions/checkout@v6
+      - name: Summarize and verify selected checks
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_plan.py result

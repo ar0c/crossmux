@@ -98,10 +98,10 @@ class NightlyTargetTest(unittest.TestCase):
 
     def test_workflow_packages_one_binary_set(self):
         workflow = (ROOT / '.github/workflows/nightly.yml').read_text()
-        hardware = (ROOT / '.github/workflows/hardware-ci.yml').read_text()
+        hardware = (ROOT / '.github/workflows/ci.yml').read_text()
         self.assertIn('find artifacts -type f -print', workflow)
         self.assertEqual(workflow.count('python3 scripts/package_nightly_target.py "${{ matrix.targetId }}"'), 1)
-        self.assertIn('for target in waveshare_epaper_397;', hardware)
+        self.assertIn('python3 scripts/package_nightly_target.py waveshare_epaper_397 --channel nightly', hardware)
         self.assertNotIn('x4pro', hardware)
         self.assertNotIn('xteink_x4_pro', workflow)
         self.assertNotIn('gh release delete', workflow)

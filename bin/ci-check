@@ -5,6 +5,22 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
+QUICK=false
+case "${1:-}" in
+  --quick) QUICK=true ;;
+  --help|-h)
+    echo "Usage: ./bin/ci-check [--quick]"
+    echo "--quick: format, CI selection/result regressions and cppcheck; no firmware build."
+    exit 0
+    ;;
+  "") ;;
+  *) echo "Unknown option: $1 (use --help)" >&2; exit 2 ;;
+esac
+if [[ $# -gt 1 ]]; then
+  echo "Too many arguments (use --help)" >&2
+  exit 2
+fi
+
 if git submodule status --recursive | grep -q '^-'; then
   echo "Error: Git submodules are not initialized."
   echo "Run: git submodule update --init --recursive"
@@ -14,17 +30,31 @@ fi
 echo "Checking formatting..."
 ./bin/clang-format-fix --check
 
+echo "Checking CI selection and failure propagation..."
+python3 -m unittest discover -v -s scripts/tests -p test_ci_plan.py
+
 echo "Running cppcheck..."
 pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
 
-echo "Building Waveshare 3.97 firmware..."
-pio run -e waveshare_epaper_397
+if [[ "$QUICK" == true ]]; then
+  echo "Quick checks passed. Full ./bin/ci-check also verifies the simulator and Waveshare package."
+  exit 0
+fi
 
 echo "Running host unit tests..."
 cmake -S test -B build/test -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/test
 ctest --test-dir build/test --output-on-failure -j
+bash freeink-sdk/libs/book/FreeInkBook/test/host/run.sh
+bash freeink-sdk/libs/ui/FreeInkUI/test/host/run.sh
 python3 freeink-sdk/libs/display/EpdiyLcd/test/host/test_transactions.py
+python3 -m unittest discover -v -s scripts/tests
+
+echo "Building Waveshare 3.97 Nightly firmware and simulator..."
+export CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)"
+pio run -e waveshare_epaper_397_nightly -e simulator
+python3 scripts/package_nightly_target.py waveshare_epaper_397 --channel nightly
+(cd dist/nightly/waveshare_epaper_397 && sha256sum --check *-SHA256SUMS)
 
 echo "Local CI checks passed."
 echo "Remember to use a semantic PR title, for example: fix: handle malformed epub"

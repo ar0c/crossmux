@@ -302,21 +302,50 @@ and physical-device acceptance.
 
 ### CI/CD Pipeline Awareness
 
-**GitHub Actions** run automatically on pull requests:
+**GitHub Actions** run on pushes to `main`, pull requests and manual dispatch.
 
 | Workflow | File | Purpose |
 |----------|------|---------|
-| Core Build Check | `.github/workflows/ci.yml` | Builds only Waveshare 3.97 firmware |
-| Hardware CI | `.github/workflows/hardware-ci.yml` | Builds and checks the Waveshare Nightly package for hardware-sensitive changes or manual runs |
-| Format Check | `.github/workflows/pr-formatting-check.yml` | Validates clang-format |
-| Firmware Release | `.github/workflows/nightly.yml` | Manual Waveshare-only Nightly releases; previous published assets retained |
+| CI (build) | `.github/workflows/ci.yml` | Select checks, run format/static/host checks, then separately compile the Waveshare Nightly image and simulator, verify the Waveshare package and report `Test Status` |
+| PR Formatting | `.github/workflows/pr-formatting-check.yml` | Validate the PR title |
+| Firmware Release | `.github/workflows/nightly.yml` | Scheduled/manual Nightly publication; CI validation does not publish OTA |
 
-**Rules**:
-- **Fix CI failures BEFORE** requesting review
-- CI runs on: Push to PR, PR updates
-- Hardware CI runs only for its configured paths, or from **Run workflow**
-- Format check fails → Run clang-format locally
-- Build check fails → Fix compile errors
+`hardware-ci.yml` has been consolidated into `ci.yml`. The supported hardware
+is Waveshare ePaper 3.97 only; the simulator is a development check. The CI
+workflow name and `Test Status` check name remain unchanged for existing
+required checks and PR firmware artifact links.
+
+Selection is implemented by `scripts/ci_plan.py`. Documentation-only changes
+skip compilation. Test-only changes run host checks (and formatting for C/C++
+tests). Shared code, SDK, toolchain, workflow, packaging and unknown paths select
+all checks. Renames inspect both old and new paths. Manual runs and unavailable
+diff bases select all checks. There is no workflow-level path filter: `Test
+Status` still completes for documentation-only PRs. Only deliberately unselected
+jobs may be skipped; failure, cancellation, a missing job or an unexpectedly
+skipped required job makes the final check fail.
+
+Format, static analysis and host checks finish before either firmware or
+simulator compilation starts. Their separate jobs retain compiler logs and
+identify which target failed. Only one Waveshare Nightly image is compiled per
+CI run and its package checks validate board tag, partition size and checksums.
+The existing per-ref concurrency cancellation remains; manual dispatch and a
+later push are separate events and can still create separate runs.
+
+Before pushing, use `./bin/ci-check --quick` for formatting, CI-control regression
+checks and cppcheck. Use the full `./bin/ci-check` for host/SDK tests, both builds
+and package verification. `python3 scripts/ci_plan.py plan --base <ref>` previews
+selection including tracked and untracked local changes; add `--head <sha>` to
+compare committed revisions only. Do not treat the quick checks as a full build.
+For workflow-only edits, validate selection/result regressions, packaging
+contracts, shell syntax and Actions syntax; unchanged firmware builds can reuse
+passing evidence for the same source and toolchain. Actual workflow execution
+still requires a pushed commit.
+
+GitHub Actions email delivery is an account preference outside this repository.
+The owner can choose **Only notify for failed workflows** in
+[notification settings](https://github.com/settings/notifications). That setting
+also affects other repositories; it is not changed by CI configuration. Real
+failures remain visible and must be fixed before review.
 
 Firmware build jobs call `select-build-runner.yml` before they start. Trusted
 same-repository PRs, pushes, tags, schedules, and manual runs use the H2O
