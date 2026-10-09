@@ -765,7 +765,7 @@ bool start(const Source& source, const char* account) {
 #endif
   wifiOwned = true;
   recordStart(StartFailure::None);
-  xTaskNotifyGive(task);
+  xTaskNotify(task, 0, eIncrement);
   return true;
 }
 }  // namespace WeReadTimeSync

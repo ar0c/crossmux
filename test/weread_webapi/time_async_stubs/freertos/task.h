@@ -6,6 +6,7 @@
 
 #include "Arduino.h"
 using TaskHandle_t = void*;
+enum eNotifyAction { eIncrement };
 namespace fakeTask {
 inline bool failCreate = false;
 inline uint32_t freeAfterCreate = 0;
@@ -46,7 +47,7 @@ inline unsigned ulTaskNotifyTake(int, uint32_t) {
   fakeTask::notified = false;
   return 1;
 }
-inline void xTaskNotifyGive(TaskHandle_t) {
+inline void xTaskNotify(TaskHandle_t, uint32_t, eNotifyAction) {
   {
     std::lock_guard<std::mutex> lock(fakeTask::gateMutex);
     fakeTask::notified = true;
