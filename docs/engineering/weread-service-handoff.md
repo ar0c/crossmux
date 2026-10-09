@@ -22,6 +22,12 @@ response into its bounded parser. A credential-free phase/result record is saved
 to `/WeReadSync/last-service-diagnostic.json` before device verification and
 each job request, then on transport failure or successful device verification.
 It can locate a reboot within the handoff without USB serial access.
+`post_start` only marks the point before the POST; its zero HTTP and timing
+fields are placeholders, not a server response. The separate
+`/WeReadSync/last-start-diagnostic.json` records the latest start result;
+`reason: 4` means the internal-memory headroom check rejected the worker.
+Successful starts write `reason: 0`, so an old rejection is not mistaken for
+the current attempt.
 Missing configuration retains the existing direct mode only for undelegated
 histories. Invalid configuration stops the run. Any existing service ledger
 blocks direct fallback when configuration disappears. An account switch or
@@ -90,10 +96,22 @@ The active-task array is fixed (24 entries, no per-task heap allocation), keepin
 the accounting scratch below 6 KiB and the journal below 2 KiB. The service
 worker allocates one fixed journal plus 16-item/8192-byte request workspace
 (under 12 KiB total) fallibly in PSRAM, with a fallible internal-memory
-fallback, rather than leaving it live on its 8 KiB stack during HTTPS calls.
-Slots are reused only after full confirmation. The existing 8 KiB worker stack,
+fallback, rather than leaving it live on its 12 KiB stack during HTTPS calls.
+Slots are reused only after full confirmation. The existing 12 KiB worker stack,
 fallible job allocation and internal-memory reserves remain. The journal is capped at
 4 MiB; a full journal stops new reservations rather than deleting ownership.
+The starter checks total memory before allocating, then holds the new worker
+behind a task notification while it measures the actual free heap and largest
+block after FreeRTOS allocates the stack. The worker runs only when at least
+96 KiB total and 32 KiB contiguous internal memory remain for the reader and
+TLS. Otherwise the blocked worker is deleted and no request starts. This avoids
+rejecting a device merely because one block is a few bytes smaller than the
+sum of two allocations that may land in separate blocks.
+The larger stack covers the deeper POST/TLS call chain. The service diagnostic
+includes heap and raw stack high-water values at each persisted phase; a
+`post_start` record still proves only that the request was about to begin.
+The panic report includes the ESP reset-reason code even when the S3 panic
+capture lacks a reason string or stack dump.
 
 Do not downgrade to firmware that does not understand WRS1 after delegating
 time. Such firmware cannot see service ownership and might resend it. Preserve
@@ -106,7 +124,7 @@ blindly replay device records.
 The progress Activity releases rebuildable resident font caches under the render
 lock immediately before starting a time worker. Rendering cannot refill them
 between that release and startup's checked allocation. The existing 96 KiB
-internal free-memory and 32 KiB contiguous-block reserves remain unchanged; low
+internal free-memory reserve and 32 KiB post-allocation TLS block check are preserved; low
 memory still rejects the run before any network request or new reservation.
 Startup failures keep their concrete diagnostic visible in service mode instead
 of replacing it with a generic configuration/network retry message. Serial logs

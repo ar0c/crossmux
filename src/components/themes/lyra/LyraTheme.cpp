@@ -358,6 +358,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   if (!buttonHintsVisible()) {
     return;
   }
+  if (drawWheelAndBootButtonHints(renderer, btn1, btn2, btn3, btn4)) return;
 
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -397,7 +398,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
 }
 
 void LyraTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const {
-  if (gpio.hasTouch()) {
+  if (gpio.hasTouch() || gpio.hasWheelAndBootButtons()) {
     return;
   }
 
@@ -588,4 +589,18 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
 
     renderer.drawText(UI_12_FONT_ID, textX, textY, label, true);
   }
+}
+
+LyraTheme::MenuRowGeometry LyraTheme::getMenuRowGeometry(const GfxRenderer&, const Rect& rect, const int,
+                                                         const int rowCount) const {
+  // Mirror of LyraTheme::drawButtonMenu: unlike Base, Lyra draws rows from
+  // rect.y with no vertical offset, so the touch origin must match.
+  const auto& m = LyraMetrics::values;
+  return {rect.y,
+          m.menuRowHeight + m.menuSpacing,
+          m.menuRowHeight,
+          0,
+          rowCount,
+          rect.x + m.contentSidePadding,
+          rect.x + rect.width - m.contentSidePadding};
 }

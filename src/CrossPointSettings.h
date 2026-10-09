@@ -1,10 +1,12 @@
 #pragma once
 #include <ArduinoJson.h>
+#include <BoardConfig.h>
 #include <Epub/ReaderRenderSpec.h>
 #include <PersistableStore.h>
 
 #include <cstdint>
 
+#include "AppVisibility.h"
 #include "BleKeyMapping.h"
 #include "InxItemLayout.h"
 #include "InxRecentLayout.h"
@@ -114,6 +116,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   enum class ContentProfile : uint8_t { Global = 0, China = 1 };
+
+  enum HAPTIC_FEEDBACK_LEVEL {
+    HAPTIC_FEEDBACK_OFF = 0,
+    HAPTIC_FEEDBACK_LOW,
+    HAPTIC_FEEDBACK_MEDIUM,
+    HAPTIC_FEEDBACK_HIGH,
+    HAPTIC_FEEDBACK_LEVEL_COUNT
+  };
 
   enum SOUND_FEEDBACK_LEVEL {
     SOUND_FEEDBACK_OFF = 0,
@@ -293,6 +303,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t clockAutoSync = 1;
   // Text rendering settings
   uint8_t extraParagraphSpacing = 0;
+  // Reader-level first-line indent control, one of FirstLineIndent::Auto /
+  // Indent / NoIndent (see lib/Epub/Epub/FirstLineIndent.h). The default
+  // Auto keeps the book's own CSS text-indent untouched; Indent replaces it
+  // with two CJK characters / three Latin spaces; NoIndent forces flush.
+  // Independent of extraParagraphSpacing.
+  uint8_t firstLineIndent = 0;
   uint8_t textAntiAliasing = 1;
   uint8_t fakeBold = SYNTHETIC_BOLD_STANDARD;
   uint8_t readingBackgroundEnabled = 0;
@@ -383,6 +399,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 #else
   uint8_t soundFeedbackLevel = SOUND_FEEDBACK_OFF;
 #endif
+#if FREEINK_CAP_HAPTIC
+  uint8_t hapticFeedbackLevel = HAPTIC_FEEDBACK_MEDIUM;
+#endif
   // Remove a book from the Recent Books list when its End-of-Book screen is reached (0 = off, 1 = on)
   uint8_t removeReadBooksFromRecents = 0;
   // Move epub to /Read/ folder on SD card when finished (0 = disabled, 1 = enabled)
@@ -391,13 +410,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t backShortToFileBrowser = 0;
   // Apps menu visibility. Set bits hide stable app IDs.
   static constexpr uint8_t APPS_CATALOG_VERSION = 1;
-  static constexpr uint8_t BUDDY_APP_ID = 10;
-  static constexpr uint8_t PIXEL_SWITCH_APP_ID = 12;
-  static constexpr uint32_t CHINA_ONLY_APPS_MASK = (uint32_t{1} << 1) | (uint32_t{1} << 4);
-  static constexpr uint32_t DEFAULT_HIDDEN_APPS_MASK = (uint32_t{1} << 4) | (uint32_t{1} << 5) | (uint32_t{1} << 6) |
-                                                       (uint32_t{1} << BUDDY_APP_ID) |
-                                                       (uint32_t{1} << PIXEL_SWITCH_APP_ID);
-  uint32_t hiddenAppsMask = DEFAULT_HIDDEN_APPS_MASK;
+  uint32_t hiddenAppsMask = appVisibility::DEFAULT_HIDDEN_APPS_MASK;
   uint8_t appsCatalogVersion = APPS_CATALOG_VERSION;
   uint8_t buddyClaimed = 0;
   // Image rendering mode in EPUB reader
@@ -501,7 +514,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   ReaderRenderSpec readerRenderSpec(uint16_t viewportWidth, uint16_t viewportHeight) const;
 
   static const char* getFilePath() { return "/.crosspoint/settings.json"; }
-  // Keep the UI language, service region, and regional-app defaults in sync.
+  // Keep the UI language and service region in sync; preserve app visibility.
   // The caller persists the resulting settings.
   void applyLanguageSelection(uint8_t languageIndex);
   bool loadFromFile();

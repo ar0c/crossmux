@@ -78,6 +78,8 @@ class HalGPIO {
   // placement and the flipped large-step direction in selection activities.
   // Keyed off the active BoardConfig profile, not the X3/X4 runtime detection.
   bool hasEdgeSideButtons() const;
+  // Waveshare 3.97 has a three-way wheel opposite its BOOT/PWR edge.
+  bool hasWheelAndBootButtons() const { return FREEINK_DEVICE_WAVESHARE_EPAPER_397; }
 
   // Start button GPIO and setup SPI for screen and SD card
   void begin();
@@ -87,6 +89,11 @@ class HalGPIO {
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   uint8_t physicalPressedMask() const;
+#if FREEINK_CAP_HAPTIC
+  bool wasTouchContactPressed() const;
+  void updateHapticFeedback(uint8_t level);
+  void stopHapticFeedback();
+#endif
   bool wasAnyPressed() const;
   bool wasReleased(uint8_t buttonIndex) const;
   bool wasAnyReleased() const;

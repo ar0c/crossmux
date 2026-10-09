@@ -475,6 +475,8 @@ class GfxRenderer {
   // Low level functions
   uint8_t* getFrameBuffer() const;
   size_t getBufferSize() const;
+  // Test a logical screen rectangle before drawing a small edge hint.
+  bool isRectMostlyWhite(int x, int y, int width, int height, uint32_t maxBlackPixels) const;
   uint16_t getDisplayWidth() const { return panelWidth; }
   uint16_t getDisplayHeight() const { return panelHeight; }
   uint16_t getDisplayWidthBytes() const { return panelWidthBytes; }

@@ -292,6 +292,9 @@ class BaseTheme {
   // wrapping to two lines rather than overflowing when it's too wide to fit.
   static void drawHintLabel(GfxRenderer& renderer, int fontId, const char* label, int x, int boxWidth, int boxTop,
                             int boxHeight, int singleLineYOffset);
+  // Put Waveshare wheel hints on the left and BOOT/PWR hints on the right.
+  bool drawWheelAndBootButtonHints(GfxRenderer& renderer, const char* back, const char* confirm, const char* left,
+                                   const char* right) const;
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
   // Menu row height as DRAWN by drawButtonMenu. HomeActivity builds its touch
   // grid from this, so hit bands always match the visuals (RoundedRaff derives
@@ -320,9 +323,32 @@ class BaseTheme {
   virtual void drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                    const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
                                    bool& bufferRestored, std::function<bool()> storeCoverBuffer) const;
+  // Map a horizontal tap position inside the recent-books cover strip on the
+  // home screen to the index of the cover that was touched. Single-cover
+  // themes render only one tile and return 0; multi-cover themes (Lyra3Covers
+  // and the like) override this so a touch directly selects the book whose
+  // cover the finger is on, matching what the page-turn keys already do.
+  virtual int recentBookIndexAt(int x, int screenWidth) const;
   virtual void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                               const std::function<std::string(int index)>& buttonLabel,
                               const std::function<UIIcon(int index)>& rowIcon, int rowSpacing = -1) const;
+  // Touch geometry exactly as drawButtonMenu paints it. Activities that draw a
+  // button menu must drive their row hit-testing from this, never from a fixed
+  // metrics table: Lyra draws from rect.y without the vertical offset, and the
+  // RoundedRaff / Inx themes derive the row height from the font and page the
+  // rows, so a Base-only assumption drifts from the visuals.
+  struct MenuRowGeometry {
+    int firstRowY = 0;  // y of the first visible row (theme offset applied)
+    int rowStep = 0;    // y step between visible rows
+    int rowHeight = 0;  // drawn row height (rows with a smaller height than
+                        // the step don't accept taps in the gap)
+    int pageStart = 0;  // first visible index (paging themes); 0 otherwise
+    int pageCount = 0;  // visible rows on this page; the full count otherwise
+    int xStart = 0;     // horizontal tap bounds of the row
+    int xEnd = INT32_MAX;
+  };
+  virtual MenuRowGeometry getMenuRowGeometry(const GfxRenderer& renderer, const Rect& rect, int selectedIndex,
+                                             int rowCount) const;
   virtual void drawHomeMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                             const std::function<std::string(int index)>& buttonLabel,
                             const std::function<UIIcon(int index)>& rowIcon) const;
