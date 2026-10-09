@@ -1,36 +1,87 @@
 #include "HttpDownloader.h"
 
 #include <Arduino.h>
+#include <HalMemory.h>
 #include <HalSystem.h>
 #include <Logging.h>
+#include <ResumableFetch.h>
 #include <Memory.h>
-#include <Stream.h>
-#include <base64.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
-#include <esp_wifi.h>
-
+#include <base64.h>
 #include <cstdio>
+
 #include <functional>
 #include <string>
 
-#if defined(FREEINK_NET_WOLFSSL)
-#include <SecureHttpClient.h>
+#include "WifiPowerSaveGuard.h"
 
 extern "C" void wolfSSL_Arduino_Serial_Print(const char* const msg) { LOG_DBG("WOLFSSL", "%s", msg); }
-#endif
 
 namespace {
-// RX holds the response headers. Smaller buffers leave enough contiguous heap
-// for mbedTLS on redirect-heavy OPDS feeds while still preserving the headers
-// we read directly (Location, Content-Length).
-constexpr int HTTP_RX_BUF = 2048;
-constexpr int HTTP_TX_BUF = 512;
 // Per-socket-op timeout. Some OPDS download endpoints are slow to send headers
 // (>15s) and chunked catalogs stall mid-body, so 15s killed them. 60s gives
-// slow servers room. esp_http_client's timeout_ms is uint32, so unlike Arduino
-// HTTPClient's uint16 setTimeout it doesn't silently truncate.
+// slow servers room.
 constexpr int HTTP_TIMEOUT_MS = 60000;
+
+// Ordinary content fetches go through wolfSSL, which speaks TLS 1.3 and reads
+// large bodies reliably. Fork OTA manifests use the separate CA-verified
+// transport below. Plain-http URLs still use a
+// WiFiClient here, so this is safe for non-TLS targets too. A body cut short
+// mid-transfer resumes with a Range request (see ResumableFetch.h).
+HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
+                                           const std::string& password,
+                                           const std::vector<HttpDownloader::Header>& headers,
+                                           const freeink::FetchSink& sink, const bool* cancelFlag = nullptr,
+                                           size_t* bytesOut = nullptr, const bool downgradeRedirectsToHttp = false) {
+  char userAgent[80];
+  const int length =
+      snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION, HalSystem::getDeviceModel());
+  if (length < 0 || static_cast<size_t>(length) >= sizeof(userAgent)) return HttpDownloader::HTTP_ERROR;
+  WifiPowerSaveGuard psGuard;
+  freeink::FetchOptions options;
+  options.redirectToHttp = downgradeRedirectsToHttp;
+  const freeink::FetchResult result = freeink::fetchResumable(
+      url, options,
+      [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
+        http.setTimeout(HTTP_TIMEOUT_MS);
+        http.setInsecure();
+        // setUserAgent replaces SecureHttpClient's built-in UA; addHeader would
+        // append a second User-Agent header, which strict servers reject (aiohttp
+        // answers 400 "Duplicate 'User-Agent' header found").
+        http.setUserAgent(userAgent);
+        // Credentials and caller headers stay with the starting origin; a
+        // redirect elsewhere (or to plain http) gets neither.
+        if (sameOrigin) {
+          if (!username.empty() && !password.empty()) http.setBasicAuth(username, password);
+          for (const auto& h : headers) http.addHeader(h.first, h.second);
+        }
+        LOG_DBG("HTTP", "wolfSSL GET: %s (heap %u, max block %u)", url.c_str(), (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getMaxAllocHeap());
+      },
+      sink, [cancelFlag] { return cancelFlag && *cancelFlag; });
+  if (bytesOut) *bytesOut = result.bytes;
+
+  if (result.aborted) return HttpDownloader::ABORTED;
+  if (result.stopped) return HttpDownloader::FILE_ERROR;
+  if (result.status == 401 || result.status == 403) {
+    LOG_ERR("HTTP", "wolfSSL request unauthorized: status %d: %s", result.status, url.c_str());
+    return HttpDownloader::UNAUTHORIZED;
+  }
+  if (result.status < 200 || result.status >= 300) {
+    LOG_ERR("HTTP", "wolfSSL request failed: status %d: %s", result.status, url.c_str());
+    return HttpDownloader::HTTP_ERROR;
+  }
+  if (!result.complete) {
+    LOG_ERR("HTTP", "wolfSSL incomplete: got %zu of %zu bytes", result.bytes, result.total);
+    return HttpDownloader::HTTP_ERROR;
+  }
+  return HttpDownloader::OK;
+}
+
+// Retain the fork OTA manifest transport: bounded CA-verified HTTPS, no redirects.
+constexpr int HTTP_RX_BUF = 2048;
+constexpr int HTTP_TX_BUF = 512;
 constexpr size_t READ_CHUNK = 1024;
 constexpr int MAX_REDIRECTS = 5;
 constexpr size_t DEVICE_MODEL_LENGTH_MAX = 32;
@@ -48,94 +99,12 @@ bool isRedirect(int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
-// OtaUpdater.cpp already disables WiFi power-save for firmware downloads, but
-// OPDS feed/book fetches never did despite being able to run just as long for
-// a large category. Modem sleep periodically powers the radio down between
-// DTIM beacon intervals, which can drop or stall packets mid-transfer -- more
-// likely to be hit the longer a transfer takes, so small feeds mostly get
-// away with it while a large category consistently doesn't.
-struct WifiPowerSaveGuard {
-  WifiPowerSaveGuard() {
-    esp_err_t err = esp_wifi_set_ps(WIFI_PS_NONE);
-    if (err != ESP_OK) LOG_ERR("HTTP", "Failed to disable WiFi power-save: %d", err);
-  }
-  ~WifiPowerSaveGuard() {
-    esp_err_t err = esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-    if (err != ESP_OK) LOG_ERR("HTTP", "Failed to restore WiFi power-save: %d", err);
-  }
-};
-
-#if defined(FREEINK_NET_WOLFSSL)
-HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std::string& username,
-                                         const std::string& password, const char* userAgent, Sink& sink) {
-  WifiPowerSaveGuard psGuard;
-  std::string url = startUrl;
-
-  for (int hop = 0; hop <= MAX_REDIRECTS; ++hop) {
-    freeink::SecureHttpClient http;
-    http.setTimeout(HTTP_TIMEOUT_MS);
-    http.setInsecure();
-    if (!http.begin(url)) {
-      LOG_ERR("HTTP", "wolfSSL bad URL: %s", url.c_str());
-      return HttpDownloader::HTTP_ERROR;
-    }
-    // setUserAgent replaces SecureHttpClient's built-in UA; addHeader would
-    // append a second User-Agent header, which strict servers reject (aiohttp
-    // answers 400 "Duplicate 'User-Agent' header found").
-    http.setUserAgent(userAgent);
-    if (!username.empty() && !password.empty()) {
-      const std::string credentials = username + ":" + password;
-      const String encoded = base64::encode(credentials.c_str());
-      http.addHeader("Authorization", std::string("Basic ") + encoded.c_str());
-    }
-
-    LOG_DBG("HTTP", "wolfSSL GET: %s", url.c_str());
-    const int status = http.GET(
-        [&http, &sink](const uint8_t* data, size_t len) {
-          if (http.getStatus() != 200) return true;
-          if (sink.total == 0 && http.hasContentLength()) sink.total = http.getContentLength();
-          if (!sink.write(data, len)) return false;
-          sink.downloaded += len;
-          if (sink.progress && sink.total > 0) sink.progress(sink.downloaded, sink.total);
-          return true;
-        },
-        [&sink]() { return sink.cancelFlag && *sink.cancelFlag; });
-
-    if (http.aborted()) return HttpDownloader::ABORTED;
-    if (status < 0) {
-      LOG_ERR("HTTP", "wolfSSL request failed: status=%d url=%s", status, url.c_str());
-      return HttpDownloader::HTTP_ERROR;
-    }
-    if (isRedirect(status)) {
-      const std::string location = http.getHeader("location");
-      if (location.empty() || !freeink::SecureHttpClient::resolveUrl(url, location, url)) {
-        LOG_ERR("HTTP", "wolfSSL bad redirect: %d", status);
-        return HttpDownloader::HTTP_ERROR;
-      }
-      continue;
-    }
-    if (status != 200) {
-      LOG_ERR("HTTP", "wolfSSL unexpected status: %d", status);
-      return HttpDownloader::HTTP_ERROR;
-    }
-    if (http.callbackAborted()) return HttpDownloader::FILE_ERROR;
-    if (!http.responseComplete()) {
-      LOG_ERR("HTTP", "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
-      return HttpDownloader::HTTP_ERROR;
-    }
-    return HttpDownloader::OK;
-  }
-  LOG_ERR("HTTP", "too many redirects");
-  return HttpDownloader::HTTP_ERROR;
-}
-#endif
-
 // Streams a GET body through sink.write in READ_CHUNK pieces. Uses the manual
 // open/fetch_headers/read path rather than esp_http_client_perform(): perform()
 // pushes the whole body through an event callback and reports a chunked body
 // that ends early as ESP_ERR_HTTP_INCOMPLETE_DATA, whereas the read loop streams
 // large/slow files and surfaces a short read directly.
-HttpDownloader::DownloadError runGet(const std::string& url, const std::string& username, const std::string& password,
+HttpDownloader::DownloadError runGetVerified(const std::string& url, const std::string& username, const std::string& password,
                                      const char* userAgent, Sink& sink, const bool allowRedirects = true) {
   WifiPowerSaveGuard psGuard;
   esp_http_client_config_t config = {};
@@ -235,98 +204,95 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   return HttpDownloader::OK;
 }
 
-// General HTTP(S) fetches use wolfSSL when it is active: it speaks TLS 1.3
-// and reads large bodies from servers where the esp_http_client/mbedTLS path
-// fails. OTA explicitly uses the CA-verified ESP path above. Plain HTTP still
-// uses a WiFiClient inside runGetWolf.
-HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
-                                           const std::string& password, Sink& sink, const bool verified = false) {
-  char userAgent[USER_AGENT_CAPACITY];
-  const int userAgentLength =
-      snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION, HalSystem::getDeviceModel());
-  if (userAgentLength < 0 || static_cast<size_t>(userAgentLength) >= sizeof(userAgent)) {
-    LOG_ERR("HTTP", "User-Agent exceeds %zu bytes", sizeof(userAgent));
-    return HttpDownloader::HTTP_ERROR;
-  }
-  // OTA's public endpoint uses the bundled CA roots and refuses redirects.
-  // Other downloads retain the wolfSSL path for TLS 1.3-only hosts.
-  if (verified) return runGet(url, "", "", userAgent, sink, false);
-#if defined(FREEINK_NET_WOLFSSL)
-  return runGetWolf(url, username, password, userAgent, sink);
-#else
-  return runGet(url, username, password, userAgent, sink);
-#endif
-}
 }  // namespace
+
+bool HttpDownloader::hasMemoryForTls() {
+  const auto available = HalMemory::getDefaultHeap();
+  if (available.freeBytes >= MIN_TLS_FREE_HEAP && available.largestBlockBytes >= MIN_TLS_MAX_ALLOC) return true;
+
+  const auto internal = HalMemory::getInternalHeap();
+  const auto psram = HalMemory::getPsramHeap();
+  LOG_ERR("HTTP",
+          "TLS preflight rejected: default free=%zu largest=%zu, internal free=%zu largest=%zu, "
+          "PSRAM free=%zu largest=%zu",
+          available.freeBytes, available.largestBlockBytes, internal.freeBytes, internal.largestBlockBytes,
+          psram.freeBytes, psram.largestBlockBytes);
+  return false;
+}
 
 bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const std::string& username,
                               const std::string& password) {
-  LOG_DBG("HTTP", "Fetching: %s", url.c_str());
-  Sink sink;
-  sink.write = [&outContent](const uint8_t* data, size_t len) { return outContent.write(data, len) == len; };
-  return runGetSecure(url, username, password, sink) == OK;
-}
-
-bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, const std::string& username,
-                              const std::string& password) {
-  LOG_DBG("HTTP", "Fetching: %s", url.c_str());
-  outContent.clear();  // start clean; the sink appends, so don't carry prior content
-  Sink sink;
-  sink.write = [&outContent](const uint8_t* data, size_t len) {
-    outContent.append(reinterpret_cast<const char*>(data), len);
-    return true;
-  };
-  return runGetSecure(url, username, password, sink) == OK;
+  return fetchUrl(
+      url, [&outContent](const uint8_t* data, size_t len) { return outContent.write(data, len) == len; }, username,
+      password);
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username,
                               const std::string& password) {
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
-  Sink sink;
+  freeink::FetchSink sink;
   sink.write = onData;
-  return runGetSecure(url, username, password, sink) == OK;
+  return runGetSecure(url, username, password, {}, sink) == OK;
 }
 
 bool HttpDownloader::fetchVerifiedUrl(const std::string& url, const DataCallback& onData) {
   if (!url.starts_with("https://ooo.ar0c.com/releases/download/")) return false;
+  char userAgent[USER_AGENT_CAPACITY];
+  const int length = snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION,
+                              HalSystem::getDeviceModel());
+  if (length < 0 || static_cast<size_t>(length) >= sizeof(userAgent)) return false;
   Sink sink;
   sink.write = onData;
-  return runGetSecure(url, "", "", sink, true) == OK;
+  return runGetVerified(url, "", "", userAgent, sink, false) == OK;
 }
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
-                                                             ProgressCallback progress, bool* cancelFlag,
-                                                             const std::string& username, const std::string& password) {
+                                                             ProgressCallback progress, const bool* cancelFlag,
+                                                             const std::string& username, const std::string& password,
+                                                             const std::vector<Header>& headers,
+                                                             bool downgradeRedirectsToHttp) {
   LOG_DBG("HTTP", "Downloading: %s -> %s", url.c_str(), destPath.c_str());
 
-  if (Storage.exists(destPath.c_str())) {
-    Storage.remove(destPath.c_str());
-  }
+  // Stage in <dest>.part: a failed or cancelled download never replaces an
+  // existing copy, and a partial file never sits under the real name.
+  const std::string partPath = destPath + ".part";
+  Storage.remove(partPath.c_str());
   HalFile file;
-  if (!Storage.openFileForWrite("HTTP", destPath.c_str(), file)) {
+  if (!Storage.openFileForWrite("HTTP", partPath.c_str(), file)) {
     LOG_ERR("HTTP", "Failed to open file for writing");
     return FILE_ERROR;
   }
 
-  Sink sink;
-  sink.progress = std::move(progress);
-  sink.cancelFlag = cancelFlag;
+  freeink::FetchSink sink;
   sink.write = [&file](const uint8_t* data, size_t len) { return file.write(data, len) == len; };
+  // Reopening for write truncates: the server restarted the body from byte 0.
+  sink.rewind = [&file, &partPath] {
+    file.close();
+    return Storage.openFileForWrite("HTTP", partPath.c_str(), file);
+  };
+  sink.progress = progress;
 
-  const DownloadError result = runGetSecure(url, username, password, sink);
+  size_t downloaded = 0;
+  const DownloadError result =
+      runGetSecure(url, username, password, headers, sink, cancelFlag, &downloaded, downgradeRedirectsToHttp);
   // Close before any remove() on the same path; DESTRUCTOR_CLOSES_FILE would
-  // otherwise close only after the remove.
-  file.close();
+  // otherwise close only after the remove. A failed rewind leaves no open handle.
+  if (file.isOpen()) file.close();
 
   if (result != OK) {
-    Storage.remove(destPath.c_str());
+    Storage.remove(partPath.c_str());
     return result;
   }
-  if (sink.downloaded == 0) {
+  if (downloaded == 0) {
     LOG_ERR("HTTP", "no data received");
-    Storage.remove(destPath.c_str());
+    Storage.remove(partPath.c_str());
     return HTTP_ERROR;
   }
-  LOG_DBG("HTTP", "Downloaded %zu bytes", sink.downloaded);
+  if (!Storage.replaceFile(partPath.c_str(), destPath.c_str())) {
+    LOG_ERR("HTTP", "Failed to move download into place: %s", destPath.c_str());
+    Storage.remove(partPath.c_str());
+    return FILE_ERROR;
+  }
+  LOG_DBG("HTTP", "Downloaded %zu bytes", downloaded);
   return OK;
 }

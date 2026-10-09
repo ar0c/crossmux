@@ -32,9 +32,16 @@ START = "            def integrated_middleware(env, node):"
 END = "            # Replace all middlewares"
 MARKER = "            # CrossMux: preserve middleware patterns and source replacements\n"
 PINNED_HASH = "4bfa0220fd5a61e72b0a79fbed8ddad54b117fbda8edf42a2ef8256456670338"
+# Platform 55.03.311 no longer installs an integrated middleware dispatcher.
+# It uses SCons response files for Windows command lengths, leaving Core's
+# pattern matching and replacement-object handling intact. Recognize only the
+# reviewed, complete builder source; an unknown platform still fails closed.
+RESPONSE_FILE_BUILDER_HASH = "b6763e4165b4c79c7cb481dd4e3d705397460e72062fc5b6be762ca6e5fc3009"
 
 
 def patch_source(source):
+    if hashlib.sha256(source.encode()).hexdigest() == RESPONSE_FILE_BUILDER_HASH:
+        return source
     replacement = MARKER + textwrap.indent(inspect.getsource(make_middleware), "            ")
     replacement += (
         "\n            integrated_middleware = make_middleware(\n"

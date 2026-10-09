@@ -95,10 +95,13 @@ jobs:
       runner_status_token: ${{ secrets.H2O_RUNNER_TOKEN }}
 
   build:
-    name: Build simulator, X4 Pro and Waveshare 3.97
+    name: Build Waveshare 3.97
     needs: select_runner
     runs-on: ${{ fromJSON(needs.select_runner.outputs['runs-on']) }}
     steps:
+      - name: Isolate PlatformIO toolchains
+        run: echo "PLATFORMIO_CORE_DIR=$RUNNER_TEMP/.platformio-$GITHUB_RUN_ID-$GITHUB_JOB" >> "$GITHUB_ENV"
+
       - name: Use runner temporary directory
         # Avoid the self-hosted runner's shared /tmp tmpfs.
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -115,7 +118,7 @@ jobs:
         if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libssl-dev
+          sudo apt-get install -y libsdl2-dev libssl-dev xvfb
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -124,29 +127,32 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO Core
-        run: uv pip install --system -U pioarduino==6.1.19
+        run: uv pip install --system -U pioarduino==6.2.0
+
+      - name: Prepare platform tools
+        run: python scripts/patch_pioarduino_cache.py --prepare-platform
 
       - name: Cache PlatformIO packages
         if: runner.environment == 'github-hosted'
         uses: actions/cache@v4
         with:
-          path: ~/.platformio/.cache
+          path: ${{ env.PLATFORMIO_CORE_DIR }}/.cache
           key: pio-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-cache-${{ runner.os }}-
 
-      - name: Build simulator and supported S3 hardware
+      - name: Build simulator and Waveshare 3.97 hardware
         run: |
           set -euo pipefail
           export CROSSPOINT_RC_HASH="${GITHUB_SHA::7}"
+          export CROSSPOINT_BUILD_KIND=rc
           pio run \
             -e simulator \
-            -e x4pro_nightly \
             -e waveshare_epaper_397_nightly | tee pio.log
 
       - name: Record firmware stats
         run: |
           {
-            echo "## Simulator and S3 hardware build stats"
+            echo "## Waveshare 3.97 hardware build stats"
             echo '```text'
             grep -E '^Processing |RAM:\s|Flash:\s' pio.log || true
             echo '```'
@@ -155,7 +161,7 @@ jobs:
       - name: Verify hardware packages
         run: |
           set -euo pipefail
-          for target in xteink_x4_pro waveshare_epaper_397; do
+          for target in waveshare_epaper_397; do
             python3 scripts/package_nightly_target.py "$target" --channel nightly
             (cd "dist/nightly/$target" && sha256sum --check *-SHA256SUMS)
           done

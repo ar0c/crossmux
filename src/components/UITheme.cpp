@@ -1,16 +1,26 @@
 #include "UITheme.h"
 
+#include <EpdFont.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
+#include <HalMemory.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <builtinFonts/notosans_18_bold.h>
+#include <builtinFonts/notosans_18_regular.h>
+#include <builtinFonts/ubuntu_10_bold.h>
+#include <builtinFonts/ubuntu_10_regular.h>
+#include <builtinFonts/ubuntu_12_bold.h>
+#include <builtinFonts/ubuntu_12_regular.h>
 
 #include <algorithm>
 #include <memory>
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
+#include "components/CoverGridHomeUi.h"
 #include "components/SelectionCursorPolicy.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/inx/InxTheme.h"
@@ -18,6 +28,42 @@
 #include "components/themes/lyra/LyraCarouselTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
+#include "platform/InputCapabilities.h"
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+#include <builtinFonts/notosans_14_bold.h>
+#include <builtinFonts/notosans_14_regular.h>
+#include <builtinFonts/notosans_16_bold.h>
+#include <builtinFonts/notosans_16_regular.h>
+#endif
+
+// The registered families keep these stable addresses across theme changes.
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+EpdFont ui10RegularFont(&notosans_14_regular);
+EpdFont ui10BoldFont(&notosans_14_bold);
+EpdFont ui12RegularFont(&notosans_16_regular);
+EpdFont ui12BoldFont(&notosans_16_bold);
+#else
+EpdFont ui10RegularFont(&ubuntu_10_regular);
+EpdFont ui10BoldFont(&ubuntu_10_bold);
+EpdFont ui12RegularFont(&ubuntu_12_regular);
+EpdFont ui12BoldFont(&ubuntu_12_bold);
+#endif
+
+extern EpdFont offlineReaderFont;
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+EpdFont ui18RegularFont(&notosans_16_regular);
+EpdFont ui18BoldFont(&notosans_16_bold);
+EpdFontFamily control18FontFamily(&ui12RegularFont, &ui12BoldFont);
+#else
+EpdFont ui18RegularFont(&notosans_18_regular);
+EpdFont ui18BoldFont(&notosans_18_bold);
+
+// Fixed control faces share the existing bitmap data; theme reload never mutates them.
+static EpdFont control18RegularFont(&notosans_18_regular);
+static EpdFont control18BoldFont(&notosans_18_bold);
+EpdFontFamily control18FontFamily(&control18RegularFont, &control18BoldFont);
+
+#endif
 
 UITheme UITheme::instance;
 
@@ -27,18 +73,36 @@ UITheme::UITheme() {
 }
 
 void UITheme::reload() {
+  const bool inx = SETTINGS.uiTheme == CrossPointSettings::INX;
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+  (void)inx;
+  ui18RegularFont.data = &notosans_16_regular;
+  ui18BoldFont.data = &notosans_16_bold;
+#else
+  ui18RegularFont.data = inx ? offlineReaderFont.data : &notosans_18_regular;
+  ui18BoldFont.data = inx ? offlineReaderFont.data : &notosans_18_bold;
+#endif
   auto themeType = static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme);
   setTheme(themeType);
 }
 
+bool UITheme::supportsCoverGrid() { return HalMemory::getPsramHeap().totalBytes > 0; }
+
+bool UITheme::hasCoverGridHome() { return SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && supportsCoverGrid(); }
+
+void UITheme::drawCoverGridHome(CoverGridHomeUi& home) { home.renderUi(); }
+
 void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   std::unique_ptr<BaseTheme> nextTheme;
   const ThemeMetrics* nextMetrics = &BaseMetrics::values;
+  if (type == CrossPointSettings::COVER_GRID && !supportsCoverGrid()) type = CrossPointSettings::LYRA;
+
   switch (type) {
     case CrossPointSettings::UI_THEME::CLASSIC:
       LOG_DBG("UI", "Using Classic theme");
       nextTheme = makeUniqueNoThrow<BaseTheme>();
       break;
+    case CrossPointSettings::UI_THEME::COVER_GRID:
     case CrossPointSettings::UI_THEME::LYRA:
       LOG_DBG("UI", "Using Lyra theme");
       nextTheme = makeUniqueNoThrow<LyraTheme>();
@@ -92,8 +156,9 @@ const ThemeMetrics& UITheme::getMetrics() const {
   const bool showButtonHints = currentTheme->buttonHintsVisible();
   if (!metricsValid || showButtonHints != metricsForButtonHints) {
     adjustedMetrics = *currentMetrics;
+    UiHighDpiProfile::apply(adjustedMetrics);
     // Waveshare hints follow the wheel and BOOT/PWR edges, not the footer.
-    if (!showButtonHints || gpio.hasWheelAndBootButtons()) {
+    if (!showButtonHints || inputCapabilities::hasWheelAndBootButtons(gpio)) {
       adjustedMetrics.buttonHintsHeight = 0;
     }
     metricsForButtonHints = showButtonHints;
@@ -126,16 +191,22 @@ int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader
       orientation != GfxRenderer::Orientation::LandscapeCounterClockwise) {
     reservedHeight += metrics.verticalSpacing + metrics.buttonHintsHeight;
   }
-  const int availableHeight = renderer.getScreenHeight() - reservedHeight - extraReservedHeight;
+  const int availableHeight =
+      UITheme::getInstance().getScreenSafeArea(renderer).height - reservedHeight - extraReservedHeight;
   return UITheme::getInstance().getTheme().getListPageItems(availableHeight, hasSubtitle);
 }
 
-// Screen area excluding the button hints
+// Screen area excluding the bezel and button hints.
 Rect UITheme::getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints, bool hasSideButtonHints) {
   auto orientation = renderer.getOrientation();
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
   Rect safeArea = Rect{0, 0, screenWidth, screenHeight};
+#if FREEINK_DEVICE_READPICO
+  int top, right, bottom, left;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  safeArea = Rect{left, top, screenWidth - left - right, screenHeight - top - bottom};
+#endif
   const ThemeMetrics metrics = getMetrics();
   switch (orientation) {
     case GfxRenderer::Orientation::Portrait:
@@ -182,7 +253,7 @@ UIIcon UITheme::getFileIcon(const std::string& filename) {
   if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {
     return Text;
   }
-  if (FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename)) {
+  if (FsHelpers::hasImageExtension(filename)) {
     return Image;
   }
   return File;
@@ -202,6 +273,19 @@ int UITheme::getProgressBarHeight() {
   const ThemeMetrics metrics = UITheme::getInstance().getMetrics();
   const auto sb = SETTINGS.statusBarSpec();
   return sb.showsProgressBar() ? (sb.progressBarHeightPx + metrics.progressBarMarginTop) : 0;
+}
+
+int UITheme::getStatusBarTextTopPadding(const GfxRenderer& renderer) {
+  if (!UiHighDpiProfile::enabled) return 0;
+#if FREEINK_DEVICE_READPICO
+  constexpr int textFontId = READER_STATUS_FONT_ID;
+#else
+  constexpr int textFontId = SMALL_FONT_ID;
+#endif
+  const int lineHeight =
+      std::max(renderer.getLineHeight(textFontId), renderer.getLineHeight(BaseTheme::STATUS_NUMERIC_FONT_ID));
+  return std::max(0, UITheme::getInstance().getMetrics().statusBarVerticalMargin - lineHeight -
+                         UiHighDpiProfile::readerStatusBottomPadding);
 }
 
 // Centered text implementation that takes the safe area into account

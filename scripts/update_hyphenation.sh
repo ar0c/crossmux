@@ -17,12 +17,4 @@ process() {
 }
 
 process en
-process fr
-process de
-process es
-process ru
-process it
-process uk
-process pl
-process sv
-process fi
+# Chinese has no Liang dictionary; its CJK breaking is implemented in the reader.

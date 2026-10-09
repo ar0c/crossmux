@@ -107,7 +107,7 @@ struct Diagnostic {
     // A buffer shorter than the fixed JSON prefix cannot hold a valid record.
     // Return before snprintf so small-capacity callers do not write fragments.
     constexpr char kJsonPrefix[] = "{\"schema\":3,\"stage\":\"";
-    if (capacity < sizeof(kJsonPrefix)) return 0;
+    if (!out || capacity < sizeof(kJsonPrefix)) return 0;
     const int n = std::snprintf(
         out, capacity,
         "{\"schema\":3,\"stage\":\"%s\",\"error\":%d,\"http\":%d,\"detail\":%d,\"queue\":%u,\"phase\":%u,\"issue\":%u,"

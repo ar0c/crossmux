@@ -7,6 +7,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -98,12 +99,16 @@ def verify_firmware(path, chip_id, board_tag):
     raise SystemExit(f'{path.name} does not contain board tag {board_tag!r}')
 
 
-def package_target(root, target_id, channel, output):
+def package_target(root, target_id, channel, output, *, source_sha=None, embedded_version=None, build_root=None):
+    if (source_sha is None) != (embedded_version is None):
+        raise ValueError('local source SHA and embedded version must be supplied together')
+    if source_sha is not None and not re.fullmatch(r'[0-9a-f]{40}', source_sha):
+        raise ValueError('local source SHA must be a full Git object ID')
     target = TARGETS[target_id]
     if channel not in target['supportedChannels']:
         raise SystemExit(f'{target_id} does not support the {channel} channel')
     environment = environment_for(target_id, channel, 'global')
-    build = root / '.pio/build' / environment
+    build = (build_root or root / '.pio/build') / environment
     output.mkdir(parents=True, exist_ok=True)
     verify_partition_csv(root)
 
@@ -128,7 +133,7 @@ def package_target(root, target_id, channel, output):
 
     config = configparser.ConfigParser()
     config.read(root / 'platformio.ini', encoding='utf-8')
-    short_sha = git_value(root, 'rev-parse', '--short=7', 'HEAD')
+    short_sha = git_value(root, 'rev-parse', '--short=7', 'HEAD') if embedded_version is None else None
     manifest = {
         'schemaVersion': 1,
         'channel': channel,
@@ -139,13 +144,15 @@ def package_target(root, target_id, channel, output):
         'supportedChannels': target['supportedChannels'],
         'environment': environment,
         'chip': target['chip'],
-        'version': version_for(
+        'version': embedded_version or version_for(
             config['crosspoint']['version'], target_id, channel, 'global', short_sha
         ),
-        'crossmuxSha': git_value(root, 'rev-parse', 'HEAD'),
+        'crossmuxSha': source_sha or git_value(root, 'rev-parse', 'HEAD'),
         'sdkSha': git_value(root / 'freeink-sdk', 'rev-parse', 'HEAD'),
         'assets': assets,
     }
+    if source_sha is not None:
+        manifest['sourceKind'] = 'git-tree-local'
     if target['fullInstall']:
         manifest['partitionProfile'] = 'crossmux-sticky-v1'
         manifest['flash'] = {'size': 0x1000000, 'mode': 'dio', 'frequency': '80m'}

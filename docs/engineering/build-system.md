@@ -1,5 +1,8 @@
 # Build System & Build Flags
 
+> Current scope (2026-10-08): only Waveshare ePaper 3.97 development/Nightly firmware is maintained, built, checked and packaged. X4 Pro instructions below describe retired history, not an active build/release target. Previous releases/backups are retained. Embedded hyphenation patterns are English-only; Chinese uses existing CJK breaking without a dictionary. UI translations and font glyph coverage are unchanged. No Stable firmware target is configured.
+
+
 > Deep reference for [AGENTS.md](../../AGENTS.md). Covers PlatformIO usage, the
 > build environments, the critical build flags that change firmware behavior, and
 > personal local overrides.
@@ -32,40 +35,43 @@ Install packages through PlatformIO; do not copy a mutable/customized framework
 from another checkout. An explicit `PLATFORMIO_CORE_DIR` still overrides this
 default for the isolated cache-switch tests below.
 
+## Tool initialization
+
+Use pioarduino 6.2.0 with pinned platform 55.03.311. In a new project-local
+tool directory, install the Core and prepare its installer before building:
+
+```bash
+python -m pip install pioarduino==6.2.0
+python scripts/patch_pioarduino_cache.py --prepare-platform
+```
+
+Preparation removes the platform installer's SCons replacement; the Core still
+supplies SCons. Keep each build job's tool directory isolated and include
+`.platformio` in its path for the framework-restoration check. Ubuntu cppcheck
+also needs `libpcre3`. X4 Pro and Waveshare use application LTO with their
+prebuilt `dio_opi` TinyUSB core to fit the existing 6.25 MiB OTA partitions.
+
 ## Build Environment
 
 ### ar0c fork identity
 
-The `x4pro` development target uses `YYMMDD-HHMMSS-ar0c-<base>-x4pro`
-(China-time build stamp; base version read from `platformio.ini`). Startup, About, and `/api/status`
-share `CROSSPOINT_VERSION`. The startup/About firmware name is `crossmux-ar0c`,
-with English fallback for other UI languages. Hardware model, chip, MAC,
-statistics, partition layout, and USB descriptors are unchanged.
-
-On a successful development image build, `scripts/git_branch.py` exports an
-identical `crossmux-ar0c-*.bin` copy beside PlatformIO's internal `firmware.bin`.
-X4 Pro uses `crossmux-ar0c-YYMMDD-HHMMSS-<image-sha256-prefix8>-x4pro.bin`;
-other development targets include the base version, device, Git revision, and
-image digest. The digest distinguishes local uncommitted builds sharing the
-same Git revision; these are local development artifacts, not a tagged release.
-Commit the intended source when explicitly requested for a revision-based release.
-Build targets retain their existing runtime version generation;
-upstream OTA endpoints are not redirected by this branding change.
+The `waveshare_epaper_397` development target uses `<base>-<revision7>-ws397-dev`.
+Startup, About and `/api/status` share `CROSSPOINT_VERSION` and the `crossmux-ar0c`
+firmware name. Successful builds export an identical digest-named application
+binary beside PlatformIO's `firmware.bin`; revision plus image digest identifies
+local development artifacts. X4 Pro builds and exports are retired.
 
 * **Standard**: C++20 (`-std=c++2a`). No Exceptions, No RTTI.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.
 * **Environments** (in `platformio.ini`):
-  * `x4pro`: Default X4 Pro development build (LOG_LEVEL=2, serial enabled)
-  * `x4pro-gh_release`: X4 Pro stable release build
-  * `x4pro-gh_release_rc`, `x4pro_nightly`: X4 Pro release candidate and Nightly
   * `waveshare_epaper_397`: Waveshare ePaper 3.97 development build
   * `waveshare_epaper_397_nightly`: Waveshare Nightly build
   * `simulator`: Native desktop simulator for UI development
 
-The two S3 environments are separate hardware binaries, each with one unified
-language firmware. Routine CI and Hardware CI build only these boards.
+Development and Nightly environments build the same Waveshare board, with one unified
+language firmware. Routine CI and Hardware CI build only this physical board.
 
-Bluetooth Page Turner Beta is compiled into both hardware targets,
+Bluetooth Page Turner Beta is compiled into the Waveshare hardware target,
 including development, Nightly, release-candidate, and stable builds.
 The runtime Bluetooth switch defaults to off; native simulators use SDK stubs.
 Both S3 hardware profiles inherit the PSRAM and IPC configuration and retain
@@ -103,7 +109,7 @@ export PLATFORMIO_CORE_DIR="$PWD/.platformio/ble-psram"
 export PLATFORMIO_BUILD_DIR="$PWD/.pio/ble-psram-build"
 export PLATFORMIO_BUILD_CACHE_DIR="$PWD/.cache/ble-psram"
 export IDF_COMPONENT_CACHE_PATH="$PWD/.cache/ble-psram-idf-components"
-pio run -e x4pro_nightly
+pio run -e waveshare_epaper_397_nightly
 pio run -e waveshare_epaper_397_nightly
 ```
 
@@ -114,7 +120,7 @@ nonzero PSRAM capacity and a successful allocator probe before connection tests.
 
 ## Windows middleware compatibility
 
-The pinned pioarduino 55.03.37 Windows dispatcher ignores middleware file
+The pinned pioarduino Windows dispatcher ignores middleware file
 patterns and temporarily replaces `Object()` with a function returning `None`.
 This breaks BLE generated-source compilation and per-library configuration.
 `scripts/patch_windows_middleware.py` applies a hash-guarded, idempotent repair
@@ -150,6 +156,14 @@ keys are Up/Down, `P` is Power, mouse input provides touch, and `S` sleeps.
 This simulator covers UI, input, RTC state,
 and sleep/wake flows. It does not emulate EPD waveforms or ghosting, bus timing,
 SDMMC contention, PSRAM, or power consumption.
+
+Read Pico uses its 103,968-byte B/W framebuffer, sixteen-level image transactions,
+and the same 12/12/14 pt SD UI font selection as the hardware. The window fits the
+usable desktop area without upscaling; screenshots retain the logical panel size
+and current rotation, independent of the window's scale or HiDPI density. Existing
+device window and screenshot behavior is retained. Read Pico has no frontlight or
+Home key; Up/Escape/Down represent its capacitive strip, `P` is Power, and only
+Power wakes it. See [the device guide](read-pico.md#desktop-simulator).
 
 ## Critical Build Flags
 These flags in `platformio.ini` fundamentally affect firmware behavior:
@@ -203,12 +217,12 @@ These flags in `platformio.ini` fundamentally affect firmware behavior:
 **Example** `platformio.local.ini`:
 ```ini
 # platformio.local.ini (gitignored)
-[env:x4pro]
+[env:waveshare_epaper_397]
 upload_port = COM7              # Windows: COMx, Linux: /dev/ttyUSBx
 monitor_port = COM7
 
 build_flags =
-  ${x4pro_hardware.build_flags}
+  ${waveshare_epaper_397_hardware.build_flags}
   -DMY_DEBUG_FLAG=1             # Personal debug flags
   -DTEST_FEATURE_ENABLED=1
 ```
@@ -224,3 +238,28 @@ build_flags =
 - Use `${base.build_flags}` to extend (not replace) base flags
 
 See also: [getting-started](../contributing/getting-started.md) for first-time toolchain setup, [testing-and-debugging.md](testing-and-debugging.md) for build/monitor commands.
+
+### Fixed local integration builds (2026-10-02)
+
+The SDK/Simulator/Reader pins are `98b4e427`, `20e73803`, and `38280863`.
+Use the real source exports recorded by `sync-upstream start --local-rehearsal`;
+record their complete Git tree fingerprints with validation artifacts. The SDK
+fork includes all six ReadPico fixes through `e3550ec`. Production dependency
+commits remain unchanged during rehearsal; the ignored local PlatformIO config
+selects reviewed exports. No commit, push, PR or flashing is part of this stage.
+
+Validate `default`, `gh_release`, `readpico`, `readpico_nightly`, and `metalio_eink4`,
+and all six existing simulator environments. Only the explicit ReadPico profiles
+use high-density metrics. Keep host tests, whole-page visuals, Flash/static RAM,
+and physical-device acceptance as separate results.
+
+The integrated SD catalog retains at most 48KiB of row/container data and checks
+32KiB free-heap plus 4KiB contiguous headroom before growth. Installed discovery
+is bounded to 32 entries, reuses root lookup instead of keeping every seen name,
+and rejects excess picker/history growth with a log. Manifest/title/description
+inputs are bounded; JSON rows accept 768-byte fields, 64 bundle files and 4KiB
+total captured text, with 32 nesting/path segments and 128-byte keys. Browse
+responses remain on SD (up to 1MiB), while API responses retain the upstream
+48KiB cap and fallible Arduino String reserve. TLS is released before downloads
+and on exit. These limits protect C3 shared code; simulator heap numbers are
+synthetic and do not verify hardware runtime headroom.

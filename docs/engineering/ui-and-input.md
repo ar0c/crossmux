@@ -115,6 +115,31 @@ may run after the edge's frame. Do not simulate consumption with another
 Touch input remains independent; only arm a physical-button barrier when that
 button is actually held.
 
+Home's Back-to-Standby shortcut is owned by `ActivityManager`, before the home
+Activity's input loop. It applies to all `HomeActivity` themes, including Cover
+Grid, and to INX Recent while focus is on the tabs. All use
+`standbyShortcutEnabled`; selecting Standby directly in Apps remains independent.
+The shortcut defaults to off on first boot, after restoring system settings, or
+when the saved settings omit this key. Existing saved On/Off values are preserved;
+users can enable it in Display settings.
+The manager requires a local logical Back press followed by release, or a
+completed touch Back gesture that publishes both edges in the same frame.
+Push/Pop/Replace cancel the old pair; activation and parent restoration seed a
+release barrier from the held state. Tab/focus actions and consumed long-press
+releases also cancel the pair. An inherited hold never blocks independent touch
+navigation, and its release cannot activate Standby. INX content Back returns to
+the tabs, and other tabs return to Recent; entering Standby requires a new gesture.
+This ownership guard does not change the SDK's button debounce interval.
+
+Run `python3 scripts/tests/test_reading_ui_regressions.py` for the production
+dispatch/transition regression cases. Enable the shortcut before testing its
+activation. On ReadPico, hold the middle strip key to
+exit the crash report, then release after Home appears: it must stay on Home.
+A fresh middle-key press/release must enter Standby exactly once. Repeat on INX,
+Classic, carousel, and Cover Grid, including returning from the control center
+and disabling the shortcut. In INX content focus, the first Back returns to the
+tabs; only a subsequent gesture enters Standby.
+
 Settings enums normally cycle in place when they have two choices and open an
 `OptionPopup` when they have more. A dynamic enum marked with
 `withManagedEnumPicker()` always opens the popup and receives callbacks only
@@ -162,7 +187,27 @@ action**.
 * INX top-level tabs are owned by `ActivityManager`; only Activities with a
   non-`None` `MainTab` participate. Left/Right and tab touches are consumed
   before the page sees them, while reader and feature subpages remain outside
-  the top-level loop.
+  the top-level loop. `SETTINGS.inxTabPosition` places this shared bar at the
+  top or bottom; touch devices default to the bottom. In bottom mode, touch
+  devices share a 28 px top status bar across all five main tabs, with the clock
+  on the left and battery on the right. It uses the configured clock format,
+  time zone and battery percentage visibility, and updates only when the page
+  renders. Tapping the status bar opens the control center. Its drawing and hit
+  region share the main-tab layout, which also reserves viewable margins and
+  at least 6 px between the status bar, content and navigation. With top tabs,
+  the touch INX Recent page displays only its bottom-right battery inside the
+  existing 40 px footer reservation; it neither formats nor draws a footer clock
+  and has no new touch action. Both placements use a 12 px logical-screen-edge
+  inset, clamped to the board's oriented viewable margins rather than added to
+  them. Clock and battery percentage share the numeric font and text baseline;
+  positioning compensates for the battery icon's internal 6 px vertical offset. The clock
+  uses a 9-byte stack buffer. Non-touch devices retain their existing home battery.
+  `Activity::mainTabLayout()` resolves complete status, content and navigation
+  rectangles in one pass; `pageContentRect()` also owns the normal-header
+  fallback, so pages do not repeat the main-tab eligibility/layout calculation.
+  Bottom navigation is 56 px high, with 38 px icons, 6 px bottom padding and
+  a 38 × 5 px top selection marker. Only top navigation draws a full-width
+  separator; device viewable margins and button-hint reservations remain additional.
 * `GUI.drawProgressBar()` returns the first free Y coordinate after the bar and
   optional percentage line. Callers place following text from that value rather
   than reproducing the theme's font or spacing calculations.
@@ -206,6 +251,17 @@ framebuffer or SD font is needed.
 The default sleep screen is Light. Existing saved sleep-screen selections are
 preserved; the default applies when no selection has been saved.
 
+### WiFi connection status
+
+Touch and button devices share the upstream connection layout: the connection
+status is centered above the SSID, which retains the translated "to" prefix.
+On touch devices the text uses the body below the header/MAC band and above
+the Cancel/Show Networks buttons, rather than placing the SSID in a top-aligned
+text area. Scanning displays only the centered status. Physical button hints
+remain exclusive to button devices. The SSID label uses a bounded stack buffer;
+long names keep the existing ellipsis style at a complete UTF-8 boundary and
+are clipped to the content width.
+
 ## Retained Framebuffer Updates
 
 The firmware has one framebuffer, and its contents remain available after
@@ -230,6 +286,21 @@ Incremental drawing does not imply a different panel waveform or windowed
 refresh. Those are display-driver decisions and require separate hardware
 measurement.
 
+### File browser images
+
+The file browser lists BMP, JPEG (`.jpg` / `.jpeg`), and PNG files, with
+case-insensitive extensions, in every directory including `/AirPage`. All three
+formats open in the image viewer and participate in its sorted sibling navigation.
+Firmware and PNG-only pickers retain their own filters.
+
+BMPs render directly. JPEG and PNG previews reuse
+`/.crosspoint/image_preview.bmp`; JPEG conversion fits the current oriented screen
+without cropping. Conversion borrows the existing framebuffer and streams through
+the existing converters instead of adding another full-screen buffer. A failed
+conversion cannot display an old preview or save it as a sleep cover. JPEG sleep
+covers use the converted BMP; PNG retains its normal and transparent cover choices.
+The temporary preview is removed on exit, and source images are never replaced.
+
 ### Lyra Carousel home
 
 Lyra Carousel displays one centered recent-book cover in a `380x540` frame.
@@ -244,3 +315,16 @@ shared icon assets and other themes remain unchanged.
 > and the i18n workflow in [generated-files.md](generated-files.md).
 
 INX SDK layout compatibility and regression coverage: [INX theme compatibility](inx-theme-compatibility.md).
+
+### Missing glyphs
+
+After the existing font selection/fallback and SD on-demand lookup, unsupported
+visible characters render as hollow squares. `missingGlyph::metrics` is shared
+by text bounds, advances, SD advance prewarm and rendering: the side is three
+quarters of the font ascender (clamped to 4–255 px), with one pixel of spacing
+on each side and the bottom aligned to the baseline. The outline is procedural;
+it allocates no bitmap or heap storage. SUP/SUB halves the metrics, and rotated
+text uses the same orientation mapping as real glyphs. Missing glyphs do not
+participate in kerning. Missing whitespace, controls, zero-width formatters and
+combining marks produce no square. Real U+FFFD text is still rendered when the
+font contains it; missing characters no longer borrow its glyph or width.

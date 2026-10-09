@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -12,6 +13,8 @@ int failAt = -1;
 int responseStatus = 200;
 std::string stats = R"({"baseTime":1788192000,"totalReadTime":16234,"readTimes":{"1789401600":2947}})";
 std::string lastBody;
+size_t chunkSize = 1;
+size_t disconnectAfter = SIZE_MAX;
 }  // namespace
 
 namespace WeReadHttpClient {
@@ -23,7 +26,7 @@ Result requestVerified(const char* url, const RequestOptions& options, const Dat
   const bool key = strstr(url, "apikeyGet?only_show=1") != nullptr;
   assert(key || strcmp(url, "https://i.weread.qq.com/api/agent/gateway") == 0);
   assert(strcmp(options.method, key ? "GET" : "POST") == 0);
-  assert(options.readBufferSize == 4096 && options.timeoutMs == 20000);
+  assert(options.readBufferSize == 3072 && options.timeoutMs == 20000);
   bool cookie = false, authorization = false, vid = false, skey = false;
   for (size_t i = 0; i < options.headerCount; ++i) {
     if (strcmp(options.headers[i].name, "Cookie") == 0) {
@@ -47,8 +50,12 @@ Result requestVerified(const char* url, const RequestOptions& options, const Dat
   assert(vid == key && skey == key);
   if (!key) lastBody.assign(reinterpret_cast<const char*>(options.body), options.bodySize);
   const std::string body = key ? R"({"apikey":"wrk-test"})" : stats;
-  for (size_t i = 0; i < body.size(); ++i) {
-    if (!onData(reinterpret_cast<const uint8_t*>(body.data() + i), 1)) return Result::Aborted;
+  for (size_t i = 0; i < body.size();) {
+    if (!key && i >= disconnectAfter) return Result::NetworkError;
+    const size_t count = std::min({chunkSize, options.readBufferSize, body.size() - i});
+    memcpy(options.readBuffer, body.data() + i, count);
+    if (!onData(options.readBuffer, count)) return Result::Aborted;
+    i += count;
   }
   return Result::Ok;
 }
@@ -87,6 +94,40 @@ int main() {
   assert(query.step() == Result::Unavailable);  // No redirect/retry at this layer.
   assert(query.httpStatus() == 302);
   responseStatus = 200;
+  const std::string validStats = stats;
+  std::string largeStats = validStats.substr(0, validStats.size() - 1) + ",\"unused\":[";
+  for (int i = 0; i < 3000; ++i) largeStats += i ? ",12345" : "12345";
+  largeStats += "]}";
+  // Exercise workspace-sized reads, a split token at the 3 KiB boundary,
+  // and the unchanged 1 MiB response cap without retaining the whole response.
+  for (const size_t chunk : {size_t{1}, size_t{3071}, size_t{3072}, size_t{4096}}) {
+    chunkSize = chunk;
+    stats = std::string(3070, ' ') + largeStats;
+    assert(query.begin("wr_vid=test; wr_skey=test", 1789453168));
+    assert(query.step() == Result::Pending);
+    assert(query.step() == Result::Ready);
+    assert(query.snapshot().daySeconds == 2947);
+  }
+  chunkSize = 3072;
+  stats = validStats + std::string(1024 * 1024 - validStats.size(), ' ');
+  assert(query.begin("wr_vid=test; wr_skey=test", 1789453168));
+  assert(query.step() == Result::Pending);
+  assert(query.step() == Result::Ready);
+  stats.push_back(' ');
+  assert(query.begin("wr_vid=test; wr_skey=test", 1789453168));
+  assert(query.step() == Result::Pending);
+  assert(query.step() == Result::Protocol);
+  stats = std::string(4000, ' ') + validStats;
+  disconnectAfter = 3072;
+  assert(query.begin("wr_vid=test; wr_skey=test", 1789453168));
+  assert(query.step() == Result::Pending);
+  assert(query.step() == Result::Network);
+  disconnectAfter = SIZE_MAX;
+  stats = std::string(3070, ' ') + validStats + "{}";
+  assert(query.begin("wr_vid=test; wr_skey=test", 1789453168));
+  assert(query.step() == Result::Pending);
+  assert(query.step() == Result::Protocol);
+  stats = validStats;
   assert(query.begin("wr_vid=test; wr_skey=test", 1789453168));
   assert(query.step() == Result::Pending);
   stats = "{}";

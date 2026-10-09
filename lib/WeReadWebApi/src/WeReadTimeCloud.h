@@ -83,7 +83,10 @@ class Query {
   char account_[64] = {};
   char skey_[384] = {};
   char authorization_[144] = {};
-  uint8_t io_[4096] = {};
+  // SDK SAX now reserves a 2 KiB token. Trade 1 KiB of streaming read scratch
+  // for that growth, retaining the query/transport budgets without another
+  // allocation. Body limits and incremental parsing remain unchanged.
+  uint8_t io_[3072] = {};
   Phase phase_ = Phase::Done;
   Result result_ = Result::Protocol;
   int httpStatus_ = 0;

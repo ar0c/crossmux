@@ -169,7 +169,7 @@ int main() {
             return re.sub(r"\$\{([^{}]+)\.([^{}.]+)\}",
                           lambda match: resolve(*match.groups()), value)
 
-        hardware_count = 0
+        hardware_environments = set()
         for section in config.sections():
             if not section.startswith("env:"):
                 continue
@@ -182,7 +182,7 @@ int main() {
                     self.assertNotIn("NimBLE-Arduino", libraries)
                     self.assertNotIn("configure_c3_ble_controller.py", scripts)
                     continue
-                hardware_count += 1
+                hardware_environments.add(section)
                 self.assertIn("-DFREEINK_CAP_BLE_HID_HOST=1", flags)
                 self.assertIn("h2zero/NimBLE-Arduino @ 2.3.8", libraries)
                 self.assertIn("patch_ble_keyboard_host.py", scripts)
@@ -194,7 +194,10 @@ int main() {
                 self.assertFalse(resolve(section, "custom_nimble_config"))
                 self.assertFalse(resolve(section, "custom_sdkconfig"))
                 self.assertEqual(resolve(section, "board_build.arduino.memory_type"), "dio_opi")
-        self.assertEqual(hardware_count, 6)
+        self.assertEqual(hardware_environments, {
+            "env:waveshare_epaper_397",
+            "env:waveshare_epaper_397_nightly",
+        })
         self.assertIn("uint8_t bluetoothEnabled = 0;", (ROOT / "src/CrossPointSettings.h").read_text())
 
     def test_flash_controller_link_uses_matching_archive_without_changing_packages(self):

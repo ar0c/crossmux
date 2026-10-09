@@ -184,9 +184,9 @@ int main() {
             exe = path / ("context.exe" if os.name == "nt" else "context")
             cpp.write_text("\n".join([prelude, header, helpers, boundary, methods, main]), encoding="utf-8")
             subprocess.run([os.environ.get("CXX", "g++"), "-std=c++17", "-UNDEBUG", "-Wall", "-Wextra", "-Werror",
-                "-I" + str(ROOT / "lib/WeReadWebApi/src"), "-I" + str(ROOT / "lib/JsonParser"), str(cpp),
+                "-I" + str(ROOT / "lib/WeReadWebApi/src"), "-I" + str(ROOT / "freeink-sdk/libs/network/JsonSax/include"), str(cpp),
                 str(ROOT / "lib/WeReadWebApi/src/WeReadProtocol.cpp"),
-                str(ROOT / "lib/JsonParser/StreamingJsonParser.cpp"), "-o", str(exe)], check=True)
+                str(ROOT / "freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp"), "-o", str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
 
 

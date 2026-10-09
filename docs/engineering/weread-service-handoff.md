@@ -104,14 +104,8 @@ The starter checks total memory before allocating, then holds the new worker
 behind a task notification while it measures the actual free heap and largest
 block after FreeRTOS allocates the stack. The worker runs only when at least
 96 KiB total and 32 KiB contiguous internal memory remain for the reader and
-TLS. Otherwise the blocked worker is deleted and no request starts. This avoids
-rejecting a device merely because one block is a few bytes smaller than the
-sum of two allocations that may land in separate blocks.
-The larger stack covers the deeper POST/TLS call chain. The service diagnostic
-includes heap and raw stack high-water values at each persisted phase; a
-`post_start` record still proves only that the request was about to begin.
-The panic report includes the ESP reset-reason code even when the S3 panic
-capture lacks a reason string or stack dump.
+TLS. Otherwise the blocked worker is deleted and no request starts. The service
+diagnostic includes heap and raw stack high-water values at each persisted phase.
 
 Do not downgrade to firmware that does not understand WRS1 after delegating
 time. Such firmware cannot see service ownership and might resend it. Preserve
@@ -143,8 +137,7 @@ between-operation timeout recovery and immutable-tail recovery.
 C++ parser against the Go handler and durable database through the pipe bridge:
 five dates, lost response plus database restart, identical retry, query-only
 recovery, malformed last receipt and revocation. The tests make
-no real network requests or reading-time increments. Build with `pio run -e
-x4pro` or `pio run -e waveshare_epaper_397` for the matching board; verify the
+no real network requests or reading-time increments. Build with `pio run -e waveshare_epaper_397`; verify the
 version-first exported image and its SHA-256 before upload.
 
 The local device status is the last explicit readback. To see newer cloud

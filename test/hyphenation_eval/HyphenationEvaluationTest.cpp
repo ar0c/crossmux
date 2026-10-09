@@ -226,13 +226,6 @@ void runLanguageEval(const char* langName, const char* primaryTag, const char* r
 }  // namespace
 
 TEST(HyphenationEval, English) { runLanguageEval("english", "en", "english_hyphenation_tests.txt", 98.10); }
-TEST(HyphenationEval, French) { runLanguageEval("french", "fr", "french_hyphenation_tests.txt", 99.00); }
-TEST(HyphenationEval, German) { runLanguageEval("german", "de", "german_hyphenation_tests.txt", 96.73); }
-TEST(HyphenationEval, Russian) { runLanguageEval("russian", "ru", "russian_hyphenation_tests.txt", 96.22); }
-TEST(HyphenationEval, Spanish) { runLanguageEval("spanish", "es", "spanish_hyphenation_tests.txt", 98.02); }
-TEST(HyphenationEval, Italian) { runLanguageEval("italian", "it", "italian_hyphenation_tests.txt", 98.99); }
-TEST(HyphenationEval, Polish) { runLanguageEval("polish", "pl", "polish_hyphenation_tests.txt", 98.92); }
-TEST(HyphenationEval, Swedish) { runLanguageEval("swedish", "sv", "swedish_hyphenation_tests.txt", 94.01); }
 
 TEST(HyphenationFallback, OversizedUrlWrapsWithoutChangingText) {
   Hyphenator::setPreferredLanguage("en");
@@ -262,10 +255,51 @@ TEST(HyphenationFallback, OversizedUrlWrapsWithoutChangingText) {
 }
 
 TEST(HyphenationFallback, LinguisticBreaksRemainAvailableBeforeEmergencyFallback) {
-  Hyphenator::setPreferredLanguage("de");
-  const auto legalBreaks = Hyphenator::breakOffsets("Quadratkilometer", false);
+  Hyphenator::setPreferredLanguage("en-US");
+  const auto legalBreaks = Hyphenator::breakOffsets("representation", false);
 
   ASSERT_FALSE(legalBreaks.empty());
   EXPECT_TRUE(std::any_of(legalBreaks.begin(), legalBreaks.end(),
                           [](const auto& info) { return info.requiresInsertedHyphen; }));
+}
+
+TEST(HyphenationScope, OnlyEnglishDictionaryIsRegistered) {
+  const auto entries = getLanguageEntries();
+  ASSERT_EQ(entries.size, 1u);
+  EXPECT_STREQ(entries.data[0].primaryTag, "en");
+  ASSERT_NE(getLanguageHyphenatorForPrimaryTag("en"), nullptr);
+  for (const auto* tag : {"zh", "de", "fr", "es", "fi", "it", "pl", "pt", "ru", "sv", "uk", "unknown"}) {
+    EXPECT_EQ(getLanguageHyphenatorForPrimaryTag(tag), nullptr) << tag;
+  }
+}
+
+TEST(HyphenationScope, RemovedLanguagesResetCachedEnglishAndKeepExplicitAndEmergencyBreaks) {
+  for (const auto* tag : {"de-DE", "fr", "es", "fi", "it", "pl", "pt-BR", "ru", "sv", "uk", "unknown"}) {
+    Hyphenator::setPreferredLanguage("en-GB");
+    ASSERT_FALSE(Hyphenator::breakOffsets("representation", false).empty());
+    Hyphenator::setPreferredLanguage(tag);
+    EXPECT_TRUE(Hyphenator::breakOffsets("representation", false).empty()) << tag;
+    const auto breaks = Hyphenator::breakOffsets("representation", true);
+    ASSERT_FALSE(breaks.empty()) << tag;
+    for (const auto& info : breaks) EXPECT_FALSE(info.requiresInsertedHyphen);
+    const auto explicitBreaks = Hyphenator::breakOffsets("repre-sentation", false);
+    ASSERT_FALSE(explicitBreaks.empty());
+    EXPECT_EQ(explicitBreaks.front().byteOffset, 6u);
+    EXPECT_FALSE(explicitBreaks.front().requiresInsertedHyphen);
+  }
+}
+
+TEST(HyphenationScope, ChineseTagsRetainUtf8SafeBreaksWithoutInsertedHyphens) {
+  const std::string word = "中华人民共和国";
+  for (const auto* tag : {"zh", "zh-CN", "zh-Hans", "zh-TW", "zho", "chi"}) {
+    Hyphenator::setPreferredLanguage(tag);
+    EXPECT_TRUE(Hyphenator::breakOffsets(word, false).empty());
+    const auto breaks = Hyphenator::breakOffsets(word, true);
+    ASSERT_FALSE(breaks.empty()) << tag;
+    for (const auto& info : breaks) {
+      EXPECT_FALSE(info.requiresInsertedHyphen);
+      EXPECT_EQ(info.byteOffset % 3, 0u);
+      EXPECT_EQ(word.substr(0, info.byteOffset) + word.substr(info.byteOffset), word);
+    }
+  }
 }

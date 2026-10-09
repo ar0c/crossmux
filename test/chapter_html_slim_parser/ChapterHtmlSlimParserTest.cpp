@@ -363,6 +363,56 @@ class SectionMemoryTest : public ::testing::Test {
   }
 };
 
+TEST_F(SectionMemoryTest, TallerViewportRebuildsCacheAndPreservesBodyAndOffsets) {
+  std::string html = "<html><body><p>";
+  for (int i = 0; i < 400; ++i) html += "word" + std::to_string(i) + " ";
+  html += "</p></body></html>";
+  writeHtml(html);
+  spec.viewportHeight = 57;
+  uint32_t offset = 0;
+  uint16_t oldPageCount = 0;
+  {
+    Section original(epub, 0, renderer);
+    ASSERT_TRUE(original.createSectionFile(spec));
+    ASSERT_GT(original.pageCount, 1U);
+    oldPageCount = original.pageCount;
+    offset = *original.getVisibleTextOffsetForPage(1);
+  }
+
+  spec.viewportHeight += 7;
+  Section rebuilt(epub, 0, renderer);
+  EXPECT_FALSE(rebuilt.loadSectionFile(spec));
+  laidOutWords.clear();
+  ASSERT_TRUE(rebuilt.createSectionFile(spec));
+  EXPECT_LT(rebuilt.pageCount, oldPageCount);
+  ASSERT_EQ(laidOutWords.size(), 400U);
+  for (int i = 0; i < 400; ++i) EXPECT_EQ(laidOutWords[i], "word" + std::to_string(i));
+  const auto page = rebuilt.getPageForVisibleTextOffset(offset);
+  ASSERT_TRUE(page.has_value());
+  EXPECT_LE(*rebuilt.getVisibleTextOffsetForPage(*page), offset);
+  if (*page + 1 < rebuilt.pageCount) EXPECT_GT(*rebuilt.getVisibleTextOffsetForPage(*page + 1), offset);
+  Section restored(epub, 0, renderer);
+  ASSERT_TRUE(restored.loadSectionFile(spec));
+  EXPECT_EQ(restored.getPageForVisibleTextOffset(offset), page);
+}
+
+TEST_F(SectionMemoryTest, TallerViewportInvalidatesPartialCache) {
+  std::string html = "<html><body>";
+  for (int i = 0; i < 400; ++i) html += "<p>word</p>";
+  html += "</body></html>";
+  writeHtml(html);
+  {
+    Section original(epub, 0, renderer);
+    ASSERT_TRUE(original.startBuild(spec));
+    ASSERT_TRUE(original.buildSomeMore(1));
+  }
+  Section restored(epub, 0, renderer);
+  ASSERT_TRUE(restored.loadSectionFile(spec));
+  ASSERT_TRUE(restored.isPartial());
+  spec.viewportHeight += 7;
+  EXPECT_FALSE(restored.loadSectionFile(spec));
+}
+
 TEST_F(SectionMemoryTest, OomAbandonsBuildAndBasicRetryPreservesBodyAndOffsets) {
   std::string html = "<html><body><p id='start'>";
   for (int i = 0; i < 400; ++i) html += "word" + std::to_string(i) + " ";
@@ -527,11 +577,36 @@ TEST_F(SectionMemoryTest, MixedChapterCacheMatchesVerifiedLayout) {
   ASSERT_TRUE(section.createSectionFile(spec));
   const auto path = epub->cachePath + "/sections/0.bin";
   std::ifstream file(path, std::ios::binary);
-  const std::string bytes{std::istreambuf_iterator<char>(file), {}};
+  std::string bytes{std::istreambuf_iterator<char>(file), {}};
   uint64_t digest = 14695981039346656037ULL;
   const auto append = [&digest](const std::string& value) {
     for (const unsigned char byte : value) digest = (digest ^ byte) * 1099511628211ULL;
   };
+  ASSERT_FALSE(bytes.empty());
+  EXPECT_EQ(static_cast<uint8_t>(bytes.front()), 76);
+  ASSERT_EQ(static_cast<uint8_t>(bytes[11]), 3);
+  bytes.erase(11, 1);  // Western indent width appended to the preserved tri-state schema.
+  // Normalize the two new spacing bytes and their absolute file offsets back
+  // to the historical v70 layout; keep its verified digest unchanged.
+  constexpr size_t spacingOffset = 21;
+  ASSERT_EQ(static_cast<uint8_t>(bytes[spacingOffset]), 0);
+  ASSERT_EQ(static_cast<uint8_t>(bytes[spacingOffset + 1]), 100);
+  bytes.erase(spacingOffset, 2);
+  const auto readOffset = [&bytes](size_t position) {
+    uint32_t value;
+    std::memcpy(&value, bytes.data() + position, sizeof(value));
+    return value;
+  };
+  const auto adjustOffset = [&bytes, &readOffset](size_t position) {
+    const uint32_t value = readOffset(position) - 3;
+    std::memcpy(bytes.data() + position, &value, sizeof(value));
+  };
+  // pageCount follows spacing; the next five fields address tables in the file.
+  for (size_t position = spacingOffset + 2; position < spacingOffset + 22; position += 4) adjustOffset(position);
+  const uint32_t pageLut = readOffset(spacingOffset + 2);
+  const uint32_t anchorMap = readOffset(spacingOffset + 6);
+  for (size_t position = pageLut; position < anchorMap; position += 4) adjustOffset(position);
+  bytes.front() = 70;
   append(bytes);
   for (const auto& word : laidOutWords) append(word);
   for (const auto& href : collectedFootnotes) append(href);
@@ -640,7 +715,7 @@ TEST_F(SectionMemoryTest, FirstLineIndentRoundTripsAndInvalidatesChangedAndLegac
       EXPECT_FALSE(mismatch.loadSectionFile(changed));
     }
   }
-  for (const char oldVersion : {char{66}, char{68}}) {
+  for (const uint8_t oldVersion : {66, 68, 70, 71, 212, 211}) {
     Section section(epub, 0, renderer);
     ASSERT_TRUE(section.createSectionFile(spec));
     section.file.close();
@@ -648,7 +723,7 @@ TEST_F(SectionMemoryTest, FirstLineIndentRoundTripsAndInvalidatesChangedAndLegac
     {
       std::fstream file(cachePath, std::ios::binary | std::ios::in | std::ios::out);
       ASSERT_TRUE(file.good());
-      file.write(&oldVersion, 1);
+      file.write(reinterpret_cast<const char*>(&oldVersion), 1);
     }
     Section legacy(epub, 0, renderer);
     EXPECT_FALSE(legacy.loadSectionFile(spec));

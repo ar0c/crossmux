@@ -50,6 +50,8 @@ def manifest_url(base_url, region, target_id, flavor):
 def build_index(manifest_root, region, base_url, updated_at, build_id, channel, release_notes=None, only_target=None, previous=None):
     if only_target and (channel != 'nightly' or only_target not in targets_for(channel)):
         raise ValueError('partial releases are Nightly-only and require a supported target')
+    if not targets_for(channel):
+        raise ValueError('no maintained firmware targets for this channel')
     targets = {}
     crossmux_revisions = set()
     sdk_revisions = set()

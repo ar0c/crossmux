@@ -2,11 +2,11 @@
 
 Project: CrossMux, a community fork of CrossPoint Reader for ESP32 e-ink devices.
 Mission: Keep reading fast and reliable while supporting lightweight apps, reading analytics, standby faces, and on-demand services within the hardware budget.
-Targets: Xteink X4 Pro and Waveshare ePaper 3.97 have separate ESP32-S3 images. See [`scripts/nightly_targets.py`](scripts/nightly_targets.py) for release targets and channels.
+Targets: Waveshare ePaper 3.97 only. See [`scripts/nightly_targets.py`](scripts/nightly_targets.py).
 
 **Personal release authorization (2026-10-02):** The owner permits direct releases of this fork and its `ar0c/weread-sync` companion through their existing GitHub/OTA and personal K3s/Helm paths after relevant local validation, without repeated per-release confirmation. This project-specific authorization supersedes the generic GitLab `ship` master/tag release flow for these two projects only. Follow the scope and verification rules in [firmware-release.md](docs/engineering/firmware-release.md).
 
-**Project device scope:** Only Xteink X4 Pro and Waveshare ePaper 3.97 are supported firmware targets in this fork. Keep build, CI, packaging, OTA, and release target lists limited to these two devices when merging upstream. Shared upstream code may still be integrated, but do not re-enable another device target without an explicit change to this project rule from the user. X4 Pro has Stable and Nightly channels; Waveshare ePaper 3.97 has Nightly only. The canonical matrix is in [`scripts/nightly_targets.py`](scripts/nightly_targets.py).
+**Project device scope:** Only Waveshare ePaper 3.97 firmware is maintained, built, packaged and published. Its existing Nightly channel remains. X4 Pro artifacts are retired; preserve shared HAL, original worktrees, historical backups and published content. The canonical matrix is [`scripts/nightly_targets.py`](scripts/nightly_targets.py). Embedded hyphenation dictionaries are English-only; Chinese uses CJK line breaking. Font glyphs and all UI translations remain unchanged.
 
 > **This file is a map, not a manual.** It holds the identity, the
 > non-negotiable invariants, and a quick reference — then points to the deep
@@ -26,7 +26,7 @@ Targets: Xteink X4 Pro and Waveshare ePaper 3.97 have separate ESP32-S3 images. 
 ## AI Agent Identity and Cognitive Rules
 
 * Role: Senior Embedded Systems Engineer (ESP-IDF/Arduino-ESP32 specialized), preserving CrossMux behavior and the HAL boundary across device targets.
-* Primary Constraint: X4 Pro and Waveshare 3.97 are separate ESP32-S3 targets. Check each target's RAM, PSRAM, Flash, and power budgets. Stability is non-negotiable.
+* Primary Constraint: Waveshare 3.97 is the sole maintained ESP32-S3 firmware. Check its's RAM, PSRAM, Flash, and power budgets. Stability is non-negotiable.
 * Evidence-Based Reasoning: Before proposing a change, you MUST cite the specific file path and line numbers that justify the modification.
 * Anti-Hallucination: Do not assume the existence of libraries or ESP-IDF functions. Check the pinned freeink-sdk source or the FreeInk SDK docs (https://freeink.org/llms.txt for an LLM-readable index) first.
 * No Unfounded Claims: Do not claim performance gains or memory savings without explaining the technical mechanism (e.g., DRAM vs IRAM usage).
@@ -57,7 +57,7 @@ device uploads. See [weread-time-sync.md](docs/engineering/weread-time-sync.md).
 These are the highest-frequency-violation rules. Each links to the doc with the
 full reasoning, examples, and edge cases.
 
-1. **Both supported ESP32-S3 images must fit their own memory and Flash budgets.** Justify every heap allocation; prefer stack/static; `.reserve()` before `push_back` loops; mark constants `constexpr`. → [hardware-constraints.md](docs/engineering/hardware-constraints.md)
+1. **The Waveshare ESP32-S3 image must fit its memory and Flash budgets.** Justify every heap allocation; prefer stack/static; `.reserve()` before `push_back` loops; mark constants `constexpr`. → [hardware-constraints.md](docs/engineering/hardware-constraints.md)
 2. **Never bare `new`.** With `-fno-exceptions` a failed `new` calls `abort()`, not `nullptr`. Use `makeUniqueNoThrow<T>()` from `lib/Memory/Memory.h` (or `new (std::nothrow)` only when a C API takes ownership); always null-check and `LOG_ERR` on OOM. → [memory-and-allocation.md](docs/engineering/memory-and-allocation.md)
 3. **All user-facing text uses `tr()`.** Never hardcode UI strings (logs may be hardcoded). → [ui-and-input.md](docs/engineering/ui-and-input.md)
 4. **Use HAL classes, never the SDK directly** (`Storage`, `HalDisplay`, `HalGPIO`). → [architecture-and-patterns.md](docs/engineering/architecture-and-patterns.md)
@@ -89,7 +89,7 @@ full reasoning, examples, and edge cases.
 ```bash
 pio run                             # Build (default env)
 pio run -t upload                    # Build + flash
-pio run -e x4pro-gh_release          # X4 Pro stable firmware
+pio run -e waveshare_epaper_397_nightly # Waveshare Nightly firmware
 pio run -e waveshare_epaper_397      # Waveshare 3.97 development firmware
 pio run -e simulator -t run_simulator # Desktop simulator (SDL2 + curl)
 pio check                           # Static analysis (cppcheck)
@@ -114,8 +114,8 @@ python3 scripts/debugging_monitor.py # Enhanced serial monitor
 | Git workflow | Repo detection, branching, commits | [docs/engineering/git-workflow.md](docs/engineering/git-workflow.md) |
 | Cache management | Cache structure, invalidation, format versioning | [docs/engineering/cache-management.md](docs/engineering/cache-management.md) |
 | Unified languages & Chinese support | Runtime content profiles, embedded CJK fonts | [docs/engineering/chinese-build.md](docs/engineering/chinese-build.md) |
-| Firmware releases | Two-device Stable/Nightly targets, packaging, GitHub indexes, rollback, OTA contracts | [docs/engineering/firmware-release.md](docs/engineering/firmware-release.md) |
-| Device variants | X4 Pro and Waveshare 3.97 images and hardware validation limits | [docs/engineering/device-variants.md](docs/engineering/device-variants.md) |
+| Firmware releases | Waveshare-only Nightly targets, packaging, GitHub indexes, rollback, OTA contracts | [docs/engineering/firmware-release.md](docs/engineering/firmware-release.md) |
+| Device variants | Waveshare 3.97 image and hardware validation limits | [docs/engineering/device-variants.md](docs/engineering/device-variants.md) |
 | System overview & dataflow | Runtime lifecycle, activity model, pipeline diagrams | [docs/contributing/architecture.md](docs/contributing/architecture.md) |
 | Binary file formats | Byte-level cache/notes/font formats | [docs/file-formats.md](docs/file-formats.md) |
 | i18n system | Translation workflow in depth | [docs/i18n.md](docs/i18n.md) |

@@ -1,8 +1,11 @@
 #include "Activity.h"
 
+#include <algorithm>
+
 #include "ActivityManager.h"
 #include "CrossPointSettings.h"
 #include "I18n.h"
+#include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #include "util/ButtonNavigator.h"
 
@@ -33,9 +36,49 @@ bool Activity::showMainTabContentSelection() const {
          (!usesMainTabBar() || activityManager.getMainTabFocus() == MainTabFocus::Content);
 }
 
+// Retain the instance-facing Activity layout API.
+// cppcheck-suppress functionStatic
+bool Activity::mainTabsAtBottom() const { return SETTINGS.inxTabPosition == CrossPointSettings::INX_TAB_BOTTOM; }
+
+bool Activity::hasMainTabStatusBar() const {
+  return MainTabs::showsStatusBar(usesMainTabBar(), mappedInput.hasTouch(), mainTabsAtBottom());
+}
+
+MainTabLayout Activity::mainTabLayout() const {
+  auto& theme = UITheme::getInstance();
+  const auto& metrics = theme.getMetrics();
+  const bool tabsAtBottom = mainTabsAtBottom();
+  const bool showStatus = hasMainTabStatusBar();
+  Rect safe = theme.getScreenSafeArea(renderer, true);
+  if (showStatus) {
+    int top, right, bottom, left;
+    renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+    const int safeRight = std::min(safe.x + safe.width, renderer.getScreenWidth() - right);
+    const int safeBottom = std::min(safe.y + safe.height, renderer.getScreenHeight() - bottom);
+    safe.x = std::max(safe.x, left);
+    safe.y = std::max(safe.y, top);
+    safe.width = std::max(0, safeRight - safe.x);
+    safe.height = std::max(0, safeBottom - safe.y);
+  }
+  return MainTabs::layout(safe, metrics.topPadding,
+                          tabsAtBottom                ? MainTabs::bottomBarHeight
+                          : UiHighDpiProfile::enabled ? UiHighDpiProfile::navigationHeight
+                                                      : metrics.headerHeight,
+                          tabsAtBottom, showStatus ? MainTabs::statusBarHeight : 0);
+}
+
+Rect Activity::pageContentRect() const {
+  if (usesMainTabBar()) return mainTabLayout().content;
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int top = metrics.topPadding + metrics.headerHeight;
+  return Rect{0, top, renderer.getScreenWidth(), renderer.getScreenHeight() - top - metrics.buttonHintsHeight};
+}
+
 void Activity::drawPageHeader(const Rect& rect, const char* title, const char* subtitle) const {
   if (usesMainTabBar()) {
-    GUI.drawMainTabBar(renderer, rect, mainTab());
+    const MainTabLayout layout = mainTabLayout();
+    GUI.drawMainTabBar(renderer, layout.tabBar, mainTab());
+    if (layout.statusBar.height > 0) GUI.drawMainTabStatusBar(renderer, layout.statusBar);
   } else {
     GUI.drawHeader(renderer, rect, title, subtitle);
   }
@@ -45,8 +88,12 @@ void Activity::requestUpdate(bool immediate) { activityManager.requestUpdate(imm
 
 void Activity::requestUpdateAndWait() { activityManager.requestUpdateAndWait(); }
 
+// Retain the instance-facing Activity transition API.
+// cppcheck-suppress functionStatic
 void Activity::onGoHome(HomeMenuItem item) { activityManager.goHome(item); }
 
+// Retain the instance-facing Activity transition API.
+// cppcheck-suppress functionStatic
 void Activity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
 
 void Activity::startActivityForResult(std::unique_ptr<Activity>&& activity, ActivityResultHandler resultHandler) {

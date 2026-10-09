@@ -541,6 +541,8 @@ void WeReadProgressSyncActivity::launchWifiSelection() {
 }
 
 void WeReadProgressSyncActivity::onWifiSelectionComplete(const bool connected) {
+  // The Wi-Fi child can paint the panel before this activity resumes.
+  fullRefreshPending_.store(true);
   if (resumeTimeAfterWifi_) {
     resumeTimeAfterWifi_ = false;
     state_ = connected ? State::TimeConfirm : State::TimeResult;
@@ -553,7 +555,6 @@ void WeReadProgressSyncActivity::onWifiSelectionComplete(const bool connected) {
     returnToReader();
     return;
   }
-  fullRefreshPending_.store(true);
   state_ = State::Starting;
   requestUpdate();
 }
@@ -1204,7 +1205,7 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
                                        EpdFontFamily::BOLD);
       break;
     case State::Failed:
-      UITheme::drawCenteredWrappedText(renderer, textBounds, UI_10_FONT_ID, errorMessage(), 2, true,
+      UITheme::drawCenteredWrappedText(renderer, textBounds, UI_10_FONT_ID, errorMessage(), 4, true,
                                        EpdFontFamily::BOLD);
       break;
   }
@@ -1233,7 +1234,6 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
                                                             : "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
-  // Consume this here so a Wi-Fi child cannot use up the sync page's clean refresh.
   renderer.displayBuffer(fullRefreshPending_.exchange(false) ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
 }
 

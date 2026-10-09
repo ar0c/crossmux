@@ -18,6 +18,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "NetworkStartup.h"
 #include "ReaderFontSizes.h"
 #include "SdCardFontSystem.h"
 #include "TextSettingsPreview.h"
@@ -35,8 +36,10 @@ namespace {
 // Tab labels for Font | Size | Layout | Style.
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
 
-constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING,
-                                         StrId::STR_FIRST_LINE_INDENT, StrId::STR_ALIGNMENT, StrId::STR_SCREEN_MARGIN};
+constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,      StrId::STR_WORD_SPACING,
+                                         StrId::STR_CHARACTER_SPACING, StrId::STR_EXTRA_SPACING,
+                                         StrId::STR_FIRST_LINE_INDENT, StrId::STR_PARAGRAPH_INDENTATION,
+                                         StrId::STR_ALIGNMENT,         StrId::STR_SCREEN_MARGIN};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING,
                                         StrId::STR_READING_GUIDE_LINE,
                                         StrId::STR_READING_GUIDE_LINE_STYLE,
@@ -56,6 +59,27 @@ constexpr StrId EXTRA_SPACING_IDS[] = {StrId::STR_EXTRA_SPACING_OFF,  StrId::STR
 constexpr StrId SYNTHETIC_BOLD_IDS[] = {StrId::STR_STATE_OFF, StrId::STR_FAKE_BOLD_LIGHT, StrId::STR_FAKE_BOLD_STANDARD,
                                         StrId::STR_FAKE_BOLD_HEAVY};
 static_assert(std::size(SYNTHETIC_BOLD_IDS) == CrossPointSettings::SYNTHETIC_BOLD_COUNT);
+int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFontFamilyName, uint8_t fontFamily) {
+  if (sdFontFamilyName[0] != '\0' && registry) {
+    const auto& families = registry->getFamilies();
+    const auto family = std::find_if(families.begin(), families.end(), [sdFontFamilyName](const auto& candidate) {
+      return candidate.name == sdFontFamilyName;
+    });
+    if (family != families.end()) {
+      return CrossPointSettings::BUILTIN_FONT_COUNT + static_cast<int>(family - families.begin());
+    }
+  }
+
+  return fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
+}
+
+constexpr StrId WORD_SPACING_IDS[] = {StrId::STR_SPACING_50_PERCENT,  StrId::STR_SPACING_75_PERCENT,
+                                      StrId::STR_SPACING_100_PERCENT, StrId::STR_SPACING_125_PERCENT,
+                                      StrId::STR_SPACING_150_PERCENT, StrId::STR_SPACING_175_PERCENT,
+                                      StrId::STR_SPACING_200_PERCENT};
+constexpr StrId CHARACTER_SPACING_IDS[] = {StrId::STR_SPACING_MINUS_2, StrId::STR_SPACING_MINUS_1,
+                                           StrId::STR_SPACING_ZERO, StrId::STR_SPACING_PLUS_1,
+                                           StrId::STR_SPACING_PLUS_2};
 constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                    StrId::STR_BOOK_S_STYLE};
 constexpr StrId GUIDE_LINE_STYLE_IDS[] = {StrId::STR_SOLID_LINE, StrId::STR_SHORT_DASH,  StrId::STR_MEDIUM_DASH,
@@ -64,6 +88,10 @@ constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
 constexpr int MARGIN_MAX = CrossPointSettings::SCREEN_MARGIN_MAX;
 constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
 constexpr StrId OK_OPTION[] = {StrId::STR_OK_BUTTON};
+constexpr int WORD_SPACING_MIN = CrossPointSettings::WORD_SPACING_MIN;
+constexpr int WORD_SPACING_MAX = CrossPointSettings::WORD_SPACING_MAX;
+constexpr int WORD_SPACING_STEP = CrossPointSettings::WORD_SPACING_STEP;
+static_assert(std::size(WORD_SPACING_IDS) == (WORD_SPACING_MAX - WORD_SPACING_MIN) / WORD_SPACING_STEP + 1);
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -105,7 +133,16 @@ void TextSettingsActivity::onEnter() {
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
+      FontEntry entry;
+      entry.name = families[i].name;
+      entry.isBuiltin = false;
+      entry.settingIndex = static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i);
+      // 矢量字体（.ttf/.otf/.ttc）是运行时光栅化的，任意字号都能显示；其余是预烤好的
+      // .cpfont 字集。标记只进 label，不进 name —— 见 FontEntry::label 的说明。
+      // / Vector families are rasterized at runtime and work at any size; the rest are
+      // pre-rasterized .cpfont sets. The marker goes into `label`, never into `name`.
+      if (families[i].vector) entry.label = entry.name + "  " + I18N.get(StrId::STR_VECTOR_FONT_TAG);
+      fonts_.push_back(std::move(entry));
     }
   }
 
@@ -134,10 +171,18 @@ void TextSettingsActivity::onEnter() {
   tabNavs[static_cast<int>(tab_)].selected = 0;  // screen opens with the tab bar focused, not a list row
 
   rebuildRowItems();
-  if (startMode_ == StartMode::PreloadThenExit) exitAfterFinalFont(ExitDestination::Previous);
+  if (startMode_ == StartMode::AskThenExit || startMode_ == StartMode::PreloadThenExit) {
+    exitAfterFinalFont(ExitDestination::Previous);
+  }
 }
 
-void TextSettingsActivity::onExit() { Activity::onExit(); }
+void TextSettingsActivity::onExit() {
+  // Release .cpfont preview faces; the vector-font cache has a separate lifetime.
+  if (renderer.hasFrameBuffer()) {
+    sdFontSystem.releaseLoadedFont(renderer);
+  }
+  Activity::onExit();
+}
 
 // Rebuilds rowItems_ (label + actionValue) for the active tab. Structural —
 // call only when tab_ or its backing data (fonts_/sizes_) changes, never from
@@ -151,7 +196,7 @@ void TextSettingsActivity::rebuildRowItems() {
     fui::ListItem item;
     switch (tab_) {
       case Tab::Family:
-        item.label = fonts_[i].name.c_str();
+        item.label = fonts_[i].label.empty() ? fonts_[i].name.c_str() : fonts_[i].label.c_str();
         break;
       case Tab::Size:
         item.label = sizes_[i].name.c_str();
@@ -219,11 +264,35 @@ void TextSettingsActivity::activateIndex(const int index) {
 }
 
 bool TextSettingsActivity::handleCustomInput() {
+  if (exitPrompt_ == ExitPrompt::TooLarge) {
+    if (millis() - noticeStartedAt_ >= fontpreload::NOTICE_DURATION_MS) {
+      // A contact started on the notice must not release into the next screen.
+      for (uint8_t button = 0; button < MappedInputManager::kButtonCount; ++button) {
+        if (mappedInput.isPressed(static_cast<MappedInputManager::Button>(button))) return true;
+      }
+      int x = 0, y = 0;
+      if (mappedInput.isScreenTouchHeld(x, y)) return true;
+      completeExit();
+    }
+    return true;
+  }
+  if (exitPromptWaitForBackRelease_) {
+    exitPromptWaitForBackRelease_ = mappedInput.isPressed(MappedInputManager::Button::Back);
+    return true;  // Consume the inherited hold and release.
+  }
   const bool handled = optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); });
-  // Automatic preloads only show an informational failure popup. Back and
-  // outside taps acknowledge it too, rather than exposing the picker to retry.
-  if (handled && startMode_ == StartMode::PreloadThenExit && !optionPopup_.isActive() && !exitInProgress_) {
-    completeExit();
+  if (exitPrompt_ != ExitPrompt::None && !optionPopup_.isActive()) {
+    const bool accepted = exitPrompt_ == ExitPrompt::Accepted;
+    {
+      RenderLock lock(*this);
+      exitPrompt_ = ExitPrompt::None;
+    }
+    if (accepted) {
+      finishFinalFont(true);
+    } else {
+      completeExit();
+    }
+    return true;
   }
   return handled;
 }
@@ -272,13 +341,32 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
       case Tab::Layout:
         rowValues_[i] = layoutValueText(i);
         break;
-      case Tab::Style:
-        rowValues_[i] = styleValueText(i);
-        break;
       default:
         break;
     }
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
+    rowItems_[i].toggle = false;
+    if (tab_ == Tab::Style) {
+      switch (styleRowAt(i)) {
+        case StyleRow::FocusReading:
+          GUI.setCheckboxRow(rowItems_[i], SETTINGS.focusReadingEnabled);
+          break;
+        case StyleRow::ReadingGuideLine:
+          GUI.setCheckboxRow(rowItems_[i], SETTINGS.readingGuideLineEnabled);
+          break;
+        case StyleRow::Hyphenation:
+          GUI.setCheckboxRow(rowItems_[i], SETTINGS.hyphenationEnabled);
+          break;
+        case StyleRow::EmbeddedStyle:
+          GUI.setCheckboxRow(rowItems_[i], SETTINGS.embeddedStyle);
+          break;
+        case StyleRow::AntiAliasing:
+          GUI.setCheckboxRow(rowItems_[i], SETTINGS.textAntiAliasing);
+          break;
+        default:
+          break;
+      }
+    }
   }
 
   fui::ListProps props;
@@ -288,7 +376,7 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
   // Keep titles and values at the same list font size; long labels may wrap.
-  props.labelText = screen.theme().bodyText;
+  props.labelText = UITheme::getInstance().hasMainTabs() ? screen.theme().bodyText : screen.theme().smallText;
   props.labelText.maxLines = 2;
   syncTabListViewport(screen, props);
   screen.list(props);
@@ -316,19 +404,7 @@ const char* TextSettingsActivity::confirmLabelText() const {
   }
 }
 
-void TextSettingsActivity::render(RenderLock&&) {
-  const FontLoadState fontLoadState = fontLoadState_.load();
-  if (fontLoadState != FontLoadState::Idle) {
-    fontpreload::draw(renderer, preloadFamilyName_, preloadPointSize_, preloadCompleted_.load(), preloadTotal_.load(),
-                      fontLoadState == FontLoadState::Ready ? fontpreload::State::Ready : fontpreload::State::Progress);
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    return;
-  }
-
-  if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
-
-  renderer.clearScreen();
-
+void TextSettingsActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
 
   GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, pageWidth, metrics_.headerHeight}, tr(STR_TEXT_SETTINGS));
@@ -341,10 +417,9 @@ void TextSettingsActivity::render(RenderLock&&) {
                              : "";
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
                               previewHeight, familyName, sizeName);
+}
 
-  // Tab bar + active tab's list draw inside the screen builder.
-  renderUi();
-
+void TextSettingsActivity::drawFooter() {
   if (focusedRowHasNoPreview()) {
     const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
     const int capY = afterHeader + usableHeight - captionHeight + metrics_.verticalSpacing;
@@ -353,8 +428,24 @@ void TextSettingsActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabelText(), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
 
-  renderer.displayBuffer();
+void TextSettingsActivity::render(RenderLock&& lock) {
+  const FontLoadState fontLoadState = fontLoadState_.load();
+  if (fontLoadState != FontLoadState::Idle) {
+    fontpreload::draw(renderer, preloadFamilyName_, preloadPointSize_, preloadCompleted_.load(), preloadTotal_.load(),
+                      fontLoadState == FontLoadState::Ready ? fontpreload::State::Ready : fontpreload::State::Progress);
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    return;
+  }
+
+  if (exitPrompt_ == ExitPrompt::TooLarge) {
+    fontpreload::drawTooLargeNotice(renderer);
+    renderer.displayBuffer();
+    return;
+  }
+  if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
+  UiListActivity::render(std::move(lock));
 }
 
 // Font switching runs on the main task from loop(), which deliberately holds no
@@ -443,162 +534,6 @@ void TextSettingsActivity::applySize(int listIndex) {
   sdFontSystem.ensureLoaded(renderer);
 }
 
-const SdCardFontFileInfo* TextSettingsActivity::fontFileForFamily(const int listIndex, const uint8_t pointSize) const {
-  if (!registry_ || listIndex < 0 || listIndex >= static_cast<int>(fonts_.size()) || fonts_[listIndex].isBuiltin) {
-    return nullptr;
-  }
-  const int familyIndex = fonts_[listIndex].settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
-  const auto& families = registry_->getFamilies();
-  return familyIndex >= 0 && familyIndex < static_cast<int>(families.size())
-             ? families[familyIndex].findNearestSize(pointSize)
-             : nullptr;
-}
-
-bool TextSettingsActivity::preloadFont(const SdCardFontFileInfo& file, const char* familyName) {
-  size_t cachedPayloadSize = 0;
-  const bool alreadyCached = SdCardFontCache::isValidFor(file.path.c_str(), &cachedPayloadSize);
-  {
-    RenderLock lock(*this);
-    preloadFamilyName_ = familyName;
-    preloadPointSize_ = file.pointSize;
-    preloadVerifying_ = false;
-    preloadCompleted_.store(alreadyCached ? cachedPayloadSize * 2 : 0);
-    preloadTotal_.store(alreadyCached ? cachedPayloadSize * 2 : 1);
-    lastPreloadPercent_ = 0;
-    fontLoadState_.store(FontLoadState::Preloading);
-    if (!alreadyCached) sdFontSystem.releaseLoadedFont(renderer);
-  }
-  requestUpdateAndWait();
-
-  if (alreadyCached) {
-    {
-      RenderLock lock(*this);
-      fontLoadState_.store(FontLoadState::Ready);
-    }
-    requestUpdateAndWait();
-    return true;
-  }
-
-  const auto result = SdCardFontCache::preload(
-      file.path.c_str(),
-      [](size_t completed, size_t total, void* context) {
-        auto* self = static_cast<TextSettingsActivity*>(context);
-        self->preloadTotal_.store(total);
-        self->preloadCompleted_.store(completed);
-        const bool verifying = completed > total / 2;
-        const bool phaseChanged = self->preloadVerifying_ != verifying;
-        self->preloadVerifying_ = verifying;
-        const unsigned percent = total > 0 ? static_cast<unsigned>(completed * 100 / total) : 0;
-        if (phaseChanged || percent == 100 || percent >= self->lastPreloadPercent_ + 10) {
-          self->lastPreloadPercent_ = percent;
-          self->requestUpdate(true);
-        }
-      },
-      this);
-
-  const bool succeeded = result == SdCardFontCache::Result::Ok || result == SdCardFontCache::Result::AlreadyCached;
-  if (succeeded) {
-    requestUpdateAndWait();
-    {
-      RenderLock lock(*this);
-      fontLoadState_.store(FontLoadState::Ready);
-    }
-    requestUpdateAndWait();
-  }
-  return succeeded;
-}
-
-void TextSettingsActivity::exitAfterFinalFont(const ExitDestination destination) {
-  if (exitInProgress_) return;
-  exitInProgress_ = true;
-  exitDestination_ = destination;
-
-  if (startMode_ == StartMode::PreviewOnly) {
-    // The reader owns the complete preview session and asks only on return to
-    // the page. Home/sleep must not turn a preview into a Flash write either.
-    SETTINGS.saveToFile();
-    completeExit();
-    return;
-  }
-
-  const bool fontChanged = initialFontState_ == InitialFontState::Changed ||
-                           currentFamilyIndex_ != initialFamilyIndex_ || SETTINGS.fontPointSize != initialPointSize_;
-  if (!fontChanged) {
-    SETTINGS.sdFontFlashPreload = initialSdFontFlashPreload_;
-    SETTINGS.saveToFile();
-    completeExit();
-    return;
-  }
-
-  if (SETTINGS.sdFontFamilyName[0] == '\0') {
-    SETTINGS.sdFontFlashPreload = 0;
-    SETTINGS.saveToFile();
-    completeExit();
-    return;
-  }
-
-  SETTINGS.sdFontFlashPreload = 1;
-  SETTINGS.saveToFile();
-  const auto* file = fontFileForFamily(currentFamilyIndex_, SETTINGS.fontPointSize);
-  const bool succeeded = file && preloadFont(*file, SETTINGS.sdFontFamilyName);
-  {
-    RenderLock lock(*this);
-    fontLoadState_.store(FontLoadState::Idle);
-    sdFontSystem.ensureLoaded(renderer, succeeded);
-  }
-  if (succeeded) {
-    completeExit();
-    return;
-  }
-
-  SETTINGS.sdFontFlashPreload = 0;
-  SETTINGS.saveToFile();
-  exitInProgress_ = false;
-  // Preload failure is informational (the font still loads from SD at runtime);
-  // acknowledging the popup exits exactly like the success path, with a
-  // cancelled result so the caller does not treat it as a font change.
-  ActivityResult result;
-  result.isCancelled = true;
-  setResult(std::move(result));
-  optionPopup_.show(StrId::STR_FONT_PRELOAD_FAILED, OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0,
-                    [this](int) { completeExit(); });
-  requestUpdate();
-}
-
-void TextSettingsActivity::completeExit() {
-  exitInProgress_ = true;
-  if (exitDestination_ == ExitDestination::Home) {
-    onGoHome();
-  } else {
-    finish();
-  }
-}
-
-bool TextSettingsActivity::handleHomeGesture() {
-  exitAfterFinalFont(ExitDestination::Home);
-  return true;
-}
-
-#ifdef ENABLE_CHINESE_VERSION
-void TextSettingsActivity::maybeOfferCompleteChineseFont() {
-  if (FontDownloadActivity::wasChineseFontPromptShownThisBoot() || SETTINGS.sdFontFamilyName[0] != '\0' ||
-      SETTINGS.fontPointSize < 14) {
-    return;
-  }
-
-  SETTINGS.saveToFile();
-  auto downloader = makeUniqueNoThrow<FontDownloadActivity>(
-      renderer, mappedInput, FontDownloadActivity::Purpose::PromptThenManage,
-      startMode_ == StartMode::PreviewOnly ? FontDownloadActivity::StartMode::PreviewOnly
-                                           : FontDownloadActivity::StartMode::Normal);
-  if (!downloader) {
-    LOG_ERR("FONT", "OOM allocating FontDownloadActivity (%zu bytes)", sizeof(FontDownloadActivity));
-    return;
-  }
-  startActivityForResult(std::move(downloader), [this](const ActivityResult&) { requestUpdate(); });
-}
-#endif
-
 void TextSettingsActivity::confirmLayoutRow(int row) {
   switch (static_cast<LayoutRow>(row)) {
     case LayoutRow::ParaSpacing:
@@ -617,6 +552,17 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         });
       requestUpdate();
       break;
+    case LayoutRow::ParaIndentation: {
+      std::vector<std::string> options;
+      options.reserve(6);
+      for (int spaces = 0; spaces <= 5; ++spaces) options.push_back(std::to_string(spaces));
+      optionPopup_.show(StrId::STR_PARAGRAPH_INDENTATION, options, SETTINGS.paragraphIndentSpaces, [](int idx) {
+        SETTINGS.paragraphIndentSpaces = static_cast<uint8_t>(idx);
+        SETTINGS.saveToFile();
+      });
+      requestUpdate();
+      break;
+    }
     case LayoutRow::LineSpacing:
       optionPopup_.show(StrId::STR_LINE_SPACING, LINE_SPACING_IDS, static_cast<int>(std::size(LINE_SPACING_IDS)),
                         SETTINGS.lineSpacing, [](int idx) {
@@ -629,6 +575,25 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       optionPopup_.show(StrId::STR_ALIGNMENT, ALIGNMENT_IDS, static_cast<int>(std::size(ALIGNMENT_IDS)),
                         SETTINGS.paragraphAlignment, [](int idx) {
                           SETTINGS.paragraphAlignment = static_cast<uint8_t>(idx);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
+    case LayoutRow::WordSpacing: {
+      const int cur = (std::clamp<int>(SETTINGS.wordSpacing, WORD_SPACING_MIN, WORD_SPACING_MAX) - WORD_SPACING_MIN) /
+                      WORD_SPACING_STEP;
+      optionPopup_.show(StrId::STR_WORD_SPACING, WORD_SPACING_IDS, static_cast<int>(std::size(WORD_SPACING_IDS)), cur,
+                        [](int idx) {
+                          SETTINGS.wordSpacing = static_cast<uint8_t>(WORD_SPACING_MIN + idx * WORD_SPACING_STEP);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
+    }
+    case LayoutRow::CharacterSpacing:
+      optionPopup_.show(StrId::STR_CHARACTER_SPACING, CHARACTER_SPACING_IDS,
+                        static_cast<int>(std::size(CHARACTER_SPACING_IDS)), SETTINGS.characterSpacing, [](int idx) {
+                          SETTINGS.characterSpacing = static_cast<uint8_t>(idx);
                           SETTINGS.saveToFile();
                         });
       requestUpdate();
@@ -661,6 +626,8 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
       const uint8_t v = SETTINGS.extraParagraphSpacing;
       return v < std::size(EXTRA_SPACING_IDS) ? I18N.get(EXTRA_SPACING_IDS[v]) : I18N.get(StrId::STR_EXTRA_SPACING_OFF);
     }
+    case LayoutRow::ParaIndentation:
+      return std::to_string(SETTINGS.paragraphIndentSpaces);
     case LayoutRow::FirstLineIndent: {
       const uint8_t v = SETTINGS.firstLineIndent;
       return v < std::size(FIRST_LINE_INDENT_IDS) ? I18N.get(FIRST_LINE_INDENT_IDS[v])
@@ -669,6 +636,13 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
     case LayoutRow::Alignment: {
       const uint8_t v = SETTINGS.paragraphAlignment;
       return v < std::size(ALIGNMENT_IDS) ? I18N.get(ALIGNMENT_IDS[v]) : I18N.get(StrId::STR_JUSTIFY);
+    }
+    case LayoutRow::WordSpacing:
+      return std::to_string(SETTINGS.wordSpacing) + "%";
+    case LayoutRow::CharacterSpacing: {
+      const uint8_t v = SETTINGS.characterSpacing;
+      return v < std::size(CHARACTER_SPACING_IDS) ? I18N.get(CHARACTER_SPACING_IDS[v])
+                                                  : I18N.get(StrId::STR_SPACING_ZERO);
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
@@ -766,22 +740,12 @@ std::string TextSettingsActivity::styleValueText(int row) const {
   }
 }
 
+// Only Focus Reading shows in the preview (bold prefixes); the other Style rows
+// have no distinct preview.
 bool TextSettingsActivity::focusedRowHasNoPreview() const {
   if (ringPos() == 0 || tab_ != Tab::Style) return false;
   const StyleRow row = styleRowAt(ringPos() - 1);
   return row == StyleRow::Hyphenation || row == StyleRow::EmbeddedStyle || row == StyleRow::AntiAliasing;
-}
-
-TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(int visibleIndex) const {
-  if (visibleIndex < 0 || visibleIndex >= styleRowCount()) return StyleRow::Count;
-  if (!SETTINGS.readingGuideLineEnabled && visibleIndex >= static_cast<int>(StyleRow::ReadingGuideLineStyle)) {
-    visibleIndex += HIDDEN_GUIDE_ROW_COUNT;
-  }
-  return static_cast<StyleRow>(visibleIndex);
-}
-
-int TextSettingsActivity::styleRowCount() const {
-  return static_cast<int>(StyleRow::Count) - (SETTINGS.readingGuideLineEnabled ? 0 : HIDDEN_GUIDE_ROW_COUNT);
 }
 
 void TextSettingsActivity::switchTab(const int direction) {
@@ -809,4 +773,223 @@ int TextSettingsActivity::listCount() const {
     default:
       return 0;
   }
+}
+
+const SdCardFontFileInfo* TextSettingsActivity::fontFileForFamily(const int listIndex, const uint8_t pointSize) const {
+  if (!registry_ || listIndex < 0 || listIndex >= static_cast<int>(fonts_.size()) || fonts_[listIndex].isBuiltin) {
+    return nullptr;
+  }
+  const int familyIndex = fonts_[listIndex].settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
+  const auto& families = registry_->getFamilies();
+  return familyIndex >= 0 && familyIndex < static_cast<int>(families.size())
+             ? families[familyIndex].findNearestSize(pointSize)
+             : nullptr;
+}
+
+SdCardFontCache::Result TextSettingsActivity::preloadFont(const SdCardFontFileInfo& file, const char* familyName) {
+  NetworkStartup::logMemory("font preload begin");
+  {
+    RenderLock lock(*this);
+    preloadFamilyName_ = familyName;
+    preloadPointSize_ = file.pointSize;
+    preloadVerifying_ = false;
+    preloadCompleted_.store(0);
+    preloadTotal_.store(1);
+    lastPreloadPercent_ = 0;
+    fontLoadState_.store(FontLoadState::Preloading);
+    sdFontSystem.releaseLoadedFont(renderer);
+  }
+  requestUpdateAndWait();
+
+  const auto result = SdCardFontCache::preload(
+      file.path.c_str(),
+      [](size_t completed, size_t total, void* context) {
+        auto* self = static_cast<TextSettingsActivity*>(context);
+        bool refresh = false;
+        {
+          RenderLock lock(*self);
+          self->preloadTotal_.store(total);
+          self->preloadCompleted_.store(completed);
+          const bool verifying = completed > total / 2;
+          const bool phaseChanged = self->preloadVerifying_ != verifying;
+          self->preloadVerifying_ = verifying;
+          const unsigned percent = total > 0 ? static_cast<unsigned>(completed * 100 / total) : 0;
+          if (phaseChanged || percent == 100 || percent >= self->lastPreloadPercent_ + 10) {
+            self->lastPreloadPercent_ = percent;
+            refresh = true;
+          }
+        }
+        // Finish the panel refresh before the cache writer resumes Flash operations.
+        if (refresh) self->requestUpdateAndWait();
+      },
+      this);
+
+  LOG_INF("SDFCACHE", "Manual preload: %s", SdCardFontCache::resultName(result));
+  NetworkStartup::logMemory("font preload finished");
+  const bool succeeded = result == SdCardFontCache::Result::Ok || result == SdCardFontCache::Result::AlreadyCached;
+  if (succeeded) {
+    requestUpdateAndWait();
+    {
+      RenderLock lock(*this);
+      fontLoadState_.store(FontLoadState::Ready);
+    }
+    requestUpdateAndWait();
+  }
+  return result;
+}
+
+void TextSettingsActivity::exitAfterFinalFont(const ExitDestination destination) {
+  if (exitInProgress_) return;
+  exitInProgress_ = true;
+  exitDestination_ = destination;
+
+  if (startMode_ == StartMode::PreviewOnly) {
+    // The reader owns the complete preview session and asks only on return to
+    // the page. Home/sleep must not turn a preview into a Flash write either.
+    SETTINGS.saveToFile();
+    completeExit();
+    return;
+  }
+
+  const bool fontChanged = initialFontState_ == InitialFontState::Changed ||
+                           currentFamilyIndex_ != initialFamilyIndex_ || SETTINGS.fontPointSize != initialPointSize_;
+  if (!fontChanged) {
+    const bool restoreFlash = initialSdFontFlashPreload_ != 0 && SETTINGS.sdFontFlashPreload == 0;
+    SETTINGS.sdFontFlashPreload = initialSdFontFlashPreload_;
+    SETTINGS.saveToFile();
+    if (restoreFlash) {
+      RenderLock lock(*this);
+      sdFontSystem.releaseLoadedFont(renderer);
+      sdFontSystem.ensureLoaded(renderer);
+    }
+    completeExit();
+    return;
+  }
+
+  if (SETTINGS.sdFontFamilyName[0] == '\0') {
+    SETTINGS.sdFontFlashPreload = 0;
+    SETTINGS.saveToFile();
+    completeExit();
+    return;
+  }
+
+  finishFinalFont(startMode_ == StartMode::PreloadThenExit);
+}
+
+void TextSettingsActivity::finishFinalFont(const bool accepted) {
+  SETTINGS.sdFontFlashPreload = 0;
+  SETTINGS.saveToFile();
+  const auto* family = registry_ ? registry_->findFamily(SETTINGS.sdFontFamilyName) : nullptr;
+  if (family && family->vector) {
+    completeExit();
+    return;
+  }
+  const auto* file = fontFileForFamily(currentFamilyIndex_, SETTINGS.fontPointSize);
+  const auto check = file ? SdCardFontCache::preflight(file->path.c_str()) : SdCardFontCache::Result::InvalidFont;
+  if (check != SdCardFontCache::Result::Ok && check != SdCardFontCache::Result::AlreadyCached) {
+    showPreloadFailure(check);
+    return;
+  }
+
+  if (check == SdCardFontCache::Result::Ok && !accepted) {
+    {
+      RenderLock lock(*this);
+      constexpr StrId options[] = {StrId::STR_FONT_PRELOAD_START, StrId::STR_FONT_PRELOAD_SKIP};
+      exitPrompt_ = ExitPrompt::Waiting;
+      exitPromptWaitForBackRelease_ = mappedInput.isPressed(MappedInputManager::Button::Back);
+      optionPopup_.show(StrId::STR_FONT_PRELOAD_CONFIRM, options, static_cast<int>(std::size(options)), 0,
+                        [this](int index) {
+                          RenderLock lock(*this);
+                          if (index == 0) exitPrompt_ = ExitPrompt::Accepted;
+                        });
+    }
+    requestUpdate();
+    return;
+  }
+
+  const auto result =
+      check == SdCardFontCache::Result::AlreadyCached ? check : preloadFont(*file, SETTINGS.sdFontFamilyName);
+  const bool succeeded = result == SdCardFontCache::Result::Ok || result == SdCardFontCache::Result::AlreadyCached;
+  SETTINGS.sdFontFlashPreload = succeeded ? 1 : 0;
+  SETTINGS.saveToFile();
+  {
+    RenderLock lock(*this);
+    fontLoadState_.store(FontLoadState::Idle);
+    // ensureLoaded's same-family/size fast path otherwise retains the SD source.
+    if (succeeded) sdFontSystem.releaseLoadedFont(renderer);
+    sdFontSystem.ensureLoaded(renderer, succeeded);
+  }
+  if (succeeded) {
+    completeExit();
+    return;
+  }
+  showPreloadFailure(result);
+}
+
+void TextSettingsActivity::showPreloadFailure(const SdCardFontCache::Result result) {
+  if (result == SdCardFontCache::Result::TooLarge) {
+    {
+      RenderLock lock(*this);
+      exitPrompt_ = ExitPrompt::TooLarge;
+    }
+    requestUpdateAndWait();
+    noticeStartedAt_ = millis();  // Start the dwell after the e-ink frame is visible.
+    return;
+  }
+  {
+    RenderLock lock(*this);
+    exitPrompt_ = ExitPrompt::Waiting;
+    exitPromptWaitForBackRelease_ = mappedInput.isPressed(MappedInputManager::Button::Back);
+    optionPopup_.show(fontpreload::failureMessage(result), OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0, {});
+  }
+  requestUpdate();
+}
+
+void TextSettingsActivity::completeExit() {
+  exitInProgress_ = true;
+  if (exitDestination_ == ExitDestination::Home) {
+    onGoHome();
+  } else {
+    finish();
+  }
+}
+
+bool TextSettingsActivity::handleHomeGesture() {
+  if (exitPrompt_ != ExitPrompt::None) {
+    exitDestination_ = ExitDestination::Home;
+    completeExit();
+    return true;
+  }
+  exitAfterFinalFont(ExitDestination::Home);
+  return true;
+}
+
+void TextSettingsActivity::maybeOfferCompleteChineseFont() {
+  if (FontDownloadActivity::wasChineseFontPromptShownThisBoot() || SETTINGS.sdFontFamilyName[0] != '\0' ||
+      SETTINGS.fontPointSize < 14) {
+    return;
+  }
+
+  SETTINGS.saveToFile();
+  auto downloader = makeUniqueNoThrow<FontDownloadActivity>(
+      renderer, mappedInput, FontDownloadActivity::Purpose::PromptThenManage,
+      startMode_ == StartMode::PreviewOnly ? FontDownloadActivity::StartMode::PreviewOnly
+                                           : FontDownloadActivity::StartMode::Normal);
+  if (!downloader) {
+    LOG_ERR("FONT", "OOM allocating FontDownloadActivity (%zu bytes)", sizeof(FontDownloadActivity));
+    return;
+  }
+  startActivityForResult(std::move(downloader), [this](const ActivityResult&) { requestUpdate(); });
+}
+
+TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(int visibleIndex) const {
+  if (visibleIndex < 0 || visibleIndex >= styleRowCount()) return StyleRow::Count;
+  if (!SETTINGS.readingGuideLineEnabled && visibleIndex >= static_cast<int>(StyleRow::ReadingGuideLineStyle)) {
+    visibleIndex += HIDDEN_GUIDE_ROW_COUNT;
+  }
+  return static_cast<StyleRow>(visibleIndex);
+}
+
+int TextSettingsActivity::styleRowCount() const {
+  return static_cast<int>(StyleRow::Count) - (SETTINGS.readingGuideLineEnabled ? 0 : HIDDEN_GUIDE_ROW_COUNT);
 }

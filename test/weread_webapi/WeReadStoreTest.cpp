@@ -61,7 +61,7 @@ class WeReadStoreTest : public ::testing::Test {
     std::filesystem::remove_all(root_, error);
     ASSERT_TRUE(std::filesystem::create_directories(root_, error));
     ASSERT_FALSE(error);
-    ASSERT_EQ(setenv("CROSSPOINT_SIM_SD", root_.c_str(), 1), 0);
+    ASSERT_EQ(setenv("CROSSPOINT_SIM_SD", root_.string().c_str(), 1), 0);
     ASSERT_TRUE(Storage.begin());
   }
 

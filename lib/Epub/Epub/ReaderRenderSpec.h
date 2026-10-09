@@ -22,6 +22,9 @@ struct ReaderRenderSpec {
   // paragraphs keep their indent even when extra paragraph spacing is
   // enabled.
   uint8_t firstLineIndent = FirstLineIndent::Auto;
+  uint8_t paragraphIndentSpaces = 3;
+  int8_t characterSpacing = 0;
+  uint8_t wordSpacingPercent = 100;
   uint8_t paragraphAlignment = 0;
   uint16_t viewportWidth = 0;
   uint16_t viewportHeight = 0;
@@ -30,4 +33,15 @@ struct ReaderRenderSpec {
   uint8_t imageRendering = 0;
   bool focusReadingEnabled = false;
   bool collectTouchLinks = false;
+
+  bool operator==(const ReaderRenderSpec& other) const {
+    return fontId == other.fontId && lineCompression == other.lineCompression &&
+           extraParagraphSpacing == other.extraParagraphSpacing && firstLineIndent == other.firstLineIndent &&
+           paragraphIndentSpaces == other.paragraphIndentSpaces && characterSpacing == other.characterSpacing &&
+           wordSpacingPercent == other.wordSpacingPercent && paragraphAlignment == other.paragraphAlignment &&
+           viewportWidth == other.viewportWidth && viewportHeight == other.viewportHeight &&
+           hyphenationEnabled == other.hyphenationEnabled && embeddedStyle == other.embeddedStyle &&
+           imageRendering == other.imageRendering && focusReadingEnabled == other.focusReadingEnabled &&
+           collectTouchLinks == other.collectTouchLinks;
+  }
 };

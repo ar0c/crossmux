@@ -11,9 +11,9 @@ try {
   if($LASTEXITCODE){throw 'Journal compilation failed'}
   & "$out/ServiceJournal.exe"
   if($LASTEXITCODE){throw 'Journal tests failed'}
-  & $Compiler @common '-Itest/weread_webapi/time_cloud_stubs' '-Itest/weread_webapi/time_storage_stubs' '-Ilib/JsonParser' `
+  & $Compiler @common '-Itest/weread_webapi/time_cloud_stubs' '-Itest/weread_webapi/time_storage_stubs' '-Ifreeink-sdk/libs/network/JsonSax/include' `
     test/weread_webapi/WeReadServiceClientStandaloneTest.cpp lib/WeReadWebApi/src/WeReadServiceClient.cpp `
-    lib/JsonParser/StreamingJsonParser.cpp -o "$out/ServiceClient.exe"
+    freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp -o "$out/ServiceClient.exe"
   if($LASTEXITCODE){throw 'Client compilation failed'}
   & "$out/ServiceClient.exe"
   if($LASTEXITCODE){throw 'Client tests failed'}

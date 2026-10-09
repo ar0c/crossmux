@@ -1,6 +1,6 @@
 add_executable(WeReadProtocolTest
   WeReadProtocolTest.cpp
-  ${REPO_ROOT}/lib/JsonParser/StreamingJsonParser.cpp
+  ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadProtocol.cpp
 )
 
@@ -9,10 +9,10 @@ add_executable(WeReadServiceJournalTest WeReadServiceJournalStandaloneTest.cpp)
 target_include_directories(WeReadServiceJournalTest PRIVATE ${REPO_ROOT}/lib/WeReadWebApi/src)
 add_executable(WeReadServiceClientTest WeReadServiceClientStandaloneTest.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadServiceClient.cpp
-  ${REPO_ROOT}/lib/JsonParser/StreamingJsonParser.cpp)
+  ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp)
 target_include_directories(WeReadServiceClientTest BEFORE PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/time_cloud_stubs ${CMAKE_CURRENT_SOURCE_DIR}/time_storage_stubs
-  ${REPO_ROOT}/lib/WeReadWebApi/src ${REPO_ROOT}/lib/JsonParser)
+  ${REPO_ROOT}/lib/WeReadWebApi/src ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/include)
 target_compile_definitions(WeReadServiceClientTest PRIVATE ENABLE_CHINESE_VERSION)
 foreach(service_target WeReadServiceJournalTest WeReadServiceClientTest)
   target_compile_features(${service_target} PRIVATE cxx_std_20)
@@ -82,9 +82,9 @@ endif()
 add_test(NAME WeReadPacedTimeTest COMMAND WeReadPacedTimeTest)
 add_executable(WeReadTimeCloudTest WeReadTimeCloudStandaloneTest.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadTimeResponse.cpp
-  ${REPO_ROOT}/lib/JsonParser/StreamingJsonParser.cpp)
+  ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp)
 target_include_directories(WeReadTimeCloudTest PRIVATE
-  ${REPO_ROOT}/lib/WeReadWebApi/src ${REPO_ROOT}/lib/JsonParser)
+  ${REPO_ROOT}/lib/WeReadWebApi/src ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/include)
 if(MSVC)
   target_compile_options(WeReadTimeCloudTest PRIVATE /UNDEBUG)
 else()
@@ -94,10 +94,10 @@ add_test(NAME WeReadTimeCloudTest COMMAND WeReadTimeCloudTest)
 add_executable(WeReadTimeQueryTest WeReadTimeQueryStandaloneTest.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadTimeCloud.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadTimeResponse.cpp
-  ${REPO_ROOT}/lib/JsonParser/StreamingJsonParser.cpp)
+  ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp)
 target_include_directories(WeReadTimeQueryTest BEFORE PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/time_cloud_stubs
-  ${REPO_ROOT}/lib/WeReadWebApi/src ${REPO_ROOT}/lib/JsonParser)
+  ${REPO_ROOT}/lib/WeReadWebApi/src ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/include)
 if(MSVC)
   target_compile_options(WeReadTimeQueryTest PRIVATE /UNDEBUG)
 else()
@@ -107,10 +107,10 @@ add_test(NAME WeReadTimeQueryTest COMMAND WeReadTimeQueryTest)
 add_executable(WeReadTimeReplayTest WeReadTimeReplayStandaloneTest.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadTimeCloud.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadTimeResponse.cpp
-  ${REPO_ROOT}/lib/JsonParser/StreamingJsonParser.cpp)
+  ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp)
 target_include_directories(WeReadTimeReplayTest BEFORE PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/time_cloud_stubs
-  ${REPO_ROOT}/lib/WeReadWebApi/src ${REPO_ROOT}/lib/JsonParser)
+  ${REPO_ROOT}/lib/WeReadWebApi/src ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/include)
 if(MSVC)
   target_compile_options(WeReadTimeReplayTest PRIVATE /UNDEBUG)
 else()
@@ -127,7 +127,7 @@ target_compile_definitions(WeReadTimeAsyncTest PRIVATE ENABLE_CHINESE_VERSION=1)
 target_include_directories(WeReadTimeAsyncTest BEFORE PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/time_async_stubs
   ${CMAKE_CURRENT_SOURCE_DIR}/time_storage_stubs
-  ${REPO_ROOT}/lib/Memory
+  $<$<COMPILE_LANGUAGE:CXX>:${REPO_ROOT}/lib/Memory>
   ${REPO_ROOT}/lib/WeReadWebApi/src
   ${REPO_ROOT}/src/activities/apps/weread/webapi)
 target_link_libraries(WeReadTimeAsyncTest PRIVATE Threads::Threads)
@@ -156,11 +156,12 @@ endif()
 add_test(NAME WeReadTimeLedgerTest COMMAND WeReadTimeLedgerTest)
 
 target_include_directories(WeReadProtocolTest BEFORE PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/time_cloud_stubs
   ${crosspoint_simulator_SOURCE_DIR}/src
   ${REPO_ROOT}/src
   ${REPO_ROOT}/lib/WeReadWebApi/src
   ${REPO_ROOT}/lib/Epub
-  ${REPO_ROOT}/lib/JsonParser
+  ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/include
   ${REPO_ROOT}/lib/Logging
 )
 
@@ -188,14 +189,11 @@ gtest_discover_tests(WeReadTouchGeometryTest)
 
 add_executable(WeReadStoreTest
   WeReadStoreTest.cpp
-  ${REPO_ROOT}/lib/JsonParser/StreamingJsonParser.cpp
+  ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadBrowse.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadProtocol.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadStore.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadXhtmlCodec.cpp
-  ${REPO_ROOT}/lib/expat/xmlparse.c
-  ${REPO_ROOT}/lib/expat/xmlrole.c
-  ${REPO_ROOT}/lib/expat/xmltok.c
   ${REPO_ROOT}/src/util/StringUtils.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
   ${crosspoint_simulator_SOURCE_DIR}/src/HalStorage.cpp
@@ -206,12 +204,11 @@ target_include_directories(WeReadStoreTest BEFORE PRIVATE
   ${REPO_ROOT}/src
   ${REPO_ROOT}/lib/WeReadWebApi/src
   ${REPO_ROOT}/lib/Epub
-  ${REPO_ROOT}/lib/JsonParser
+  ${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/include
   ${REPO_ROOT}/lib/Logging
-  ${REPO_ROOT}/lib/Memory
+  $<$<COMPILE_LANGUAGE:CXX>:${REPO_ROOT}/lib/Memory>
   ${REPO_ROOT}/lib/Serialization
   ${REPO_ROOT}/lib/Utf8
-  ${REPO_ROOT}/lib/expat
 )
 
 target_compile_definitions(WeReadStoreTest PRIVATE

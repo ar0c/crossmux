@@ -1,21 +1,14 @@
 """Canonical firmware target mapping and artifact naming."""
 
+import re
+
 FIRMWARE_NAME = 'crossmux-ar0c'
 
 
 TARGETS = {
-    'xteink_x4_pro': {
-        'deviceSlug': 'x4pro',
-        'models': ['xteink_x4_pro'],
-        'boardTag': 'x4pro',
-        'chip': 'ESP32-S3',
-        'chipId': 0x0009,
-        'environments': {'stable': 'x4pro-gh_release', 'nightly': 'x4pro_nightly'},
-        'supportedChannels': ['stable', 'nightly'],
-        'fullInstall': True,
-    },
     'waveshare_epaper_397': {
         'deviceSlug': 'waveshare-epaper-397',
+        'versionSlug': 'ws397',
         'models': ['waveshare_epaper_397'],
         'boardTag': 'waveshare_epaper_397',
         'chip': 'ESP32-S3',
@@ -42,17 +35,26 @@ def environment_for(target_id, channel, flavor):
     return TARGETS[target_id]['environments'][channel]
 
 
-def version_for(base_version, target_id, channel, flavor, short_sha):
+def version_for(base_version, target_id, channel, flavor, short_sha, build_kind='rc'):
     target = TARGETS[target_id]
+    if channel not in target['supportedChannels']:
+        raise ValueError('unsupported firmware channel')
     if channel == 'stable':
         return base_version
     if channel != 'nightly':
         raise KeyError(channel)
-    parts = [base_version]
-    parts.append(target['deviceSlug'])
     if flavor not in FLAVOR_TOKENS:
         raise KeyError(flavor)
-    return f"{'-'.join(parts)}-rc+{short_sha[:7]}"
+    if build_kind not in ('rc', 'local'):
+        raise ValueError('unknown Nightly build kind')
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', base_version):
+        raise ValueError('Nightly base version must be numeric')
+    if not isinstance(short_sha, str) or not re.fullmatch(r'[0-9a-f]{7,40}', short_sha):
+        raise ValueError('Nightly source revision must be a lowercase Git hex prefix')
+    version = f"{base_version}-{short_sha[:7]}-{target['versionSlug']}-{build_kind}"
+    if len(version.encode('ascii')) >= 32:
+        raise ValueError('Nightly version exceeds the ESP application descriptor limit')
+    return version
 
 
 def asset_name(target_id, source_name):

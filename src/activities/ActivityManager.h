@@ -20,7 +20,7 @@
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
-enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU, APPS };
+enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, LIBRARY, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU, APPS };
 
 /**
  * ActivityManager
@@ -47,6 +47,13 @@ class ActivityManager {
   MainTabFocus mainTabFocus = MainTabFocus::Tabs;
   bool mainTabEntryReleasePending = false;
 
+ private:
+  enum class StandbyBackState : uint8_t { Idle, Pressed, WaitingForRelease };
+  StandbyBackState standbyBackState = StandbyBackState::Idle;
+  bool handleHomeStandbyInput();
+  void resetHomeStandbyInput();
+
+ protected:
   void exitActivity(const RenderLock& lock);
   bool handleMainTabInput();
 
@@ -72,6 +79,7 @@ class ActivityManager {
   // Cross-task render request flag. requestUpdate() may set it from any task;
   // loop() consumes and clears it with exchange(false).
   std::atomic<bool> requestedUpdate{false};
+  std::atomic<uint32_t> idleRenderGeneration{0};
 
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -83,6 +91,11 @@ class ActivityManager {
 
   void begin();
   void loop();
+  void cancelIdleRender() { idleRenderGeneration.fetch_add(1, std::memory_order_relaxed); }
+  bool idleRenderCancelled(uint32_t generation) const {
+    return generation != idleRenderGeneration.load(std::memory_order_relaxed) || isSwitchPending() ||
+           requestedUpdate.load();
+  }
 
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);
@@ -102,6 +115,7 @@ class ActivityManager {
 
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
+  void goToJoinNetwork();  // File Transfer straight into Join Network (post heap-defrag reboot)
   void goToUsbDrive();
   void goToSettings();
   void goToUglyAvatar();
@@ -110,8 +124,10 @@ class ActivityManager {
   void goToInxRecent();
   void goToMainTab(MainTab tab);
   void goToFileBrowser(std::string path = {});
+  void goToLibrary();
   void goToRecentBooks();
   void goToBrowser();
+  void goToPlugins(bool showOpds);
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
@@ -154,6 +170,7 @@ class ActivityManager {
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
+  void prepareForSleep();
 
   // Returns true when a Push/Pop/Replace is waiting for the render lock.
   // The render task can call this to abort a long render early and let the

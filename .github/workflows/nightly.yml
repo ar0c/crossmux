@@ -11,12 +11,17 @@ on:
         description: 'Chinese OTA release notes (2-8 lines, max 32 characters each)'
         required: true
         type: string
-  push:
-    tags:
-      - '*.*.*'
+      release_target:
+        description: 'Waveshare 3.97 Nightly target'
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - waveshare_epaper_397
 
 concurrency:
-  group: firmware-${{ github.event_name == 'push' && 'stable' || 'nightly' }}-publish
+  group: firmware-nightly-publish
   cancel-in-progress: false
 
 permissions:
@@ -39,26 +44,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - id: release
+        env:
+          RELEASE_TARGET: ${{ inputs.release_target }}
         run: |
           set -euo pipefail
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            channel=stable
-            version="$(python3 -c 'import configparser; c=configparser.ConfigParser(); c.read("platformio.ini"); print(c["crosspoint"]["version"])')"
-            if [[ ! "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [ "$GITHUB_REF_NAME" != "$version" ]; then
-              echo "::error::Stable tag $GITHUB_REF_NAME does not match firmware version $version"
-              exit 1
-            fi
-          else
-            channel=nightly
-          fi
+          channel=nightly
           build_id="${channel}-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
           echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
           echo "build_tag=$build_id" >> "$GITHUB_OUTPUT"
-          target_args=()
-          if [ "$channel" = nightly ] && [ "$GITHUB_REF_NAME" = codex/weread-managed-session ]; then
-            target_args=(--only-target waveshare_epaper_397)
-          fi
+          target_args=(--only-target waveshare_epaper_397)
+          case "${RELEASE_TARGET:-auto}" in
+            auto|waveshare_epaper_397) ;;
+            *) echo "::error::Unsupported Nightly target: $RELEASE_TARGET"; exit 1 ;;
+          esac
           echo "target_args=${target_args[*]}" >> "$GITHUB_OUTPUT"
           echo "matrix=$(python3 scripts/package_nightly_target.py --channel "$channel" --matrix "${target_args[@]}")" >> "$GITHUB_OUTPUT"
 
@@ -112,6 +111,10 @@ jobs:
     name: ${{ matrix.targetId }} (${{ needs.prepare.outputs.channel }})
     runs-on: ${{ fromJSON(needs.select_runner.outputs['runs-on']) }}
     steps:
+      - name: Isolate PlatformIO toolchains
+        run: echo "PLATFORMIO_CORE_DIR=$RUNNER_TEMP/.platformio-$GITHUB_RUN_ID-$GITHUB_JOB-${{ matrix.targetId }}" >> "$GITHUB_ENV"
+      - name: Use runner temporary directory
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -123,9 +126,14 @@ jobs:
           version: latest
           enable-cache: false
       - name: Install PlatformIO Core
-        run: uv pip install --system -U pioarduino==6.1.19
+        run: uv pip install --system -U pioarduino==6.2.0
+
+      - name: Prepare platform tools
+        run: python scripts/patch_pioarduino_cache.py --prepare-platform
       - name: Set seven-character build revision
-        run: echo "CROSSPOINT_RC_HASH=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+        run: |
+          echo "CROSSPOINT_RC_HASH=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "CROSSPOINT_BUILD_KIND=rc" >> "$GITHUB_ENV"
       - name: Build unified target
         run: pio run -e "${{ matrix.environment }}"
       - name: Package and verify unified target
@@ -187,7 +195,6 @@ jobs:
           BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
         run: |
           scope_args=(${{ needs.prepare.outputs.target_args }})
-          if [ ${#scope_args[@]} -gt 0 ]; then scope_args+=(--previous-index previous/global/release-index.json); fi
           notes_args=()
           [ ! -f notes/ota-notes.md ] || notes_args+=(--release-notes notes/ota-notes.md)
           python3 scripts/build_nightly_index.py \
@@ -220,13 +227,6 @@ jobs:
               --title "$title" --notes-file notes/release-body.md --prerelease
           fi
           gh release upload "$CHANNEL" release-index.json --repo "$GITHUB_REPOSITORY" --clobber
-          legacy_assets="$(gh release view "$CHANNEL" --repo "$GITHUB_REPOSITORY" \
-            --json assets --jq '.assets[].name')"
-          for legacy_asset in firmware.bin firmware-cn.bin; do
-            if grep -Fxq "$legacy_asset" <<< "$legacy_assets"; then
-              gh release delete-asset "$CHANNEL" "$legacy_asset" --repo "$GITHUB_REPOSITORY" --yes
-            fi
-          done
 
   verify_publish:
     needs: [prepare, publish_github]
@@ -241,49 +241,11 @@ jobs:
             --index-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CHANNEL}/release-index.json?run=${GITHUB_RUN_ID}" \
             --expected-sha "$GITHUB_SHA" ${{ needs.prepare.outputs.target_args }}
 
-  publish_stable_release:
-    if: needs.prepare.outputs.channel == 'stable'
-    needs: [prepare, notes, build, verify_publish]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: firmware-stable-xteink_x4_pro
-          path: artifacts
-      - uses: actions/download-artifact@v4
-        with:
-          name: firmware-release-notes
-          path: notes
-      - name: Publish versioned X4 Pro release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          assets=(artifacts/crossmux-ar0c-x4pro-firmware.bin artifacts/crossmux-ar0c-x4pro-bootloader.bin \
-            artifacts/crossmux-ar0c-x4pro-partitions.bin artifacts/crossmux-ar0c-x4pro-boot_app0.bin)
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --title "crossmux-ar0c $GITHUB_REF_NAME" --notes-file notes/release-body.md --latest
-          else
-            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
-              --verify-tag --title "crossmux-ar0c $GITHUB_REF_NAME" --notes-file notes/release-body.md --latest
-          fi
-          existing_assets="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --json assets --jq '.assets[].name')"
-          for legacy_asset in firmware.bin firmware-cn.bin bootloader.bin partitions.bin; do
-            if grep -Fxq "$legacy_asset" <<< "$existing_assets"; then
-              gh release delete-asset "$GITHUB_REF_NAME" "$legacy_asset" --repo "$GITHUB_REPOSITORY" --yes
-            fi
-          done
-
   sync_k3s:
     if: >-
       always() && github.repository == 'ar0c/crossmux' &&
-      needs.verify_publish.result == 'success' &&
-      (needs.prepare.outputs.channel == 'nightly' || needs.publish_stable_release.result == 'success')
-    needs: [prepare, verify_publish, publish_stable_release]
+      needs.verify_publish.result == 'success'
+    needs: [prepare, verify_publish]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -302,32 +264,3 @@ jobs:
           python3 scripts/verify_nightly_release.py --channel "$CHANNEL" \
             --index-url "https://ooo.ar0c.com/releases/download/${CHANNEL}/release-index.json" \
             --expected-sha "$GITHUB_SHA" ${{ needs.prepare.outputs.target_args }}
-
-  cleanup_github:
-    if: needs.prepare.outputs.channel == 'nightly' && needs.publish_github.outputs.has_previous == 'true'
-    needs: [prepare, verify_publish, publish_github]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
-        with:
-          name: previous-global-index
-          path: previous/global
-      - name: Delete obsolete GitHub Nightly builds
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' \
-            > github-releases.txt
-          python3 scripts/nightly_retention.py --storage github --current "$BUILD_TAG" \
-            --repository "$GITHUB_REPOSITORY" \
-            --previous-index previous/global/release-index.json --candidates github-releases.txt \
-            > obsolete-github-builds.txt
-          while IFS= read -r build_tag; do
-            gh release delete "$build_tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
-          done < obsolete-github-builds.txt

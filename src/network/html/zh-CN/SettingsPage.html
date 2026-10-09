@@ -294,6 +294,7 @@
 
   <div id="wifi-container"></div>
   <div id="opds-container"></div>
+  <div id="plugin-container"></div>
 
 <script>
   let allSettings = [];
@@ -303,6 +304,7 @@
   const SLEEP_SCREEN_MODE = {
     QUICK_RESUME: 6
   };
+  const UI_THEME_INX = 5;
 
   function escapeHtml(unsafe) {
     return unsafe
@@ -475,11 +477,15 @@
         pwrBtnFootnoteBackRow.style.display = 'none';
       }
     }
+    const inxTabPositionRow = document.getElementById('row-setting-inxTabPosition');
+    if (inxTabPositionRow) {
+      inxTabPositionRow.style.display = getControlValue('uiTheme') === UI_THEME_INX ? '' : 'none';
+    }
   }
 
   function handleSettingChanged(key) {
     syncQuickResumeTimeoutForSleepScreen(key === 'sleepScreen', key === 'quickResumeSleepScreen');
-    if (key === 'shortPwrBtn') {
+    if (key === 'shortPwrBtn' || key === 'uiTheme') {
       updateSettingsVisibility();
     }
     markChanged();
@@ -816,7 +822,9 @@
     await loadSettings();
     await loadWifiNetworks();
     await loadOpdsServers();
+    await loadPlugins('settings');
   })();
+<!--#include file="../shared/PluginHost.js.inc" -->
 </script>
 </body>
 </html>

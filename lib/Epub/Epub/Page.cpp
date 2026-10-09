@@ -5,8 +5,6 @@
 #include <Memory.h>
 #include <Serialization.h>
 
-#include <new>
-
 namespace {
 
 template <typename Predicate>
@@ -111,9 +109,15 @@ std::unique_ptr<PageImage> PageImage::deserialize(HalFile& file) {
   if (!serialization::readPod(file, xPos) || !serialization::readPod(file, yPos)) return nullptr;
 
   auto ib = ImageBlock::deserialize(file);
-  if (!ib) return nullptr;
+  if (!ib) {
+    LOG_ERR("PGE", "Deserialization failed: null ImageBlock");
+    return nullptr;
+  }
   auto image = makeUniqueNoThrow<PageImage>(std::move(ib), xPos, yPos);
-  if (!image) LOG_ERR("PGE", "Deserialization failed: could not allocate PageImage");
+  if (!image) {
+    LOG_ERR("PGE", "Deserialization failed: could not allocate PageImage");
+    return nullptr;
+  }
   return image;
 }
 
@@ -194,6 +198,19 @@ void Page::cacheImagesNeedingDecode(GfxRenderer& renderer, const int xOffset, co
       image.getImageBlock().cacheDecodedImage(renderer, image.xPos + xOffset, image.yPos + yOffset);
     }
   }
+}
+
+bool Page::warmImages(GfxRenderer& renderer, int xOffset, int yOffset, CancelCheck cancellation) {
+  for (auto& element : elements) {
+    if (cancellation.isCancelled()) return false;
+    if (element->getTag() != TAG_PageImage) continue;
+    auto& image = static_cast<PageImage&>(*element);
+    auto& block = image.getImageBlock();
+    if (!block.needsDecode()) continue;
+    if (!block.ensureExtracted(cancellation) || cancellation.isCancelled()) return false;
+    if (!block.cacheDecodedImage(renderer, image.xPos + xOffset, image.yPos + yOffset, cancellation)) return false;
+  }
+  return !cancellation.isCancelled();
 }
 
 bool Page::serialize(HalFile& file) const {

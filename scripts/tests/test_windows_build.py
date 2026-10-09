@@ -60,6 +60,17 @@ class WindowsBuildTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Unsupported pioarduino"):
             module["patch_source"]("# changed upstream implementation\n")
 
+    def test_response_file_platform_keeps_core_middleware(self):
+        module = runpy.run_path(str(ROOT / "scripts/patch_windows_middleware.py"))
+        source = (Path(__file__).parent / "fixtures/pioarduino_55_03_311_arduino.py.txt").read_text(encoding="utf-8")
+        self.assertNotIn("def integrated_middleware", source)
+        self.assertIn('env["TEMPFILE"]       = TempFileMunge', source)
+        self.assertEqual(module["patch_source"](source), source)
+        self.assertEqual(module["patch_source"](module["patch_source"](source)), source)
+        # A changed dispatcher or command wrapper must be reviewed again.
+        with self.assertRaisesRegex(RuntimeError, "Unsupported pioarduino"):
+            module["patch_source"](source + '\nenv.AddBuildMiddleware(unknown)\n')
+
     def test_i18n_logging_with_utf8_capture_and_gbk_outer_console(self):
         module = runpy.run_path(str(ROOT / "scripts/gen_i18n.py"))
         outer = io.TextIOWrapper(io.BytesIO(), encoding="gbk", errors="strict")

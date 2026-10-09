@@ -12,6 +12,7 @@
 #include "I18nKeys.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "util/Timezones.h"
 
 namespace fui = freeink::ui;
 
@@ -91,6 +92,7 @@ void LanguageSelectActivity::activateIndex(const int index) {
     return;
   }
 
+  timezones::applyToClock();
   {
     RenderLock lock(*this);
     I18N.setLanguage(language);
@@ -132,6 +134,10 @@ void LanguageSelectActivity::buildScreen(UiScreen& screen) {
   props.count = static_cast<uint16_t>(totalItems);
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
+  if (SETTINGS.uiTheme != CrossPointSettings::INX) {
+    props.labelText = screen.theme().smallText;
+    props.labelText.maxLines = 2;
+  }
   syncListViewport(screen, props);
   screen.list(props);
 }
