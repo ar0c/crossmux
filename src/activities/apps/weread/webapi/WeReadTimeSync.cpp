@@ -334,7 +334,7 @@ struct Job final : WeReadTime::TimeQueueSource {
   }
   void runService() {
     using Q = WeReadTime::TimeQueue::State;
-    const unsigned long runStartedAt = millis();
+    [[maybe_unused]] const unsigned long runStartedAt = millis();
     LOG_INF("WRTime", "Service handoff begin days=%u", unsigned(dayCount));
     current.available = current.running = true;
     current.totals.serviceMode = true;
@@ -344,7 +344,7 @@ struct Job final : WeReadTime::TimeQueueSource {
     WeReadTime::ServiceClient client;
     WeReadTime::SdByteLog serviceLog;
     const auto finish = [&](Q result) {
-      const unsigned long auditStartedAt = millis();
+      [[maybe_unused]] const unsigned long auditStartedAt = millis();
       current.auditFailed = !accounting.audit(source(), account, current.totals);
       current.queue = current.auditFailed ? Q::StorageError : result;
       current.running = false;
@@ -413,7 +413,7 @@ struct Job final : WeReadTime::TimeQueueSource {
     const auto flush = [&] {
       if (!batch.count) return true;
       if (interrupted()) return false;
-      const unsigned long batchStartedAt = millis();
+      [[maybe_unused]] const unsigned long batchStartedAt = millis();
       LOG_INF("WRTime", "Service handoff batch begin items=%u elapsed_ms=%lu", unsigned(batch.count),
               batchStartedAt - runStartedAt);
       const auto result = client.exchangeBatch(ledger.identity(), batch);
