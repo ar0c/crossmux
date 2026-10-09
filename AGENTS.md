@@ -35,6 +35,25 @@ Targets: Xteink X4 Pro and Waveshare ePaper 3.97 have separate ESP32-S3 images. 
 
 ## Golden Rules — Non-Negotiable Invariants
 
+### ar0c fork: real WeRead uploads (user authorization, 2026-09-15)
+
+For this project's WeRead synchronization, including companion tools used to
+validate it, the user explicitly permits uploading their verifiable real
+reading data to their own WeRead account. This is a project-scoped exception
+to the general prohibition on non-rollbackable data writes: lack of a cloud
+undo API alone does not prohibit an otherwise authorized real upload.
+Do not repeatedly request this same general authorization.
+
+This exception does not authorize fabricated time, duplicate reports, another
+account, unrelated writes, or irreversible hardware/security operations.
+Preserve source records; verify account/book/date and remaining unsent time;
+persist reservations before sending; read back cloud results afterward; never
+automatically resend an uncertain request or label an ACK as verified credit.
+The user subsequently accepted upload-day attribution for verifiable offline
+reading time. Preserve the original source date locally; never fabricate time
+or replay uncertain batches. Use bounded validation before enabling normal
+device uploads. See [weread-time-sync.md](docs/engineering/weread-time-sync.md).
+
 These are the highest-frequency-violation rules. Each links to the doc with the
 full reasoning, examples, and edge cases.
 

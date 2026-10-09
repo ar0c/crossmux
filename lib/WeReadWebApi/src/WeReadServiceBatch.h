@@ -3,7 +3,7 @@
 #include "WeReadServiceJournal.h"
 
 namespace WeReadTime {
-// One transient workspace per explicit handoff. Kept off the 8 KiB TLS stack;
+// One transient workspace per explicit handoff. Kept off the 12 KiB TLS stack;
 // no history-sized buffer and no change to immutable WRS1 task identities.
 struct ServiceBatch {
   static constexpr size_t kMaxItems = 16, kBodySize = 8192;

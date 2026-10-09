@@ -128,7 +128,10 @@ internal free-memory reserve and 32 KiB post-allocation TLS block check are pres
 memory still rejects the run before any network request or new reservation.
 Startup failures keep their concrete diagnostic visible in service mode instead
 of replacing it with a generic configuration/network retry message. Serial logs
-record only free/largest-block bytes before and after cache reclamation.
+record free/largest-block bytes before and after cache reclamation. Bounded
+phase logs report source-day count, initial/final audit time, identity-ready time,
+batch count/request duration, total duration and stack high-water; no account,
+book, device identifier, credentials or reading ranges are logged by these probes.
 
 Run `scripts/test_weread_service.ps1`: pure journal crash/torn-tail checks,
 production client parsing and authenticated HTTPS transport boundary tests
