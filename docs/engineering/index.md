@@ -14,16 +14,21 @@ that matches your task — don't load everything at once.
 | [architecture-and-patterns.md](architecture-and-patterns.md) | Using the HAL, singletons, the activity lifecycle, FreeRTOS tasks, or fonts. (Big-picture diagrams: [../contributing/architecture.md](../contributing/architecture.md).) |
 | [coding-standards.md](coding-standards.md) | Naming, header guards, or the error-handling pattern hierarchy. |
 | [ui-and-input.md](ui-and-input.md) | Rendering UI, handling orientation, mapping buttons, or using the `GUI`/UITheme macro and `tr()`. |
+| [reader-auto-rotation.md](reader-auto-rotation.md) | EPUB automatic orientation, Waveshare IMU gating, runtime direction, sensor power and future board ports. |
 | [generated-files.md](generated-files.md) | Editing HTML pages, i18n translations, or fonts (anything produced by a build script). |
 | [testing-and-debugging.md](testing-and-debugging.md) | Building, monitoring, debugging crashes, verifying changes, or reading CI workflows. |
 | [c3-bluetooth.md](c3-bluetooth.md) | Historical C3 BLE investigation; C3 has no build or release target in this fork. |
+| [sticks3-ble-remote.md](sticks3-ble-remote.md) | Pairing a StickS3 HID remote with Waveshare 3.97 and validating real BLE actions through USB control and receiver screenshots. |
 | [git-workflow.md](git-workflow.md) | Any git operation: detecting repo context, branching, commit format, or deciding whether to commit. |
 | [cache-management.md](cache-management.md) | Changing a cache binary layout, invalidating caches, or bumping a format version. (Byte-level formats: [../file-formats.md](../file-formats.md).) |
 | [sd-card-font-cache.md](sd-card-font-cache.md) | Reviewing the SD-card reader-font cache, its inactive-OTA-slot backend, rollback boundary, commit protocol, SD fallback, progress UI, or performance logs. |
 | [chinese-build.md](chinese-build.md) | Working on unified-firmware content profiles or embedded CJK fonts. |
-| [firmware-release.md](firmware-release.md) | Changing Nightly targets, packaging, GitHub/COS publishing, regional indexes, rollback, or OTA release contracts. |
-| [device-variants.md](device-variants.md) | Building and flashing the supported X4 Pro and Waveshare 3.97 images. |
-| [waveshare-epaper-397.md](waveshare-epaper-397.md) | Building, flashing, or hardware-validating the experimental Waveshare ESP32-S3 ePaper 3.97 target. |
+| [firmware-release.md](firmware-release.md) | Changing Waveshare Nightly packaging, GitHub publication, the verified K3s mirror, rollback, or OTA contracts. |
+| [device-variants.md](device-variants.md) | Checking the sole maintained Waveshare 3.97 firmware target and historical device boundaries. |
+| [waveshare-epaper-397.md](waveshare-epaper-397.md) | Building, flashing, or hardware-validating the Waveshare ESP32-S3 ePaper 3.97 target. |
+| [weread-time-sync.md](weread-time-sync.md) | Measured-time accounting, upload-day attribution, durable journals, and uncertain-result handling. |
+| [weread-service-handoff.md](weread-service-handoff.md) | Configuring managed WeRead reading and service time handoff, ownership, recovery, and cloud-credit readback. |
+| [weread-local-validation.md](weread-local-validation.md) | Running offline, backend-contract, simulator, and USB validation with explicit acceptance boundaries. |
 | [sdk-upstream-sync.md](sdk-upstream-sync.md) | Reviewing the September 2026 SDK integration, upstream touch-menu behavior, source snapshots, and hardware acceptance limits. |
 | [upstream-merge-policy.md](upstream-merge-policy.md) | Reconciling upstream guide changes with the canonical `AGENTS.md` layout — how to keep the map thin and route upstream changes into these docs. |
 | [ssd1677-text-aa.md](ssd1677-text-aa.md) | Shared SSD1677 text AA routing, PSRAM fallback and validation. |

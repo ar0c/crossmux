@@ -55,15 +55,18 @@ def validate_url(url, index_url, channel):
         valid = bool(repository) and parsed.hostname == 'github.com' and parsed.path.startswith(
             f'{repository.group(1)}/releases/download/{channel}-build-'
         )
-    elif index_host == 'ooo.ar0c.com':
+    elif index_host == 'release.ar0c.com':
+        index = urlparse(index_url)
         valid = (
-            urlparse(index_url).path == f'/releases/download/{channel}/release-index.json'
-            and parsed.hostname == 'ooo.ar0c.com'
+            index.scheme == 'https' and index.netloc == index_host
+            and not index.query and not index.fragment
+            and index.path == f'/releases/download/{channel}/release-index.json'
+            and parsed.netloc == index_host
             and bool(re.fullmatch(
                 rf'/releases/download/{re.escape(channel)}-build-[0-9a-f]{{40}}-[0-9]+-[0-9]+/[a-z0-9._-]+',
                 parsed.path,
             ))
-            and not parsed.query and not parsed.fragment
+            and not parsed.query and not parsed.fragment and '..' not in parsed.path
         )
     elif index_host == 'assets.crossmux.cn':
         valid = parsed.hostname == 'assets.crossmux.cn' and parsed.path.startswith('/firmware/builds/')

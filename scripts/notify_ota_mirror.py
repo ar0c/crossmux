@@ -9,7 +9,9 @@ import os
 import time
 import urllib.request
 
-ENDPOINT = 'https://ooo.ar0c.com/hooks/release'
+from nightly_targets import CHANNELS
+
+ENDPOINT = 'https://release.ar0c.com/hooks/release'
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -19,7 +21,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--channel', choices=('stable', 'nightly'), required=True)
+    parser.add_argument('--channel', choices=CHANNELS, required=True)
     parser.add_argument('--build-id', required=True)
     parser.add_argument('--sha', required=True)
     args = parser.parse_args()

@@ -45,13 +45,12 @@ class MirrorTest(unittest.TestCase):
         source[mirror.SOURCE + 'nightly/release-index.json'] = json.dumps(index).encode()
         return index, source
 
-    def test_waveshare_only_transition_and_mixed_historical_rollback(self):
+    def test_waveshare_verified_historical_rollback(self):
         old_tag = 'nightly-build-' + 'a' * 40 + '-1-1'
         partial_tag = 'nightly-build-' + 'b' * 40 + '-2-1'
         new_tag = 'nightly-build-' + 'c' * 40 + '-3-1'
         old_index, old_source = self.release(old_tag)
         previous_index, previous_source = self.release(partial_tag)
-        previous_index['targets']['xteink_x4_pro'] = old_index['targets']['xteink_x4_pro']
         new_index, new_source = self.release(new_tag, only={'waveshare_epaper_397'})
         source = {**old_source, **previous_source, **new_source}
         index_url = mirror.SOURCE + 'nightly/release-index.json'
@@ -138,56 +137,47 @@ class MirrorTest(unittest.TestCase):
                 for variant in entry['variants'].values():
                     self.assertTrue(variant['manifestUrl'].startswith(mirror.DESTINATION + tag + '/'))
 
-    def test_partial_nightly_preserves_verified_previous_target(self):
-        channel = 'nightly'
-        old_tag = 'nightly-build-' + 'a' * 40 + '-1-1'
-        new_tag = 'nightly-build-' + 'c' * 40 + '-2-1'
-        old_index, old_source = self.release(old_tag)
-        new_index, new_source = self.release(new_tag)
-        new_index['targets']['xteink_x4_pro'] = old_index['targets']['xteink_x4_pro']
-        source = {**old_source, **new_source}
-
+    def test_old_host_index_migrates_even_when_github_build_is_unchanged(self):
+        tag = 'nightly-build-' + 'a' * 40 + '-1-1'
+        _index, source = self.release(tag)
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            with patch.object(mirror, 'fetch', side_effect=lambda url, _limit: old_source[url]):
-                mirror.mirror_channel(root, channel)
-            old_files = {file.name: hashlib.sha256(file.read_bytes()).hexdigest()
-                         for file in (root / old_tag).iterdir()}
-
-            source[mirror.SOURCE + channel + '/release-index.json'] = json.dumps(new_index).encode()
             with patch.object(mirror, 'fetch', side_effect=lambda url, _limit: source[url]):
-                self.assertEqual(mirror.mirror_channel(root, channel)[0], new_tag)
-                self.assertEqual(mirror.mirror_channel(root, channel), (new_tag, 0))
-            published = json.loads((root / channel / 'release-index.json').read_bytes())
-            self.assertEqual(published['buildId'], new_tag)
-            for target, tag in [('xteink_x4_pro', old_tag), ('waveshare_epaper_397', new_tag)]:
-                for pointer in published['targets'][target]['variants'].values():
-                    self.assertTrue(pointer['manifestUrl'].startswith(mirror.DESTINATION + tag + '/'))
-            self.assertEqual(old_files, {file.name: hashlib.sha256(file.read_bytes()).hexdigest()
-                                         for file in (root / old_tag).iterdir()})
-            self.assertTrue((root / new_tag).is_dir())
+                mirror.mirror_channel(root, 'nightly')
+                path = root / 'nightly/release-index.json'
+                legacy = path.read_text().replace(mirror.DESTINATION, mirror.LEGACY_DESTINATION)
+                path.write_text(legacy)
+                mirror.mirror_channel(root, 'nightly')
+                self.assertNotIn(mirror.LEGACY_DESTINATION, path.read_text())
+                self.assertIn(mirror.DESTINATION, path.read_text())
+                self.assertEqual(mirror.mirror_channel(root, 'nightly'), (tag, 0))
 
-    def test_partial_nightly_rejects_changed_preserved_target(self):
-        channel = 'nightly'
-        old_tag = 'nightly-build-' + 'a' * 40 + '-1-1'
-        new_tag = 'nightly-build-' + 'c' * 40 + '-2-1'
-        old_index, old_source = self.release(old_tag)
-        new_index, new_source = self.release(new_tag)
-        new_index['targets']['xteink_x4_pro'] = old_index['targets']['xteink_x4_pro']
-        new_index['targets']['xteink_x4_pro']['variants']['global']['version'] = 'changed'
-        source = {**old_source, **new_source,
-                  mirror.SOURCE + channel + '/release-index.json': json.dumps(new_index).encode()}
-
+    def test_unsupported_target_rejected_without_replacing_index(self):
+        tag = 'nightly-build-' + 'a' * 40 + '-1-1'
+        index, source = self.release(tag)
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            with patch.object(mirror, 'fetch', side_effect=lambda url, _limit: old_source[url]):
-                mirror.mirror_channel(root, channel)
-            before = (root / channel / 'release-index.json').read_bytes()
+            with patch.object(mirror, 'fetch', side_effect=lambda url, _limit: source[url]):
+                mirror.mirror_channel(root, 'nightly')
+            path = root / 'nightly/release-index.json'
+            before = path.read_bytes()
+            index['targets']['xteink_x4_pro'] = {}
+            source[mirror.SOURCE + 'nightly/release-index.json'] = json.dumps(index).encode()
+            with patch.object(mirror, 'fetch', side_effect=lambda url, _limit: source[url]):
+                with self.assertRaisesRegex(ValueError, 'unexpected target set'):
+                    mirror.mirror_channel(root, 'nightly')
+            self.assertEqual(path.read_bytes(), before)
+
+
+    def test_pointer_must_match_rolling_build(self):
+        tag = 'nightly-build-' + 'a' * 40 + '-1-1'
+        index, source = self.release(tag)
+        index['buildId'] = 'nightly-build-' + 'c' * 40 + '-2-1'
+        source[mirror.SOURCE + 'nightly/release-index.json'] = json.dumps(index).encode()
+        with tempfile.TemporaryDirectory() as temp:
             with patch.object(mirror, 'fetch', side_effect=lambda url, _limit: source[url]):
                 with self.assertRaisesRegex(ValueError, 'preserved target differs'):
-                    mirror.mirror_channel(root, channel)
-            self.assertEqual((root / channel / 'release-index.json').read_bytes(), before)
-            self.assertFalse((root / new_tag).exists())
+                    mirror.mirror_channel(Path(temp), 'nightly')
 
 
 if __name__ == '__main__':

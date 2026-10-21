@@ -1,6 +1,6 @@
 # Architecture Overview
 
-CrossMux is a community fork of CrossPoint Reader, built with PlatformIO for ESP32 e-ink devices. Xteink X3/X4 share the ESP32-C3 firmware; ESP32-S3 devices use separate targets behind the HAL/SDK boundary. See [device variants](../engineering/device-variants.md).
+CrossMux is a community fork of CrossPoint Reader, built with PlatformIO. This fork maintains only the Waveshare ePaper 3.97 ESP32-S3 firmware. Shared HAL/SDK profiles for other devices remain in the sources, but are not current build or release targets. See [device variants](../engineering/device-variants.md).
 
 At a high level, it is firmware that uses an activity-driven application architecture loop with persistent settings/state, SD-card-first caching, and a rendering pipeline optimized for e-ink constraints.
 
@@ -8,7 +8,7 @@ At a high level, it is firmware that uses an activity-driven application archite
 
 ```mermaid
 graph TD
-    A[Hardware: ESP32-C3 + SD + E-ink + Buttons] --> B[freeink-sdk]
+    A[Hardware: ESP32-S3 + PSRAM + SD + E-ink + Buttons] --> B[freeink-sdk]
     B --> C[lib/hal wrappers]
     C --> D[src/main.cpp runtime loop]
     D --> E[Activities layer]

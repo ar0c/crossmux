@@ -8,6 +8,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class TlsMemoryPreflightTest(unittest.TestCase):
+    def test_external_tls_allocator_is_installed_before_activities(self):
+        source = (ROOT / 'src/main.cpp').read_text()
+        setup = method(source, 'void setup()')
+        # Process-wide hooks must be installed on boot, never in a worker.
+        # A standalone expression remains active in builds that compile logs out.
+        install = 'const bool externalTls = HalTlsMemory::initialize();'
+        self.assertEqual(source.count('HalTlsMemory::initialize()'), 1)
+        self.assertIn(install, setup)
+        self.assertLess(setup.index(install), setup.index('= setupDisplayAndFonts('))
+        sync = (ROOT / 'src/activities/apps/weread/webapi/WeReadTimeSync.cpp').read_text()
+        self.assertIn('HalTlsMemory::usesPsram() &&', sync)
+
     def test_allocator_capacity_and_boundaries(self):
         source = (ROOT / 'src/network/HttpDownloader.cpp').read_text()
         header = (ROOT / 'src/network/HttpDownloader.h').read_text()

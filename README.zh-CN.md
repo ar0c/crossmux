@@ -14,11 +14,11 @@
 - **无线功能**：浏览器传书与设置、Calibre 无线连接、OPDS 下载、WebDAV，以及 fork 固件检查更新。
 - **Apps 应用中心**：数独、五子棋、中国象棋、扫雷、2048、电子木鱼、Ugly Avatar 等轻量游戏与工具。[应用说明](./src/activities/apps/README.md)。
 - **AirPage**：扫码上传内容，通过手动刷新或前台实时投送显示 BMP/JPEG 图片，也可将图片设为休眠画面。[操作与联网行为](./src/activities/apps/README.md#airpage)。
-- **微信读书**：扫码登录、浏览书架、下载 EPUB 离线阅读和同步进度，在 China 内容区显示。[微信读书说明](./src/activities/apps/weread/README.md)。
+- **微信读书**：扫码登录或使用已配置的托管登录、浏览书架、下载 EPUB 离线阅读、同步进度，以及带持久账本的真实阅读时长同步，在 China 内容区显示。[微信读书说明](./src/activities/apps/weread/README.md)。
 - **阅读分析与待机**：阅读统计、热力图、档案与成就，以及时钟和老黄历表盘。[阅读分析说明](./src/activities/apps/reading-stats/README.md)。
 - **语言与开发**：每个硬件目标使用包含 35 种 UI 语言的统一固件，并提供桌面模拟器辅助开发。
 
-> **微信读书安全提示**：非公开 Web 协议可能变化。真机传输经过加密，但客户端不验证服务器证书与主机名，请仅在可信网络中使用。原生模拟器通过主机信任库验证证书，详见[传输说明](./docs/engineering/chinese-build.md#weread-transport)。
+> **微信读书安全提示**：非公开 Web 协议可能变化。真机直连 Web 登录与内容请求不验证服务器证书与主机名，请仅在可信网络中使用；托管服务请求和 OTA 使用经过验证的 HTTPS。原生模拟器使用主机信任库，详见[传输说明](./docs/engineering/chinese-build.md#weread-transport)与[托管服务说明](./docs/engineering/weread-service-handoff.md)。
 
 ## 设备与发布渠道
 
@@ -26,9 +26,9 @@
 |---|---|---|
 | Waveshare ePaper 3.97 | ESP32-S3 | Nightly |
 
-此 fork 只构建和发布以上两款 ESP32-S3 设备。每款设备使用独立固件；发布配置不代表全部功能已通过实机验收。各设备限制见[设备变体说明](./docs/engineering/device-variants.md)。
+此 fork 只构建和发布 Waveshare ePaper 3.97 **阅读器**固件。[StickS3 蓝牙遥控器](./remotes/sticks3/README.md) 在同仓库独立构建（`pio run -d remotes/sticks3 -e sticks3_remote`），不加入阅读器 Nightly／OTA 目标表。发布配置不代表全部功能已通过实机验收；限制见[设备变体说明](./docs/engineering/device-variants.md)。
 
-X4 Pro 稳定渠道使用 [Stable](https://github.com/ar0c/crossmux/releases/tag/stable)，开发版本使用 [Nightly](https://github.com/ar0c/crossmux/releases/tag/nightly)。[目标表](./scripts/nightly_targets.py) 定义渠道与产物名称；[发布架构](./docs/engineering/firmware-release.md) 说明打包与 OTA。当前源码版本及构建环境以 [platformio.ini](./platformio.ini) 为准。
+微雪构建使用 [Nightly](https://github.com/ar0c/crossmux/releases/tag/nightly)。已有 X4 Pro 发布仅作历史保留，当前没有 Stable 固件目标。[目标表](./scripts/nightly_targets.py) 定义渠道与产物名称；[发布架构](./docs/engineering/firmware-release.md) 说明打包与 OTA。当前源码版本及构建环境以 [platformio.ini](./platformio.ini) 为准。
 
 ## 安装固件
 
@@ -36,7 +36,7 @@ X4 Pro 稳定渠道使用 [Stable](https://github.com/ar0c/crossmux/releases/tag
 2. 更换固件前备份 SD 卡数据。使用匹配的安装包；只有应用部分的 `firmware.bin` 不是完整的首次安装镜像。
 3. S3 的安装与恢复请遵循对应[设备文档](./docs/engineering/device-variants.md)和发布说明。
 
-从源码构建 S3 固件可使用下方的[开发命令](#开发快速开始)。此 fork 仅 X4 Pro 提供 Stable 渠道。设备内“检查更新”读取本 fork 的 GitHub Releases；对应渠道发布 `release-index.json` 后才能提供更新。安全限制见[固件发布说明](./docs/engineering/firmware-release.md#consumers-and-safety)。
+从源码构建 S3 固件可使用下方的[开发命令](#开发快速开始)。新固件仅打包为微雪 Nightly。设备内“检查更新”读取经过验证的镜像索引 `https://release.ar0c.com/releases/download/nightly/release-index.json`，原始产物来自 GitHub Releases。安全限制见[固件发布说明](./docs/engineering/firmware-release.md#consumers-and-safety)。
 
 ### USB 锁定的 Xteink 设备
 
@@ -52,7 +52,7 @@ UI 内置精简的 8/10/12pt 简体中文回退字体。内置阅读字体选项
 
 ## 开发快速开始
 
-安装 PlatformIO Core（`pio`）和 Python 3；仓库已固定 pioarduino 平台版本。完整代码检查还需要 clang-format 21+、CMake 和 Ninja。环境设置见[开发入门](./docs/contributing/getting-started.md)。
+安装 Python 3 和项目固定版本的 pioarduino Core（`pio`）；仓库同时固定平台版本。完整代码检查还需要 clang-format 21+、CMake 和 Ninja。环境设置见[开发入门](./docs/contributing/getting-started.md)。
 
 ```bash
 git clone --recursive https://github.com/ar0c/crossmux.git
@@ -61,19 +61,24 @@ cd crossmux
 # 如果尚未初始化子模块：
 git submodule update --init --recursive
 
+python -m pip install pioarduino==6.2.0
+python scripts/patch_pioarduino_cache.py --prepare-platform
+
 # 微雪 3.97 开发构建（也是默认目标）
 pio run -e waveshare_epaper_397
 
 # 微雪 3.97 Nightly 构建
+export CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)"
+export CROSSPOINT_BUILD_KIND=rc
 pio run -e waveshare_epaper_397_nightly
 
-# 微雪 3.97 实验性构建
-pio run -e waveshare_epaper_397
+# 可选 USB 诊断构建（不进入 OTA）
+pio run -e waveshare_epaper_397_debug
 ```
 
 微雪应用固件位于 `.pio/build/waveshare_epaper_397/firmware.bin`。内嵌断词词库仅保留英文；中文没有独立断词表，继续使用 CJK 换行规则。中英字体字形和全部 35 种 UI 翻译保持不变。
 
-Windows 运行 `pio` 前请设置 `PYTHONUTF8=1`。
+Windows PowerShell 运行 `pio` 前执行 `$env:PYTHONUTF8 = '1'`。构建 Nightly 时再设置 `$env:CROSSPOINT_RC_HASH = git rev-parse --short=7 HEAD` 和 `$env:CROSSPOINT_BUILD_KIND = 'rc'`。`bin/` 下的 Shell 脚本需要 Bash；以上本地构建命令不会发布固件。
 
 ### 桌面模拟器
 
@@ -85,7 +90,7 @@ pio run -e simulator -t run_simulator
 
 [CrossMux 模拟器 fork](https://github.com/0x1abin/crosspoint-simulator) 的版本固定在 `platformio.ini` 中。它用于预览 UI 和输入流程，不能验证显示波形、耗电或实际硬件时序。
 
-Read Pico 窗口自动适应桌面大小，BMP 截图保留原始分辨率。鼠标支持点按、长按和滑动；上箭头/Escape/下箭头对应三个电容键，睡眠后仅电源键 `P` 可以唤醒。原生十六级灰阶图片和 SD 界面字体使用 Read Pico 的处理路径。验证详情见[设备指南](./docs/engineering/read-pico.md#desktop-simulator)。
+预览微雪按键界面和 800×480 布局时，使用 `pio run -e simulator_waveshare_ui -t run_simulator`。`simulator_managed_acceptance` 用于托管服务合同验收；这两个环境均不属于固件发布目标。更多设置见[模拟器说明](./docs/engineering/build-system.md#desktop-simulator)。
 
 ### 检查与调试
 

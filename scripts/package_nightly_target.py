@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from debug_build_policy import verify_image
 
 from nightly_targets import (
     FLAVOR_TOKENS,
@@ -79,6 +80,7 @@ def copy_asset(source, destination):
 
 
 def verify_firmware(path, chip_id, board_tag):
+    verify_image(path)  # Never admit a USB-control build into an OTA package.
     with path.open('rb') as stream:
         header = stream.read(24)
         if len(header) != 24 or header[0] != 0xE9:

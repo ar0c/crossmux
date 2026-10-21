@@ -1,6 +1,6 @@
 # Touch and UI Development
 
-CrossMux includes touch-capable ESP32-S3 targets alongside the button-only Xteink X3/X4. Every screen must work with both input styles; see [device variants](../engineering/device-variants.md) for the configured targets and their validation limits.
+This fork maintains the button-driven Waveshare ePaper 3.97 firmware. Shared UI code also retains touch input for simulator and SDK profiles. Keep both input paths usable without treating those profiles as maintained firmware targets; see [device variants](../engineering/device-variants.md).
 
 **There is one supported way to build a new screen: FreeInkUI, hosted through the firmware base classes below.** Touch hit-testing, tap highlighting, long-press, swipe scrolling, and button focus navigation all come from the shared stack; you never hand-roll coordinate math.
 
@@ -170,32 +170,14 @@ As with all input: never call the SDK `InputManager` or read GPIO directly. The 
 
 ---
 
-## Building and testing on other devices
+## Historical device-port examples
 
-Select a checked-in environment before adding a local profile:
-
-| Device | Development environment | MCU |
-|---|---|---|
-| Xteink X3 / X4 | `default` | ESP32-C3 |
-| Seeed Sticky | `sticky` | ESP32-S3 |
-| Xteink X4 Pro / Classic | `x4pro` / `x4c` | ESP32-S3 |
-| M5Stack Paper Mono | `papermono` | ESP32-S3 |
-| eego A4 / Murphy M4 | `eego_a4` / `murphy_m4` | ESP32-S3 |
-| Waveshare ePaper 3.97 | `waveshare_epaper_397` | ESP32-S3 |
-| Metalio E-Ink 4 / Read Pico | `metalio_eink4` / `readpico` | ESP32-S3 |
-| LilyGo T5 S3 4.7 PRO/Lite | `lilygo_t5s3` | ESP32-S3 |
-
-Build with `pio run -e <environment>`. X3/X4 share a runtime-selected image;
-S3 board profiles have separate images. These are build environments, not a
-publication or physical-acceptance matrix. The Nightly/OTA registry stays in
-[`nightly_targets.py`](../../scripts/nightly_targets.py); X4 Classic and LilyGo
-remain outside it. Additional [SDK profiles](../../freeink-sdk/libs/hardware/BoardConfig/include/BoardConfig.h)
-do not establish CrossMux product support.
-
-Personal ports/debug flags and unintegrated profiles belong in ignored
-`platformio.local.ini`. Its `build_flags` replaces the selected list; preserve
-`${base.build_flags}` plus the selected device/capability/logging/version flags.
-See [toolchain setup](getting-started.md#first-time-toolchain-setup).
+The maintained firmware environments in `platformio.ini` are Waveshare-only.
+The following M5Paper/LilyGo snippets are historical porting references, not
+configured or accepted firmware targets. Adding a new maintained board is a
+separate scope decision; do not assume an SDK profile makes it a release target.
+Personal experiments belong in **`platformio.local.ini`**, which is gitignored
+and merged over the committed configuration.
 
 All committed device environments extend the repository's `[base]`, so they
 build against the pinned `freeink-sdk` submodule with the normal dependencies
@@ -231,8 +213,33 @@ build_flags =
   -Wl,-u,i2cSlaveInit
 ```
 
-The examples above describe upstream device porting; this fork's maintained
-reader build and release target remains Waveshare ePaper 3.97. Gotchas worth knowing:
+### LilyGo T5 S3 (ESP32-S3, controller-less panel via LovyanGFX)
+
+```ini
+[env:lilygo_t5s3]
+extends = base
+board = esp32-s3-devkitc1-n16r8
+board_build.mcu = esp32s3
+build_flags =
+  ${base.build_flags}
+  -DFREEINK_DEVICE_LILYGO=1
+  ; board injects the parallel-bus pins + PMIC power hooks (BoardT5S3)
+  -DFREEINK_LGFX_EPD_CONFIG=lilygoT5S3LgfxConfig
+  -DCROSSPOINT_VERSION=\"${crosspoint.version}-lilygo\"
+  -DENABLE_SERIAL_LOG
+  -DLOG_LEVEL=2
+  -DCROSSPOINT_SHOW_BUTTON_HINTS=0
+lib_deps =
+  ${base.lib_deps}
+  ; LgfxEpdConfig for the T5 S3 (pins, PCA9535/TPS65185 power sequence)
+  BoardT5S3=symlink://freeink-sdk/libs/hardware/BoardT5S3
+  ; LovyanGFX Panel_EPD drives the controller-less ED047TC1 panel
+  m5stack/M5GFX @ 0.2.20
+```
+
+The historical environment names are `m5paper_v11` and `lilygo_t5s3`; neither
+is configured in this fork. Review the complete board contract before using
+these snippets in a separate port. Historical gotchas:
 
 - **Flash mode matters.** The M5Paper is `qio`; the X4-family standalone envs need `dio`. A wrong flash-mode header boots into a `partition 0 invalid magic number 0xffff` loop even though esptool verified the write.
 - **Device flags select board profiles.** The local examples use one `FREEINK_DEVICE_*` flag; the C3 X3/X4 profile deliberately enables both. See `freeink-sdk/platformio.sample.ini` for SDK reference environments and `BoardConfig` for capability defaults.

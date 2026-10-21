@@ -24,7 +24,7 @@ class NimblePsramMiddlewareTest(unittest.TestCase):
                          {'sound_feedback_hardware', 'waveshare_epaper_397_hardware'})
         self.assertEqual({name for name in config.sections() if name.startswith('env:')}, {
             'env:simulator', 'env:simulator_waveshare_ui', 'env:simulator_managed_acceptance',
-            'env:waveshare_epaper_397', 'env:waveshare_epaper_397_nightly',
+            'env:waveshare_epaper_397', 'env:waveshare_epaper_397_debug', 'env:waveshare_epaper_397_nightly',
         })
 
     def test_generic_base_and_simulators_do_not_inherit_radio_configuration(self):

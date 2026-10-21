@@ -1,14 +1,20 @@
 # Waveshare ESP32-S3 ePaper 3.97
 
-Experimental hardware target: ESP32-S3, 16 MiB flash,
+The sole maintained firmware target in this fork: ESP32-S3, 16 MiB flash,
 8 MiB PSRAM, 800×480 SSD1677, 4-bit SDMMC, AXP2101, PCF85063A,
 and ES8311/NS4150B audio.
 
 ```bash
 pio run -e waveshare_epaper_397
-pio run -e waveshare_epaper_397 -t upload --upload-port /dev/tty.usbmodem101
-pio device monitor --port /dev/tty.usbmodem101 --baud 115200
+pio run -e waveshare_epaper_397 -t upload --upload-port <device-port>
+pio device monitor --port <device-port> --baud 115200
 ```
+
+Replace `<device-port>` with the verified device port (`COM7` is an example on
+Windows; `/dev/ttyACM0` on Linux). Nightly uses
+`waveshare_epaper_397_nightly`; USB diagnostics use `waveshare_epaper_397_debug`
+and are excluded from OTA. Build configuration does not establish real-device
+acceptance. See [release and OTA safety](firmware-release.md#consumers-and-safety).
 
 ## Hardware contract
 
@@ -18,6 +24,7 @@ pio device monitor --port /dev/tty.usbmodem101 --baud 115200
 | SDMMC | CLK 16, CMD 17, D0/D1/D2/D3 15/7/8/18; 4-bit |
 | I²C | SDA 41, SCL 42; 400 kHz |
 | RTC | PCF85063A at `0x51` |
+| IMU | QMI8658 at `0x6B` (existing driver probes `0x6A` fallback); optional EPUB automatic orientation |
 | PMIC | AXP2101 at `0x34`; IRQ on GPIO38; ALDO1/2 supply audio and ALDO3 supplies the EPD |
 | Audio | ES8311 at `0x18`; MCLK 13, BCLK 14, WS 47, DOUT 48; NS4150B enable 39 |
 | Buttons | Back 0, Left 4, Function 5, Right 6; active-low |
@@ -41,7 +48,10 @@ PMIC configuration; only the unambiguous pair (PWR key, software shutdown)
 qualifies for the one-shot splashless sleep wake. USB insertion, hard power-off,
 mixed/unknown PMIC sources, and missing reads retain the normal startup page.
 The e-paper keeps its sleep frame visible until Home's first physical paint.
-QMI8658 and SHTC3 are deliberately not initialized by this target.
+QMI8658 is probed at startup and put into standby until reading requests it;
+SHTC3 remains uninitialized. Automatic direction is limited to opted-in reading
+surfaces; see [reader-auto-rotation.md](reader-auto-rotation.md) for hardware
+gating, axes, power and physical acceptance requirements.
 
 System Settings exposes **Sound Feedback** with Off/Low/Medium/High levels;
 Medium is the default on this target. Low/Medium map to the previous Medium/High

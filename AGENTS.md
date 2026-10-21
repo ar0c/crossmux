@@ -2,11 +2,11 @@
 
 Project: CrossMux, a community fork of CrossPoint Reader for ESP32 e-ink devices.
 Mission: Keep reading fast and reliable while supporting lightweight apps, reading analytics, standby faces, and on-demand services within the hardware budget.
-Targets: Waveshare ePaper 3.97 only. See [`scripts/nightly_targets.py`](scripts/nightly_targets.py).
+Reader targets: Waveshare ePaper 3.97 only. The companion StickS3 remote is an independent subproject at [`remotes/sticks3/`](remotes/sticks3/README.md), outside the reader OTA matrix. See [`scripts/nightly_targets.py`](scripts/nightly_targets.py).
 
 **Personal release authorization (2026-10-02):** The owner permits direct releases of this fork and its `ar0c/weread-sync` companion through their existing GitHub/OTA and personal K3s/Helm paths after relevant local validation, without repeated per-release confirmation. This project-specific authorization supersedes the generic GitLab `ship` master/tag release flow for these two projects only. Follow the scope and verification rules in [firmware-release.md](docs/engineering/firmware-release.md).
 
-**Project device scope:** Only Waveshare ePaper 3.97 firmware is maintained, built, packaged and published. Its existing Nightly channel remains. X4 Pro artifacts are retired; preserve shared HAL, original worktrees, historical backups and published content. The canonical matrix is [`scripts/nightly_targets.py`](scripts/nightly_targets.py). Embedded hyphenation dictionaries are English-only; Chinese uses CJK line breaking. Font glyphs and all UI translations remain unchanged.
+**Project device scope:** Only Waveshare ePaper 3.97 reader firmware is maintained, built, packaged and published through the reader release matrix. The companion StickS3 BLE remote is maintained and built independently under `remotes/sticks3/`; it is not a reader or OTA target. Its existing Nightly channel remains. X4 Pro artifacts are retired; preserve shared HAL, original worktrees, historical backups and published content. The canonical matrix is [`scripts/nightly_targets.py`](scripts/nightly_targets.py). Embedded hyphenation dictionaries are English-only; Chinese uses CJK line breaking. Font glyphs and all UI translations remain unchanged.
 
 > **This file is a map, not a manual.** It holds the identity, the
 > non-negotiable invariants, and a quick reference — then points to the deep
@@ -57,7 +57,7 @@ device uploads. See [weread-time-sync.md](docs/engineering/weread-time-sync.md).
 These are the highest-frequency-violation rules. Each links to the doc with the
 full reasoning, examples, and edge cases.
 
-1. **The Waveshare ESP32-S3 image must fit its memory and Flash budgets.** Justify every heap allocation; prefer stack/static; `.reserve()` before `push_back` loops; mark constants `constexpr`. → [hardware-constraints.md](docs/engineering/hardware-constraints.md)
+1. **The Waveshare ESP32-S3 image must fit its memory and Flash budgets.** Justify every heap allocation; prefer stack/static; `.reserve()` before `push_back` loops; mark constants `constexpr`. Budget internal RAM and PSRAM separately; PSRAM never substitutes for stack/DMA or internal contiguous reserves. Verify the actual pinned TLS allocator before charging its budget to PSRAM. Memory-gate changes require measured-profile and exhausted/fragmented-heap regressions, including the post-allocation gate before worker notification. → [hardware-constraints.md](docs/engineering/hardware-constraints.md)
 2. **Never bare `new`.** With `-fno-exceptions` a failed `new` calls `abort()`, not `nullptr`. Use `makeUniqueNoThrow<T>()` from `lib/Memory/Memory.h` (or `new (std::nothrow)` only when a C API takes ownership); always null-check and `LOG_ERR` on OOM. → [memory-and-allocation.md](docs/engineering/memory-and-allocation.md)
 3. **All user-facing text uses `tr()`.** Never hardcode UI strings (logs may be hardcoded). → [ui-and-input.md](docs/engineering/ui-and-input.md)
 4. **Use HAL classes, never the SDK directly** (`Storage`, `HalDisplay`, `HalGPIO`). → [architecture-and-patterns.md](docs/engineering/architecture-and-patterns.md)

@@ -34,7 +34,7 @@ CHANNEL = "nightly"
 TARGET = "waveshare_epaper_397"
 ENVIRONMENT = TARGETS[TARGET]["environments"][CHANNEL]
 GITHUB_INDEX = f"https://github.com/{REPO}/releases/download/{CHANNEL}/release-index.json"
-PUBLIC_INDEX = f"https://ooo.ar0c.com/releases/download/{CHANNEL}/release-index.json"
+PUBLIC_INDEX = f"https://release.ar0c.com/releases/download/{CHANNEL}/release-index.json"
 SHA40 = re.compile(r"[0-9a-f]{40}")
 BUILD_TAG = re.compile(r"nightly-build-[0-9a-f]{40}-[0-9]{14}-1")
 
@@ -236,7 +236,7 @@ def wait_public_index(expected: bytes, seconds: int) -> None:
     expected_index = json.loads(expected)
     mirrored_targets = json.loads(json.dumps(expected_index["targets"]))
     github_assets = f"https://github.com/{REPO}/releases/download/"
-    public_assets = "https://ooo.ar0c.com/releases/download/"
+    public_assets = "https://release.ar0c.com/releases/download/"
     for entry in mirrored_targets.values():
         for pointer in entry["variants"].values():
             url = pointer["manifestUrl"]

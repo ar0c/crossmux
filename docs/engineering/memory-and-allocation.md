@@ -109,6 +109,47 @@ unbounded container growth on device-controlled input.
 
 ## Optional PSRAM
 
+### Background WeRead startup gate
+
+`WeReadTimeSync::start()` budgets heap capabilities separately. The 12 KiB
+task stack, source snapshot, 6 KiB audit allowance, 1 KiB task overhead and any
+internal workspace fallback are charged to internal RAM. With a successfully
+allocated PSRAM job, spare PSRAM, a boot-installed external TLS allocator and
+default-allocator access to that external capacity, preserve 64 KiB internal plus 32 KiB
+external headroom, rather than charging all 96 KiB to internal RAM. The internal
+64 KiB floor matches the network startup policy; it still requires a
+16 KiB contiguous internal floor. TLS requires 32 KiB contiguous
+external capacity, matching its installed allocator, rather than an additional
+32 KiB internal block. PSRAM must additionally retain the shared
+256 KiB reserve. This is a conservative admission budget, not a guarantee of
+all possible concurrent reader/TLS peaks.
+
+The pinned Arduino SDK defines `CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC`; its
+`esp_mbedtls_mem_calloc()` explicitly requests internal memory, even with
+`CONFIG_SPIRAM_USE_MALLOC`. Default-heap availability alone is therefore
+insufficient. `HalTlsMemory::initialize()` installs the SDK-supported
+`mbedtls_platform_set_calloc_free()` hooks once in `setup()`, before activities
+or networking. On PSRAM boards TLS's zeroed, variable-size CPU buffers use
+explicit external allocations and matching heap free. OOM returns null to TLS
+without consuming the reader's internal reserve. Existing certificate-bundle
+verification remains enabled. No-PSRAM/simulator builds retain their SDK policy.
+Never swap these process-wide hooks around individual requests or while any
+TLS context is live. `HalTlsMemoryTest` checks allocator ownership, zeroing,
+overflow, OOM without internal fallback, and one-time installation;
+`HalTlsMemoryNoPsramTest` checks the conservative fallback.
+
+Without the external job or external reserve, keep the 96 KiB internal floor.
+Recheck both heaps after allocating the task, while its worker is blocked on
+notification. On failure delete the task before allowing any request. Do not
+remove this check merely because total free memory is large.
+
+`WeReadTimeAsyncPsramTest` runs the production startup code under CTest/CI with
+the captured Waveshare profiles (96,024 internal free / 47,092 largest block
+and 86,920 / 32,756, 11 source days), internal exhaustion/fragmentation, failed/absent PSRAM and
+post-task reserve loss and absent TLS allocator installation. The non-PSRAM target retains fallback coverage. Changes
+to these gates must retain both targets and verify the device startup diagnostic
+and concurrent reading/TLS before claiming hardware stability.
+
 ESP32-C3 remains the no-PSRAM baseline. On targets declaring
 `BOARD_HAS_PSRAM`, use `memory::makePsramByteBufferNoThrow()` only for large,
 sequential buffers whose main benefit is avoiding storage I/O or preserving an

@@ -24,6 +24,9 @@ def select_jobs(paths, force_all=False):
     plan = dict.fromkeys(set(JOB_FLAGS.values()), force_all)
     for name in paths:
         path = Path(name)
+        # Independently built and checked by sticks3-remote.yml; no reader sources.
+        if name.startswith('remotes/sticks3/'):
+            continue
         if ((name.startswith('docs/') and path.suffix.lower() in DOC_SUFFIXES)
                 or ('/' not in name and path.suffix.lower() == '.md')
                 or name in {'LICENSE', 'LICENSE.txt', 'LICENSE.md'}):

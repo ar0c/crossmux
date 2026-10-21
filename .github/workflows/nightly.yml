@@ -262,5 +262,5 @@ jobs:
           CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
           python3 scripts/verify_nightly_release.py --channel "$CHANNEL" \
-            --index-url "https://ooo.ar0c.com/releases/download/${CHANNEL}/release-index.json" \
+            --index-url "https://release.ar0c.com/releases/download/${CHANNEL}/release-index.json" \
             --expected-sha "$GITHUB_SHA" ${{ needs.prepare.outputs.target_args }}

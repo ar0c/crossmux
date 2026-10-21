@@ -20,7 +20,7 @@ TARGETS = {
 }
 
 FLAVOR_TOKENS = {'global': 'global', 'zh-CN': 'cn'}
-CHANNELS = ('stable', 'nightly')
+CHANNELS = ('nightly',)
 
 
 def targets_for(channel):

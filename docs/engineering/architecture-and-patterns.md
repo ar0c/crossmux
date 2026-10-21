@@ -68,6 +68,17 @@ The About page paints its loading state before this synchronous query; input
 waits for the scan to finish. Host simulator capacity comes from `statvfs`, so
 use `python3 scripts/tests/test_sd_space.py` for FAT calculation regressions.
 
+The native SDMMC adapter reuses its existing 4 KiB DMA bounce buffer for
+read-ahead after consecutive single-sector reads. Random reads start with one
+sector; sequential reads fetch up to eight, bounded by card capacity. Every
+write (including failures), explicit bulk read and unmount invalidates the span.
+A failed speculative read falls back to the requested sector once. Keep the
+full FAT scan and the 20-second space snapshot policy; moving a scan to another
+task while holding `storageMutex` still blocks reading. The adapter adds only
+two scalar fields (8 bytes on ESP32-S3), with no additional allocation.
+`python3 scripts/tests/test_sdmmc_read_ahead.py` verifies byte accuracy, command
+count, cache coherence and failures; unittest discovery also runs this check.
+
 ---
 
 ## Persistent JSON recovery

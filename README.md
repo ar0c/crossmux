@@ -14,11 +14,11 @@
 - **Wireless workflows**: browser file transfer and settings, Calibre wireless, OPDS downloads, WebDAV, and fork release update checks.
 - **Apps**: lightweight games and tools including Sudoku, Gomoku, Chinese Chess, Minesweeper, 2048, Electronic Woodfish, and Ugly Avatar. [Apps guide](./src/activities/apps/README.md).
 - **AirPage**: scan to upload content, then display BMP/JPEG images with manual refresh or foreground live delivery; images can become a sleep screen. [Usage and network behavior](./src/activities/apps/README.md#airpage).
-- **WeRead**: QR login, bookshelf browsing, EPUB downloads for offline reading, and progress sync. Available in the China content profile. [WeRead guide (Chinese)](./src/activities/apps/weread/README.md).
+- **WeRead**: QR or configured managed login, bookshelf browsing, EPUB downloads for offline reading, progress sync, and measured reading-time sync with persistent accounting. Available in the China content profile. [WeRead guide (Chinese)](./src/activities/apps/weread/README.md).
 - **Reading analytics and standby**: reading statistics, heatmaps, profiles and achievements; clock and Chinese almanac faces. [Analytics guide](./src/activities/apps/reading-stats/README.md).
 - **Languages and development**: 35 UI languages in one firmware per hardware target, plus desktop simulators for UI development.
 
-> **WeRead security:** this unofficial Web protocol may change. Device traffic is encrypted, but its client does not verify the server certificate or hostname; use it only on a trusted network. The native simulator verifies certificates through the host trust store. See the [transport details](./docs/engineering/chinese-build.md#weread-transport).
+> **WeRead security:** this unofficial Web protocol may change. Direct Web login/content requests on hardware do not verify the server certificate or hostname; use them only on a trusted network. Managed-service requests and OTA use verified HTTPS. The native simulator uses the host trust store. See the [transport details](./docs/engineering/chinese-build.md#weread-transport) and [managed-service guide](./docs/engineering/weread-service-handoff.md).
 
 ## Devices and release channels
 
@@ -26,7 +26,7 @@
 |---|---|---|
 | Waveshare ePaper 3.97 | ESP32-S3 | Nightly |
 
-This fork builds and publishes only Waveshare ePaper 3.97 firmware. This table describes configured release targets, not hardware acceptance. See [device variants](./docs/engineering/device-variants.md) for target-specific limitations.
+This fork builds and publishes only Waveshare ePaper 3.97 **reader** firmware. The [StickS3 BLE remote](./remotes/sticks3/README.md) is a separate companion build in this repository (`pio run -d remotes/sticks3 -e sticks3_remote`), outside the reader Nightly/OTA matrix. This table describes configured release targets, not hardware acceptance. See [device variants](./docs/engineering/device-variants.md) for target-specific limitations.
 
 Use [Nightly](https://github.com/ar0c/crossmux/releases/tag/nightly) for Waveshare builds. Existing X4 Pro releases are historical and remain available. The [target table](./scripts/nightly_targets.py) defines channels and artifact names; [release architecture](./docs/engineering/firmware-release.md) explains packaging and OTA. Current source version and build environments live in [platformio.ini](./platformio.ini).
 
@@ -36,7 +36,7 @@ Use [Nightly](https://github.com/ar0c/crossmux/releases/tag/nightly) for Wavesha
 2. Back up your SD card data before changing firmware. Use the matching installation package; an application-only `firmware.bin` is not a complete first-install image.
 3. For S3 installation and recovery, follow the matching [device documentation](./docs/engineering/device-variants.md) and release instructions.
 
-To build an S3 image from source, use the [development commands](#development-quick-start) below. New firmware packaging is Waveshare Nightly only. In-device Check Updates reads this fork's GitHub Releases; a channel needs a published `release-index.json` before it can offer an update. See the [OTA safety notes](./docs/engineering/firmware-release.md#consumers-and-safety).
+To build an S3 image from source, use the [development commands](#development-quick-start) below. New firmware packaging is Waveshare Nightly only. In-device Check Updates reads the verified mirror at `https://release.ar0c.com/releases/download/nightly/release-index.json`; GitHub Releases supplies the original assets. See the [OTA safety notes](./docs/engineering/firmware-release.md#consumers-and-safety).
 
 ### USB-locked Xteink devices
 
@@ -52,7 +52,7 @@ Download fonts from **Settings > Reader > Manage Fonts**, or copy converted font
 
 ## Development quick start
 
-Install PlatformIO Core (`pio`) and Python 3; the repository pins its pioarduino platform. Full code checks also need clang-format 21+, CMake, and Ninja. See [Getting Started](./docs/contributing/getting-started.md) for setup.
+Install Python 3 and the project's pinned pioarduino Core (`pio`); the repository also pins its platform. Full code checks need clang-format 21+, CMake, and Ninja. See [Getting Started](./docs/contributing/getting-started.md) for setup.
 
 ```bash
 git clone --recursive https://github.com/ar0c/crossmux.git
@@ -61,19 +61,24 @@ cd crossmux
 # If submodules were not initialized:
 git submodule update --init --recursive
 
+python -m pip install pioarduino==6.2.0
+python scripts/patch_pioarduino_cache.py --prepare-platform
+
 # Waveshare 3.97 development build (also the default)
 pio run -e waveshare_epaper_397
 
 # Waveshare 3.97 Nightly build
+export CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)"
+export CROSSPOINT_BUILD_KIND=rc
 pio run -e waveshare_epaper_397_nightly
 
-# Waveshare 3.97 experimental build
-pio run -e waveshare_epaper_397
+# Optional USB diagnostic build (excluded from OTA)
+pio run -e waveshare_epaper_397_debug
 ```
 
 The application binary is `.pio/build/waveshare_epaper_397/firmware.bin`. English hyphenation patterns are embedded; Chinese retains CJK line breaking. Other automatic hyphenation dictionaries are omitted. Font glyphs and all 35 UI languages are retained.
 
-On Windows, set `PYTHONUTF8=1` before running `pio`.
+On Windows PowerShell, run `$env:PYTHONUTF8 = '1'` before `pio`. For Nightly, set `$env:CROSSPOINT_RC_HASH = git rev-parse --short=7 HEAD` and `$env:CROSSPOINT_BUILD_KIND = 'rc'`. Shell scripts under `bin/` require Bash. These local build commands do not publish a release.
 
 ### Desktop simulator
 
@@ -82,6 +87,8 @@ Install SDL2 and curl (plus OpenSSL development headers on Linux), place EPUBs i
 ```bash
 pio run -e simulator -t run_simulator
 ```
+
+For Waveshare button UI and 800×480 geometry, use `pio run -e simulator_waveshare_ui -t run_simulator`. The `simulator_managed_acceptance` environment is for managed-service contract checks; neither environment is a firmware release target.
 
 The [CrossMux simulator fork](https://github.com/0x1abin/crosspoint-simulator) is pinned in `platformio.ini`. It previews UI and input flows; it does not validate display waveforms, power consumption, or physical hardware timing.
 

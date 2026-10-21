@@ -14,6 +14,11 @@ import ci_plan
 
 
 class CiPlanTest(unittest.TestCase):
+    def test_remote_has_independent_checks_but_mixed_changes_keep_reader_checks(self):
+        paths = ['remotes/sticks3/src/main.cpp', 'remotes/sticks3/platformio.ini']
+        self.assertFalse(any(ci_plan.select_jobs(paths).values()))
+        self.assertTrue(all(ci_plan.select_jobs(paths + ['src/main.cpp']).values()))
+
     def test_documentation_skips_builds(self):
         for paths in [[], ['README.md', 'AGENTS.md'], ['docs/guide.md', 'docs/images/menu.png']]:
             with self.subTest(paths=paths):

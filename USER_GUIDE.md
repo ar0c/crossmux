@@ -1,8 +1,12 @@
-# CrossPoint User Guide
+# CrossMux User Guide
 
-Welcome to the **CrossPoint** firmware. This guide outlines the hardware controls, navigation, and reading features of the device.
+This guide covers **CrossMux** on Waveshare ePaper 3.97, the sole maintained
+firmware target in this fork. Shared features inherited from CrossPoint keep
+some original plugin, server and data-directory names. Sections explicitly
+marked Xteink-only describe historical profiles, not supported firmware targets.
+See the [Chinese overview](./README.zh-CN.md) and [Waveshare hardware guide](./docs/engineering/waveshare-epaper-397.md).
 
-- [CrossPoint User Guide](#crosspoint-user-guide)
+- [CrossMux User Guide](#crossmux-user-guide)
   - [1. Hardware Overview](#1-hardware-overview)
     - [Button Layout](#button-layout)
     - [Taking a Screenshot](#taking-a-screenshot)
@@ -55,24 +59,36 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
 
 ## 1. Hardware Overview
 
-The device utilises the standard buttons on the Xteink X4 (in the same layout as the manufacturer firmware, by default):
+Waveshare has Back, Left, Function and Right GPIO keys, plus a side Power key
+connected to its AXP2101 power controller. This guide uses logical action names;
+their mapping can be changed in **[Controls Settings](#363-controls)**.
 
 ### Button Layout
 
-| Location        | Buttons                                              |
-| --------------- | ---------------------------------------------------- |
-| **Bottom Edge** | **Back**, **Confirm**, **Left**, **Right**           |
-| **Right Side**  | **Power**, **Side Up**, **Side Down**, **Reset** |
+| Physical key | Default action |
+|---|---|
+| Back / BOOT (GPIO0) | Back |
+| Left (GPIO4) | Left / previous |
+| Function (GPIO5), single click | Confirm after the 300 ms double-click window |
+| Function, double click | Back |
+| Function, hold for 300 ms | Confirm hold for the current screen's long-press action |
+| Right (GPIO6) | Right / next |
+| Side Power | Configured Power action; hold for sleep/shutdown |
 
 Button layout can be customized in the **[Controls Settings](#363-controls)**.
 
 ### Taking a Screenshot
 
-When the Power button and the lower side button (Side Down) are pressed at the same time, it will take a screenshot and save it in the folder `screenshots/`.
-
-Alternatively, while reading a book, press the **Confirm** button to open the reader menu and select **Take screenshot**.
+While reading a book, press **Confirm** to open the reader menu and select
+**Take screenshot**. Screenshots are saved under `screenshots/` on the SD card.
+The historical Xteink Power + Side Down shortcut assumes keys that Waveshare
+does not have. Developer screen exports are described in
+[Testing and Debugging](./docs/engineering/testing-and-debugging.md#manual-screen-diagnostic-export-ar0c).
 
 ### Frontlight (X4 Pro only)
+
+Historical profile only: Waveshare 3.97 has no frontlight, so these controls do
+not apply to the maintained firmware.
 
 The X4 Pro has a built-in frontlight with adjustable brightness and warmth. It is controlled from a swipe panel rather than the Settings menu:
 
@@ -90,10 +106,15 @@ If the frontlight doesn't come back on after the device wakes from sleep, check 
 
 ### Power On / Off
 
-To turn the device on or off, **press and hold the Power button for approximately half a second**.
+To turn Waveshare on, hold the side Power key for about one second, then release
+after startup. During normal use, holding Power invokes the configured
+sleep/shutdown action (400 ms by default); the PMIC removes ESP power while the
+e-paper retains its sleep image. A continuous four-second hold is the PMIC's
+hard-power-off fallback. See the [hardware contract](./docs/engineering/waveshare-epaper-397.md#hardware-contract).
 In the **[Controls Settings](#363-controls)** you can configure the power button to turn the device off with a short press instead of a long one.
 
-To reboot the device (for example after a firmware update or if it's frozen), press and release the Reset button, and then quickly press and hold the Power button for a few seconds.
+After a normal shutdown, start it again with Power. The historical Xteink
+Reset + Power sequence does not describe Waveshare controls.
 
 ### First Launch
 
@@ -304,9 +325,12 @@ The Settings screen allows you to configure the device's behavior. There are a f
   BLE HID page turner, scan for eight seconds, connect or disconnect a paired
   remote, and configure its buttons. Choose an action first, then press the
   remote key to map Page Forward, Page Back, Confirm, Back, or a direction.
-  Hold Confirm on a paired device to forget it. Bluetooth stops while Wi-Fi,
-  USB Drive, deep sleep, or uncached EPUB pagination needs the memory, then
-  reconnects automatically when reading resumes. The feature is off by default.
+  Hold Confirm on a paired device to forget it. On Waveshare, the remote works
+  across awake Home, library, settings and reading pages; unbound standard
+  arrow keys navigate without learning, while saved mappings take priority.
+  Bluetooth stops during Wi-Fi, USB Drive and deep sleep. A fresh start can be
+  deferred during book preparation or insufficient memory, then reconnects
+  automatically when resources are available. The feature is off by default.
 
 - **Remap Front Buttons**: A menu for customising the function of each bottom edge button.
 
@@ -342,15 +366,28 @@ The Settings screen allows you to configure the device's behavior. There are a f
 
 - **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#365-opds-servers-multiple-libraries) below.
 
-- **Clear Reading Cache**: Clear the internal SD card cache.
+- **Clear Reading Cache**: Clear rebuildable reading-layout caches. Follow the
+  [cache guide](./docs/engineering/cache-management.md); `/.crosspoint` also
+  contains settings, progress and durable records, so do not delete it wholesale.
 
 - **Restore System Settings**: After two confirmations, reset device preferences and clear saved Wi-Fi networks, OPDS
   servers, and KOReader Sync configuration. The device restarts into the initial language and content-region guide.
   Books, reading progress, bookmarks, reading statistics, and reading caches are not deleted.
 
-- **Check for updates**: Check for Crosspoint firmware updates over Wi-Fi. Firmware can also be updated without a USB connection by placing a `firmware.bin` file on the SD card.
+- **Check for updates**: Check this fork's Waveshare Nightly channel over
+  verified HTTPS at `release.ar0c.com`. GitHub Releases remains the publication
+  source. For an offline update, place the matching application `.bin` on the
+  SD card and use **SD Card Firmware Update**. An application binary is not a
+  complete first-install image. See [installation and OTA safety](./docs/engineering/firmware-release.md#consumers-and-safety).
 
-- **Language**: Set the UI language. CrossPoint supports 24 languages: English, Spanish, French, German, Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish, Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, and Hebrew.
+- **Language**: Select one of 35 UI languages in the unified firmware.
+  Simplified Chinese selects the China content profile; other UI languages
+  select Global. See [Chinese fonts and content profiles](./README.md#chinese-fonts-and-content-profiles).
+
+For WeRead bookshelf, offline EPUB, progress and measured reading-time sync,
+see the [WeRead guide](./src/activities/apps/weread/README.md). Local pending
+time, service acceptance and verified cloud credit are separate states;
+leaving a sync page does not erase its persisted accounting journals.
 
 - **Manage Fonts**: Browse, download, and manage custom font families installed from the SD card. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card) for more information.
 
@@ -586,8 +623,7 @@ Transparent overlay files are intentionally separate from normal sleep images. R
 > For best results:
 > - For non-transparent **Custom** mode, use uncompressed BMP files with 24-bit color depth.
 > - For **Transparent** mode, use a PNG or uncompressed 32-bit BGRA BMP for per-pixel alpha, or a regular BMP for white-as-transparent artwork.
-> - X4: Use a resolution of 480x800 pixels to match the device's screen resolution.
-> - X3: Use a resolution of 528x792 pixels to match the device's screen resolution.
+> - Waveshare 3.97: use 480×800 pixels in portrait or 800×480 in landscape.
 
 > [!TIP]
 > You can set an image as the sleep screen cover directly from the BMP image viewer in the **[Browse Files](#33-browse-files-screen)** screen.
@@ -637,6 +673,9 @@ This feature can be disabled in the **[Controls Settings](#363-controls)** to he
 Auto Page Turn automatically advances pages at a set interval, useful for hands-free reading. This feature can be enabled and configured from the **[Reader Menu](#5-reader-menu)** while reading an EPUB.
 
 ### Tilt Page Turn (X3 only)
+
+Historical profile only: the Waveshare target does not initialize its IMU and
+does not provide this feature.
 
 On the **Xteink X3**, the gyroscope can be used to turn pages by tilting the device. This feature is available in the Controls settings.
 
@@ -728,7 +767,7 @@ Local book and folder moves carry clipping data with them. Deleting a local book
 
 ## 6. Current Limitations & Roadmap
 
-Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
+The following are current limitations, not promised release dates:
 
 * **Cover Images:** Large cover images embedded into EPUB require several seconds (~10s for ~2000 pixel tall image) to convert for sleep screen and home screen thumbnail. Consider optimizing the EPUB with e.g. https://github.com/bigbag/epub-to-xtc-converter to speed this up.
 * **Unsupported Image Formats:** Most JPG and PNG images in EPUBs render correctly. GIFs and progressive JPEGs are not supported and will fall back to an `[Image]` placeholder.
@@ -760,7 +799,8 @@ python3 scripts/debugging_monitor.py COM7                # Windows
 - Color-coded log output by category (errors, memory, display, EPUB parsing, etc.)
 - Live memory usage graph (free RAM, total RAM, max contiguous allocation) updated every second
 - Interactive command prompt — type a command and press Enter to send it to the device
-- Screenshot capture — saves the current display to `screenshot.bmp` when triggered by the device
+- Legacy screenshot-stream decoding when compatible firmware emits it; for
+  current USB diagnostics use the [dedicated debug build and protocol](./docs/engineering/testing-and-debugging.md#usb-development-sessions)
 
 **Options:**
 
@@ -782,8 +822,15 @@ python3 scripts/debugging_monitor.py --suppress "[SD]"
 
 Press **Ctrl-C** or close the graph window to exit.
 
-If the device is stuck in a bootloop, press and release the Reset button. Then, press and hold on to the configured Back button and the Power Button to boot to the Home Screen.
+If the last book causes a bootloop, hold the configured **Back** key during
+startup to bypass reopening it and reach Home. Use the Waveshare Power controls
+above rather than the historical Xteink Reset sequence.
 
-There can be issues with broken cache or config. In this case, delete the `.crosspoint` directory on your SD card (or consider deleting only `settings.json`, `state.json`, or `epub_*` cache directories in the `.crosspoint/` folder).
+Back up the SD card before investigating cache/configuration corruption. Use
+**Delete Book Cache** for the affected book or the targeted procedure in the
+[cache guide](./docs/engineering/cache-management.md). Preserve settings,
+progress, statistics, login data and WeRead accounting journals; deleting the
+entire `/.crosspoint` directory can lose state and undermine duplicate-upload
+protection.
 
 Inx retains its menu layout while boolean settings use checkboxes and slider adjustments use the common controls.

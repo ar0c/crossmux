@@ -4,12 +4,12 @@ This guide helps you build and run CrossMux locally.
 
 ## Prerequisites
 
-- [pioarduino Core](https://github.com/pioarduino/platformio-core) (`pio`) or VS Code + pioarduino IDE, using the pinned core below
+- pioarduino Core 6.2.0 (`pio`); VS Code + PlatformIO IDE is an optional editor
 - Python 3 (the CI toolchain version is recorded in `.github/workflows/ci.yml`)
 - CMake and Ninja for host tests
 - `clang-format` 21+ in your `PATH` (CI uses clang-format 21)
-- USB-C cable
-- A matching device for hardware testing; the default build targets Xteink X3/X4
+- A USB data cable for hardware testing
+- Waveshare ePaper 3.97 for hardware testing; it is the default and sole maintained firmware target
 
 If `./bin/clang-format-fix` fails with either of these errors, install clang-format 21:
 
@@ -44,7 +44,7 @@ The reported major version must be 21 or newer.
 ## Clone and initialize
 
 ```sh
-git clone --recursive https://github.com/0x1abin/crossmux.git
+git clone --recursive https://github.com/ar0c/crossmux.git
 cd crossmux
 ```
 
@@ -63,7 +63,15 @@ chmod +x .githooks/pre-commit
 
 ## Build
 
-With an existing compilation setup, run the selected profile directly:
+Install the same Core used by CI and prepare the pinned platform installer:
+
+```sh
+python -m pip install pioarduino==6.2.0
+python scripts/patch_pioarduino_cache.py --prepare-platform
+```
+
+On Windows PowerShell, first set `$env:PYTHONUTF8 = '1'`. Run the repository's
+`bin/` shell scripts from Bash. Build the development image:
 
 ```sh
 pio run -e default
@@ -113,19 +121,31 @@ use the [normal build command](#build).
 ## Flash
 
 ```sh
-pio run --target upload
+pio run -e waveshare_epaper_397 --target upload --upload-port <device-port>
 ```
+
+Replace `<device-port>` with the verified device port (for example, `COM7` on
+Windows). Follow the [Waveshare hardware guide](../engineering/waveshare-epaper-397.md)
+for board controls and installation limits; back up SD data first.
 
 ## First checks before opening a PR
 
+In Bash, set the Nightly version inputs used by the full check's build step:
+
 ```sh
+export CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)"
+export CROSSPOINT_BUILD_KIND=rc
 ./bin/ci-check
 ```
 
 The repository pins the pioarduino platform in `platformio.ini`. `pio run` builds
-the X4 Pro development firmware; `pio run -e x4pro-gh_release` builds its stable
-profile. Use `pio run -e waveshare_epaper_397` for Waveshare 3.97; see
-[build environments and simulator setup](../engineering/build-system.md).
+`waveshare_epaper_397`; `pio run -e waveshare_epaper_397_nightly` builds Nightly.
+Nightly requires the two version inputs above; see the
+[toolchain and build reference](../engineering/build-system.md#nightly-version-inputs)
+for their PowerShell equivalents.
+The optional `waveshare_epaper_397_debug` environment enables USB diagnostics
+and cannot be packaged for OTA. No X3/X4, X4 Pro or Stable build is configured.
+See [build environments and simulator setup](../engineering/build-system.md).
 
 Documentation-only changes need local link, command, and whitespace checks,
 not firmware builds.

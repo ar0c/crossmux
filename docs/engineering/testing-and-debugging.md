@@ -9,6 +9,97 @@
 > [../contributing/testing-debugging.md](../contributing/testing-debugging.md);
 > for webserver issues see [../troubleshooting.md](../troubleshooting.md).
 
+## USB development sessions
+
+Build `pio run -e waveshare_epaper_397_debug` and install it using the normal
+identity/partition/backup/readback procedure. Version ends in `-ws397-dbg`.
+This is local USB firmware, never an OTA/Nightly asset. An ordinary release
+does not accept the debug control protocol. Keep the corresponding ELF for
+backtrace symbolization; the debug build retains production optimization/LTO.
+
+The host tool needs Python and `pyserial`; PNG export uses the standard library.
+It never resets, flashes, opens network access or automatically retries an
+operation. Start with:
+
+```text
+python scripts/device_debug.py devices
+python scripts/device_debug.py --device-id <digest> --output <new-folder> status
+python scripts/device_debug.py --device-id <digest> --output <new-folder> keep on
+python scripts/device_debug.py --device-id <digest> --output <new-folder> pulse DOWN
+python scripts/device_debug.py --device-id <digest> --output <new-folder> pulse PRESS --duration-ms 600
+python scripts/device_debug.py --device-id <digest> --output <new-folder> screenshot
+python scripts/device_debug.py --device-id <digest> --output <new-folder> watch --seconds 30
+python scripts/device_debug.py --device-id <digest> --output <new-folder> run <scenario.json>
+```
+
+Use a new Windows-accessible output directory per run. The identity digest
+selects the exact native USB serial identity; a connection also verifies the
+debug firmware marker/version. Each connection gets a new session and strictly
+increasing request numbers. Duplicate/old commands are rejected; another
+session cannot take over an unfinished pulse. Exclusive USB mass storage does
+not run the debug bridge.
+
+`UP`, `PRESS`, `DOWN`, `BOOT`, `PWR` are Waveshare physical roles. HAL injection
+feeds the ordinary MappedInputManager, so user mappings, orientation, release
+barriers and long-press rules still apply. Pulses are bounded to 30..3000 ms;
+real input or external-power loss cancels virtual state without a synthetic
+release action. No direct Activity function dispatch is exposed. One pulse is
+allowed to finish if the host merely closes its serial handle while USB power
+remains. The duration is enforced on input polling, not by an interrupt: a
+blocked main loop delays release until its next poll, just as physical input
+handling is delayed. The tool must preserve an uncertain outcome and not replay it.
+One pulse is
+allowed in flight. `accepted`, `applied` and `done` have distinct meanings;
+`done` waits for the release to be processed and render readiness to stay stable
+for 200 ms. It proves software completion, not mechanical button operation.
+
+USB external power blocks automatic sleep by default only in this debug image.
+`keep off` restores normal auto-sleep; explicit PWR still works. The transition
+back to ordinary timeout starts a fresh inactivity interval. Both policy and
+test overrides are RAM-only. `sleep-timeout 3000` temporarily accelerates only
+the auto-sleep threshold for testing; `sleep-timeout 0` restores the user value.
+It does not change reading accounting or persistent settings. Restore overrides
+and keep-on after tests, or physically wake/reboot to reset debug defaults.
+
+Scenario files contain 1..100 `steps`, with allowlisted `action` values:
+`status`, `keep` (`value`: boolean), `timeout` (`value_ms`: 0 or 1000..600000),
+`pulse` (`key`, optional `duration_ms`), `wait` (optional `activity`,
+`minimum_frame`, `timeout`) and `screenshot`. The total timeout is 1..600 seconds.
+Wait for states rather than inserting blind sleeps. A smoke scenario should
+return to its original usable page; opening a reader may legitimately record
+reading time, and clicking real synchronization may upload real data. Neither
+action belongs in an automatic generic navigation smoke test.
+
+`report.json` contains allowlisted state/events and host elapsed timestamps:
+activity, render completion counter, internal/PSRAM free/largest blocks,
+published sync queue/phase/issue/revision and last startup failure. Phase/queue
+numbers follow the source enums in `WeReadTimeQueue.h`/`WeReadTimeTransaction.h`.
+`watch` captures their timeline while the user reproduces an issue. A blocked
+main loop may not answer STATUS: keep the private serial tail and symbolize any
+backtrace with the matching ELF rather than resetting away the evidence.
+
+Physical rotation acceptance has separate preparation, read-only observation
+and restoration phases. During observation, use only STATUS/SCREEN and other
+read-only state queries; do not inject button/touch input, open books or leave
+menus. Record physical pose changes, test-program navigation and the user's
+manual actions separately. If capture stops, retain the failure and observation
+gap; a successful independent reconnect/readback does not prove uninterrupted
+acceptance passed.
+
+PNG/raw captures are checked for size and FNV-1a checksum. They represent the
+1-bit framebuffer and driver inversion, not grayscale planes or actual panel
+appearance. Capture uses the render lock and waits for an outstanding display
+refresh. A concurrent log corrupting a binary frame fails checksum rather than
+being accepted. On failure the host makes bounded read-only STATUS/SCREEN
+attempts, preserves evidence and does not replay the mutation. Raw firmware
+logs are saved locally as `serial-private.log`; review/redact before sharing.
+
+Run `python -m unittest discover -s scripts/tests -p test_usb_debug.py -v` for
+compiled production input/parser/bridge tests, host framing and OTA rejection.
+Final acceptance also needs both debug and Nightly builds, real-device input,
+keep-on/off sleep and identity/readback checks. Physical unplug/PMIC wake and
+optical appearance remain separate hardware checks.
+
 ## Build Commands
 
 **Via CLI**:

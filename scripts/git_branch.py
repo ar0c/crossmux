@@ -113,13 +113,14 @@ def inject_version(env):
     pioenv = env['PIOENV']
     # Only applies to development environments; release envs set the
     # version via build_flags in platformio.ini and are unaffected.
-    if pioenv != 'waveshare_epaper_397':
+    if pioenv not in ('waveshare_epaper_397', 'waveshare_epaper_397_debug'):
         return
 
     project_dir = env['PROJECT_DIR']
     base_version = get_base_version(project_dir)
     short_sha = get_git_short_sha(project_dir)
-    version_string = f'{base_version}-{short_sha[:7]}-ws397-dev'
+    suffix = 'dbg' if pioenv.endswith('_debug') else 'dev'
+    version_string = f'{base_version}-{short_sha[:7]}-ws397-{suffix}'
 
     def export_firmware(target, source, env):
         image = Path(target[0].get_abspath())

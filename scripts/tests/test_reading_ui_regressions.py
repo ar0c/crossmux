@@ -33,17 +33,112 @@ def run_cpp(program, include_dirs=(), defines=()):
 
 
 class ReadingUiRegressionTest(unittest.TestCase):
-    def test_waveshare_hints_keep_script_classification_independent_of_line_breaks(self):
+    def test_waveshare_bottom_hints_and_content_reservation(self):
         source = (ROOT / 'src/components/themes/BaseTheme.cpp').read_text()
-        self.assertIn('isCjkHintCodepoint(cp)', method(source, 'bool BaseTheme::drawWheelAndBootButtonHints('))
-        run_cpp('#include <cassert>\n#include <cstdint>\n#include <initializer_list>\n' +
-                method(source, 'constexpr bool isCjkHintCodepoint(') + r'''
-int main() {
-  for (uint32_t cp : {0x4E2DU, 0x2F00U, 0x31A0U, 0xA960U, 0xFF01U, 0xFF65U, 0x20000U, 0x30000U})
-    assert(isCjkHintCodepoint(cp));
-  for (uint32_t cp : {0x41U, 0xE9U, 0x20ACU, 0x1F600U}) assert(!isCjkHintCodepoint(cp));
+        draw = method(source, 'bool BaseTheme::drawWheelAndBootButtonHints(')
+        header = (ROOT / 'src/components/themes/BaseTheme.h').read_text()
+        height = re.search(r'WHEEL_HINTS_HEIGHT = (\d+)', header)[1]
+        theme = (ROOT / 'src/components/UITheme.cpp').read_text()
+        run_cpp(r'''
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <vector>
+#include "Utf8.cpp"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#include <builtinFonts/notosans_8_regular.h>
+#pragma GCC diagnostic pop
+constexpr int SMALL_FONT_ID=2;
+enum {STR_SLEEP,STR_HOLD_POWER_TO_SLEEP,STR_HW_PWR_HINT,STR_HW_BOOT_HINT};
+const char* tr(int key) {const char* values[]={"休眠","长按休眠","PWR","BOOT"};return values[key];}
+struct CrossPointSettings {enum class UI_THEME {INX,CLASSIC}; enum class SHORT_PWRBTN {SLEEP,HOLD}; SHORT_PWRBTN shortPwrBtn=SHORT_PWRBTN::HOLD;} SETTINGS;
+struct HalGPIO {bool wheel=true;} gpio;
+namespace inputCapabilities {bool hasWheelAndBootButtons(const HalGPIO& g){return g.wheel;}}
+struct GfxRenderer {
+ enum Orientation {Portrait,LandscapeClockwise,PortraitInverted,LandscapeCounterClockwise};
+ enum Mode {BW,GRAY};
+ Orientation orientation=Portrait; Mode mode=BW; mutable int primitives=0;
+ mutable int clipX=0,clipWidth=0,lastRight=0; mutable bool clipped=false;
+ struct Text {int x,y;std::string text;}; mutable std::vector<Text> texts;
+ struct ClipScope {
+  GfxRenderer& r; ClipScope(GfxRenderer& r,int x,int y,int w,int h):r(r){
+   assert(!r.clipped&&x>=8&&y>=762&&w>0&&h>0&&x+w<=472&&y+h<=798&&x>=r.lastRight+(r.lastRight?8:0));
+   r.clipX=x;r.clipWidth=w;r.clipped=true;
+  } ~ClipScope(){r.clipped=false;r.lastRight=r.clipX+r.clipWidth;}
+ };
+ Orientation getOrientation()const{return orientation;} void setOrientation(Orientation o){orientation=o;}
+ int getScreenWidth()const{return orientation==LandscapeClockwise||orientation==LandscapeCounterClockwise?800:480;}
+ int getScreenHeight()const{return orientation==LandscapeClockwise||orientation==LandscapeCounterClockwise?480:800;}
+ Mode getRenderMode()const{return mode;} bool grayPlanesAreAbsolute()const{return false;}
+ int getLineHeight(int)const{return notosans_8_regular.advanceY;}
+ int getTextWidth(int,const char* text)const {
+  int width=0;auto p=reinterpret_cast<const unsigned char*>(text);uint32_t cp;
+  while((cp=utf8NextCodepoint(&p)))width+=(cp>=0x2E80 && cp<=0x9FFF)?20:8;
+  return width;
+ }
+ void fillRect(int x,int y,int w,int h,bool=true)const{
+  assert(x>=0&&y>=760&&x+w<=480&&y+h<=800);++primitives;
+ }
+ void drawText(int font,int x,int y,const char* text)const{
+  assert(clipped&&x>=clipX&&x+getTextWidth(font,text)<=clipX+clipWidth);
+  assert(y==768&&y+notosans_8_regular.advanceY<=798);texts.push_back({x,y,text});
+ }
+ void drawLine(int x,int y,int right,int bottom)const{assert(x>=0&&right<480&&y>=760&&bottom<800);++primitives;}
+};
+struct Rect {int x,y,width,height;};
+struct ThemeMetrics {int buttonHintsHeight=40;};
+namespace UiHighDpiProfile {void apply(ThemeMetrics&) {}}
+struct BaseTheme {
+ static constexpr int WHEEL_HINTS_HEIGHT=HEIGHT_TOKEN;
+ bool visible=true;bool buttonHintsVisible()const{return visible;}
+ bool drawWheelAndBootButtonHints(GfxRenderer&,const char*,const char*,const char*,const char*)const;
+};
+struct UITheme {
+ BaseTheme theme; BaseTheme* currentTheme=&theme;
+ CrossPointSettings::UI_THEME currentType=CrossPointSettings::UI_THEME::CLASSIC;
+ Rect getContentArea(const GfxRenderer& r) {return {0,0,r.getScreenWidth(),r.getScreenHeight()};}
+ ThemeMetrics metrics; const ThemeMetrics* currentMetrics=&metrics;
+ mutable ThemeMetrics adjustedMetrics; mutable bool metricsValid=false,metricsForButtonHints=false;
+ const ThemeMetrics& getMetrics()const;
+ Rect getScreenSafeArea(const GfxRenderer&,bool,bool);
+};
+#define FREEINK_DEVICE_READPICO 0
+'''.replace('HEIGHT_TOKEN', height) + draw + method(theme, 'const ThemeMetrics& UITheme::getMetrics(') +
+                method(theme, 'Rect UITheme::getScreenSafeArea(').replace('bool hasSideButtonHints)', 'bool)') + r'''
+int main(){
+ for(int o=0;o<4;++o){
+  GfxRenderer r;r.orientation=static_cast<GfxRenderer::Orientation>(o);
+  assert(BaseTheme{}.drawWheelAndBootButtonHints(r,"« 返回","暂停同步","上一页","下一页"));
+  assert(r.orientation==o&&!r.clipped&&r.texts.size()==7);
+  assert(r.texts[0].text=="上一页"&&r.texts[1].text.starts_with("暂停")&&r.texts[2].text=="下一页");
+  assert(r.texts[3].text=="PWR"&&r.texts[4].text.starts_with("长按"));
+  assert(r.texts[5].text=="BOOT"&&r.texts[6].text=="返回");
+  UITheme theme;assert(theme.getMetrics().buttonHintsHeight==40);
+  const auto safe=theme.getScreenSafeArea(r,true,false);
+  if(o==0)assert(safe.height==760&&safe.y==0);
+  if(o==1)assert(safe.x==40&&safe.width==760);
+  if(o==2)assert(safe.y==40&&safe.height==760);
+  if(o==3)assert(safe.x==0&&safe.width==760);
+  theme.theme.visible=false;assert(theme.getMetrics().buttonHintsHeight==0);
+  GfxRenderer gray;gray.orientation=static_cast<GfxRenderer::Orientation>(o);gray.mode=GfxRenderer::GRAY;
+  BaseTheme{}.drawWheelAndBootButtonHints(gray,"返回","暂停同步","上","下");
+  assert(gray.texts.empty()&&gray.orientation==o);
+ }
+ GfxRenderer empty;BaseTheme{}.drawWheelAndBootButtonHints(empty,"","","","");
+ assert(empty.texts.size()==2&&empty.texts[0].text=="PWR");
+ GfxRenderer longText;BaseTheme{}.drawWheelAndBootButtonHints(longText,"返回","一个非常长的中文动作说明用于验证单行宽度预算和完整字符省略","","");
+ assert(longText.texts[0].text.ends_with("…"));
+ GfxRenderer english;BaseTheme{}.drawWheelAndBootButtonHints(english,"Back","Keep reading background","Previous","Next");
+ assert(english.texts[1].text.ends_with("…"));
+ gpio.wheel=false;GfxRenderer other;
+ assert(!BaseTheme{}.drawWheelAndBootButtonHints(other,"返回","选择","上","下"));
+ assert(other.texts.empty()&&other.primitives==0);UITheme theme;assert(theme.getMetrics().buttonHintsHeight==40);
 }
-''')
+''', include_dirs=(ROOT / 'lib/Utf8', ROOT / 'lib/EpdFont'))
+
 
     def test_home_grid_repairs_empty_xtc_and_preserves_epub_markers(self):
         home = (ROOT / 'src/activities/home/HomeActivity.cpp').read_text()
@@ -1143,7 +1238,7 @@ struct UITheme {
   void drawMainTabStatusBar(const GfxRenderer&,Rect) { assert(false); }
   void drawButtonHints(const GfxRenderer& r,const char*,const char*,const char*,const char*) { assert(!r.clipped); }
   void drawBatteryRight(const GfxRenderer& r,Rect rect,bool) {
-    assert(!r.clipped && rect.x+rect.width==safe.x+safe.width-12 && rect.y==safe.y+safe.height-(FREEINK_DEVICE_READPICO ? 24 : 30));
+    assert(!r.clipped && rect.x+rect.width==safe.x+safe.width-12 && rect.y==safe.y+safe.height-metrics.buttonHintsHeight-(FREEINK_DEVICE_READPICO ? 24 : 30));
     assert(rect.y>=r.clip.y+r.clip.height);
     assert(rect.y+6+rect.height<=safe.y+safe.height); ++batteryCalls;
   }
@@ -1170,7 +1265,7 @@ struct InxRecentActivity {
   Rect pageContentRect() const {
     auto& theme=UITheme::getInstance();
     const int top=theme.metrics.topPadding+theme.metrics.headerHeight;
-    return Rect{theme.safe.x,theme.safe.y+top,theme.safe.width,theme.safe.height-top};
+    return Rect{theme.safe.x,theme.safe.y+top,theme.safe.width,theme.safe.height-top-theme.metrics.buttonHintsHeight};
   }
   Rect contentRect() const;
   const ReadingBookStats* statsAt(int) const { return nullptr; }
@@ -1215,6 +1310,9 @@ int main() {
     page.books=nullptr; page.render(RenderLock{});
   }
   assert(theme.emptyCalls==10 && theme.batteryCalls==35);
+  theme.metrics.buttonHintsHeight=56;theme.safe=screenSafe=Rect{0,0,480,800};
+  InxRecentActivity footer;footer.render(RenderLock{});
+  assert(!footer.renderer.clipped&&theme.batteryCalls==36);
 }
 ''')
         for readpico in (0, 1):
@@ -1683,7 +1781,7 @@ struct {
   int inxTabPosition = CrossPointSettings::INX_TAB_BOTTOM, clockFormat = 0;
   CrossPointSettings::HIDE_BATTERY_PERCENTAGE hideBatteryPercentage{};
 } SETTINGS;
-struct Metrics { int batteryWidth=16, batteryHeight=12, topPadding=0; };
+struct Metrics { int batteryWidth=16, batteryHeight=12, topPadding=0, buttonHintsHeight=0; };
 struct UITheme {
   static UITheme& getInstance() { static UITheme ui; return ui; }
   const Metrics& getMetrics() const { static Metrics m; return m; }

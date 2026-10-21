@@ -17,18 +17,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 SOURCE = 'https://github.com/ar0c/crossmux/releases/download/'
-DESTINATION = 'https://ooo.ar0c.com/releases/download/'
+DESTINATION = 'https://release.ar0c.com/releases/download/'
+LEGACY_DESTINATION = 'https://ooo.ar0c.com/releases/download/'
 TARGETS = {
-    'nightly': {'xteink_x4_pro': ('x4pro', 'x4pro'),
-                'waveshare_epaper_397': ('waveshare_epaper_397', 'waveshare-epaper-397')},
-    'stable': {'xteink_x4_pro': ('x4pro', 'x4pro')},
+    'nightly': {'waveshare_epaper_397': ('waveshare_epaper_397', 'waveshare-epaper-397')},
 }
-# Retired targets remain readable for historical releases and rollback only.
-ALLOWED_TARGET_SETS = {
-    'nightly': ({'waveshare_epaper_397'}, set(TARGETS['nightly'])),
-    'stable': (set(TARGETS['stable']),),
-}
-BUILD_TAG = re.compile(r'^(nightly|stable)-build-[0-9a-f]{40}-[0-9]+-[0-9]+$')
+ALLOWED_TARGET_SETS = {'nightly': ({'waveshare_epaper_397'},)}
+BUILD_TAG = re.compile(r'^nightly-build-[0-9a-f]{40}-[0-9]+-[0-9]+$')
 FILENAME = re.compile(r'^[a-z0-9][a-z0-9._-]{0,127}$')
 SHA256 = re.compile(r'^[0-9a-f]{64}$')
 MAX_JSON = 65536
@@ -87,11 +82,17 @@ def mirror_channel(root, channel):
     previous_targets = {}
     if current.is_file():
         published = json.loads(current.read_bytes())
+        canonical_destination = all(
+            pointer.get('manifestUrl', '').startswith(DESTINATION)
+            for entry in published.get('targets', {}).values()
+            for pointer in entry.get('variants', {}).values())
         for entry in published.get('targets', {}).values():
             for pointer in entry.get('variants', {}).values():
                 url = pointer.get('manifestUrl', '')
-                if url.startswith(DESTINATION):
-                    pointer['manifestUrl'] = SOURCE + url[len(DESTINATION):]
+                for base in (DESTINATION, LEGACY_DESTINATION):
+                    if url.startswith(base):
+                        pointer['manifestUrl'] = SOURCE + url[len(base):]
+                        break
         previous_targets = published.get('targets', {})
         referenced_tags = {
             source_asset_url(pointer['manifestUrl'], channel)[0]
@@ -102,7 +103,7 @@ def mirror_channel(root, channel):
         # Every rollback still verifies all manifests, hashes and immutable bytes.
         if all((root / tag).is_dir() for tag in referenced_tags):
             index_record(root, published, remember=True)
-        if published == index and all((root / tag).is_dir() for tag in referenced_tags):
+        if canonical_destination and published == index and all((root / tag).is_dir() for tag in referenced_tags):
             return build_id, 0
 
     historical_index = index_record(root, index)

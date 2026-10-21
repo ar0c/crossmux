@@ -64,7 +64,8 @@ class NightlyTargetTest(unittest.TestCase):
         self.assertEqual(package_nightly_target.matrix('nightly')['include'], [
             {'targetId': 'waveshare_epaper_397', 'deviceSlug': 'waveshare-epaper-397',
              'environment': 'waveshare_epaper_397_nightly'}])
-        self.assertEqual(package_nightly_target.matrix('stable')['include'], [])
+        with self.assertRaises(KeyError):
+            package_nightly_target.matrix('stable')
         config = configparser.ConfigParser(interpolation=None)
         config.read(ROOT / 'platformio.ini', encoding='utf-8')
         self.assertEqual(config['platformio']['default_envs'], 'waveshare_epaper_397')
@@ -342,7 +343,7 @@ class NightlyIndexTest(unittest.TestCase):
         self.assertEqual(manifests[0]['assets'], manifests[1]['assets'])
 
     def test_stable_index_has_no_maintained_firmware_target(self):
-        with self.assertRaisesRegex(ValueError, 'no maintained firmware targets'):
+        with self.assertRaises(KeyError):
             build_nightly_index.build_index(self.root, 'global', 'https://example.com/', 'now', 'new', 'stable')
 
 
@@ -640,15 +641,15 @@ class PublishedNightlyTest(unittest.TestCase):
             )
 
     def test_k3s_mirror_assets_stay_in_the_immutable_channel_build(self):
-        index_url = 'https://ooo.ar0c.com/releases/download/nightly/release-index.json'
+        index_url = 'https://release.ar0c.com/releases/download/nightly/release-index.json'
         build = 'nightly-build-' + 'a' * 40 + '-1-1'
         verify_nightly_release.validate_url(
-            f'https://ooo.ar0c.com/releases/download/{build}/crossmux-ar0c-x4pro-firmware.bin',
+            f'https://release.ar0c.com/releases/download/{build}/crossmux-ar0c-x4pro-firmware.bin',
             index_url, 'nightly',
         )
         for url in (
             f'https://github.com/ar0c/crossmux/releases/download/{build}/crossmux-ar0c-x4pro-firmware.bin',
-            f'https://ooo.ar0c.com/releases/download/{build}/../stable/release-index.json',
+            f'https://release.ar0c.com/releases/download/{build}/../stable/release-index.json',
             f'http://ooo.ar0c.com/releases/download/{build}/crossmux-ar0c-x4pro-firmware.bin',
         ):
             with self.assertRaises(ValueError):

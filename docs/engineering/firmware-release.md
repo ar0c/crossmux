@@ -58,7 +58,7 @@ Run `python3 scripts/tests/test_firmware_update_refresh.py` for the production
 callback, Flash-operation ordering, failure-path and theme-render regressions,
 alongside `test_font_preload_refresh.py` and `test_download_memory_lifecycle.py`.
 Device acceptance must record the installed firmware hash and serial log,
-repeat Read Pico OTA through the completion page and expected reboot, and check
+repeat Waveshare OTA through the completion page and expected reboot, and check
 interrupted-download recovery plus the SD update path. Builds and host tests do
 not establish physical display or reboot acceptance.
 
@@ -122,8 +122,8 @@ The fork's GitHub Releases remain the build and publication source. The
 `deploy/k3s/ota` workload on `mst01` checks the public `nightly` release every
 five minutes and mirrors changed builds into `/home/ar0c/crossmux-ota-dist`. After
 `verify_publish`, the Release workflow also sends a signed notification to
-`POST /hooks/release` to synchronize immediately. Stable notifications run only
-after the versioned Stable release succeeds. The handler rejects stale or invalid
+`POST /hooks/release` to synchronize immediately. The mirror retains Stable
+compatibility for historical content. The handler rejects stale or invalid
 HMAC-SHA256 signatures and checks the requested build ID; both entry points use
 one file lock. The scheduled job remains the fallback. Nightly accepts the
 maintained Waveshare-only index and historical two-board indexes. Stable accepts
@@ -132,9 +132,9 @@ the rolling index and checks every
 binary's length and SHA-256. It writes an immutable build directory before
 atomically replacing the rolling index. The serving Pod mounts that directory
 read-only and exposes only the release download paths. The Ingress for
-`ooo.ar0c.com` requires Cloudflare authenticated origin pulls. The first Stable
-release has not been published, so the Stable mirror CronJob is suspended until
-that release exists.
+`release.ar0c.com` requires Cloudflare authenticated origin pulls. The former
+`ooo.ar0c.com` endpoint is retired. The Stable mirror CronJob remains suspended;
+Stable compatibility exists only for historical content.
 
 Historical partial Nightly indexes can retain X4 Pro pointers to an older
 immutable build when that target entry exactly matches the previous published
@@ -153,7 +153,7 @@ endpoints remain supported. Source and host checks do not establish physical
 handoff, sleep or cloud-credit acceptance.
 
 The public OTA contract is
-`https://ooo.ar0c.com/releases/download/<channel>/release-index.json` with
+`https://release.ar0c.com/releases/download/<channel>/release-index.json` with
 immutable manifests and binaries under
 `/releases/download/<channel>-build-<sha>-<run>-<attempt>/`. GitHub remains the
 source of the bytes, but the public index points only to this host. The device
@@ -177,9 +177,10 @@ place; inspect the failed Job's logs rather than replacing the index by hand.
 
 ## Consumers and safety
 
-The Web flasher remains an upstream service. Device Check Updates reads only
-the fork's K3s mirror of its GitHub Releases: `stable` for X4 Pro, `nightly` for
-X4 Pro and Waveshare 3.97. The index selects the exact board and content
+The Web flasher remains an upstream service. Maintained Waveshare firmware's
+Check Updates reads the fork's K3s mirror of its GitHub Releases on `nightly`.
+Historical X4 Pro/Stable metadata is retained for compatibility and rollback,
+not as a current release target. The index selects the exact board and content
 variant, then the immutable manifest supplies the firmware asset, size, and
 SHA-256. The device rejects mismatched board, channel, revision, size, digest,
 or a URL outside this fork's immutable release namespace. Until a channel's
@@ -187,9 +188,10 @@ first release and `release-index.json` are published, checks report a fetch
 error; they never fall back to upstream.
 
 Official packages must contain the board tag. The OTA stream aborts a tagged
-image for another board before selecting the new partition. Untagged historical
-or third-party images remain compatible, so chip and board checks in the
-official packaging path are mandatory.
+image for another board before selecting the new partition, and rejects a
+complete image without the matching board tag. The separate SD installer has
+its own validation path; its handling of historical images does not relax OTA
+or official packaging checks.
 
 CI, indexes, and checksum checks do not replace real-device acceptance. Before
 using a Nightly image on hardware, test boot, reading, input, storage, display,
@@ -244,3 +246,12 @@ reuses immutable assets. An already installed higher base version cannot
 automatically downgrade through the device's update check; repair it with a
 newer build or a deliberate SD-card install. Never delete a referenced
 immutable release while preparing or rolling back.
+
+## OTA host migration
+
+The owner retired the former ooo endpoint on 2026-10-09. Local firmware uses
+only release.ar0c.com with the strict OTA URL allowlist and verified TLS path.
+Existing device application backups and partition/OTA metadata remain intact.
+Changing source or updating the checkout does not publish a GitHub Nightly.
+Verify the published index and physical-device OTA separately before claiming
+the new host is active on an installed device.

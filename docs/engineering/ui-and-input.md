@@ -14,6 +14,10 @@
 
 ## Logical Button Mapping
 
+EPUB automatic rotation is optional and capability-gated, initially on Waveshare
+3.97 only. Its policy, manual fallback, modal freeze, sensor lifecycle and future
+board integration are specified in [reader-auto-rotation.md](reader-auto-rotation.md).
+
 **Source**: [src/MappedInputManager.cpp:20-55](../../src/MappedInputManager.cpp)
 
 Constraint: Physical button positions are fixed on hardware, but their logical functions change based on user settings and screen orientation.
@@ -43,11 +47,22 @@ Constraint: Physical button positions are fixed on hardware, but their logical f
 
 On Waveshare ePaper 3.97, BOOT is the physical Back key, the three wheel
 positions provide Left, Confirm, and Right, and PWR comes from the PMIC.
-`BaseTheme::drawWheelAndBootButtonHints()` places their small labels beside the
-upper left wheel and upper right BOOT/PWR buttons across all themes. It skips
-labels over occupied framebuffer areas and does not reserve the X4 Pro footer.
+`BaseTheme::drawWheelAndBootButtonHints()` draws one 40 px bottom band in
+physical portrait coordinates, shared by every theme. Each active gesture is
+shown inline as marker plus translated action, in the order rocker up, centre
+press (dot), rocker down, PWR, BOOT. BOOT is the Back key, while PWR shows the
+configured sleep gesture. User mappings still determine the actions. Empty
+actions are omitted; remaining groups share the row with at least 8 px gaps.
+Short actions retain their width; longer actions share the remaining text
+budget and truncate at complete UTF-8 boundaries with an ellipsis. All labels
+use the existing small face on one baseline. Arrows and dot are procedural,
+PWR/BOOT labels use translation keys, and a fixed 96-byte stack buffer avoids
+new rendering heap allocations or framebuffers. The same 40 px constant drives
+the content reservation, and hiding hints releases the band. INX Recent reserves
+its separate battery strip above the band. The renderer orientation is restored
+after drawing; grayscale overlay passes retain the monochrome hints.
 Check the physical board after changing this layout; a successful build cannot
-prove bezel alignment or e-paper appearance.
+prove e-paper appearance or button operation.
 
 ## Input Frames and Event Semantics
 

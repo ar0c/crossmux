@@ -162,9 +162,11 @@ Timing includes synchronous SD I/O and must not be interpreted as pure CPU work.
 See the [WeRead README](../../src/activities/apps/weread/README.md) for measurement
 boundaries, cold-cache test records, and unverified hardware checks.
 
-Device requests call `setInsecure()`: traffic is encrypted, but the CA and host
-identity are not verified. This makes session credentials and downloaded
-content vulnerable to a man-in-the-middle attacker. The native simulator takes
+Direct Web login/content requests call `setInsecure()` on hardware: traffic is
+encrypted, but the CA and host identity are not verified. Managed-service
+requests and OTA instead use the verified HTTPS transport; do not apply the
+direct-content limitation to those paths. Direct session credentials and content
+remain vulnerable to a man-in-the-middle attacker. The native simulator takes
 a different path, `WeReadHttpClient -> simulator esp_http_client shim -> curl`,
 and uses the host trust store for certificate verification. WeRead uses an
 unofficial Web protocol and may stop working when the service changes.
@@ -177,7 +179,7 @@ EPUBs continue to use KOReader. WeRead public-account books (`MP_WXS_`), moved
 files, and renamed files are intentionally treated as ordinary EPUBs. The
 existing long-press KOReader shortcut is unchanged.
 
-Manual WeRead sync starts with the saved Cookie and renews it only after an
+Direct-mode WeRead progress sync starts with the saved Cookie and renews it only after an
 authentication failure. Newly generated WeRead chapters retain invisible
 raw-XHTML UTF-16 source anchors. These map the local page's visible-text offset
 to WeRead's native `chapterUid + chapterOffset` coordinate without clamping the
@@ -185,14 +187,20 @@ offset to the `WRT2` word count; the inverse mapping restores a remote offset
 through the reader's existing pagination LUT. Older generated books without
 anchors retain the visible-offset approximation, and other EPUBs fall back to
 the whole-book percentage derived from `WRT2` word counts. Different canonical
-positions show the direction selector. A local upload uses an enter/report pair
-and is accepted only after a read-back verifies the chapter and offset. Selecting
-the remote position updates local progress without reporting it to the server;
-matching positions complete without an upload. The sync context and request body
-do not include local reading duration. Restoring duration reporting is tracked in
-[#332](https://github.com/0x1abin/crossmux/issues/332). An expired session directs
-the user back to **Apps → WeRead** to sign in; it does not open a QR flow from the
-reader.
+positions show the direction selector. Position upload uses its own
+enter/report and readback flow; it is separate from measured-time accounting.
+When the remote position is selected, its chapter and offset are applied through
+the reader's existing progress path. An expired direct session directs the user
+back to **Apps → WeRead** to sign in; it does not open a QR flow from the reader.
+
+Measured time is imported from cumulative local statistics into durable journals
+and remains pending across page exits and reboot. The owner accepted upload-day
+cloud attribution while original source dates remain local. Direct paced upload
+and service-backed handoff both reserve ownership before sending; an ACK or
+service receipt is not verified cloud credit. Uncertain timed writes are not
+automatically repeated. See [time accounting](weread-time-sync.md) and
+[managed reading and service handoff](weread-service-handoff.md) for current
+transport, identity, recovery and readback contracts.
 
 For a new standard-book cache, the downloader fetches cloud progress after the
 `WRT2` catalog and before any chapter or image. This request is best effort:

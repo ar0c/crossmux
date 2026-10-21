@@ -1,9 +1,13 @@
-# WeRead service handoff (X4 Pro and Waveshare 3.97)
+# WeRead service handoff (Waveshare 3.97)
 
 The firmware can delegate measured offline time to the owner's Go service at
 `https://wesync.ar0c.com`. It persists ownership before sending, then returns
 to offline reading once the server has durably accepted the record. Cloud
 credit remains asynchronous and is displayed separately from local acceptance.
+
+Waveshare 3.97 is the sole maintained firmware target. Historical X4 Pro
+journals and shared protocol code remain compatibility data. For the common
+accounting and upload-date rules, see [measured-time synchronization](weread-time-sync.md).
 
 ## Device configuration
 
@@ -25,7 +29,12 @@ It can locate a reboot within the handoff without USB serial access.
 `post_start` only marks the point before the POST; its zero HTTP and timing
 fields are placeholders, not a server response. The separate
 `/WeReadSync/last-start-diagnostic.json` records the latest start result;
-`reason: 4` means the internal-memory headroom check rejected the worker.
+`reason: 4` means a memory headroom check rejected the worker. Schema 2 records
+the internal `free_heap`, `largest_block`, allocation `budget`, active
+`free_reserve`, `psram_free`, whether `split_reserve` was eligible, and whether
+`post_allocation` rejected the already-created but still gated task. Internal
+stack/contiguous requirements cannot be satisfied by PSRAM; see
+[the memory budget](memory-and-allocation.md#background-weread-startup-gate).
 Successful starts write `reason: 0`, so an old rejection is not mistaken for
 the current attempt.
 Missing configuration retains the existing direct mode only for undelegated
@@ -35,9 +44,31 @@ device-token replacement requires reconciliation of old handoffs first.
 
 ## Ownership and recovery
 
+While background synchronization is running, the progress page labels both
+footer actions with their logical keys: Back keeps reading, while Confirm
+pauses synchronization. The Back edge hint also reads "Keep reading" and
+follows the configured button mapping. With the Waveshare default mapping,
+short-press BOOT to return to the book without stopping the worker; press the
+Function key to pause. Footer action hit regions retain the same 6 px gap.
+
 The existing WRTL/external/WRP2 audit remains required. The direct sender's
 consumed prefix, including uncertain time, is excluded before selecting a
-service range. No historical upload or uncertain direct batch is replayed.
+service range. Previously consumed time and uncertain direct batches are never
+replayed; genuinely unsent historical time retains its original source date
+locally and is credited on the upload date.
+
+Full WRTL/WRP2/WRS1 replay uses a scoped HAL read handle: open once per journal,
+then read every frame sequentially with the existing checksum, identity and
+transition checks. The scope releases the handle on success and every failure;
+no handle survives replay or remains open across a network request. No history
+buffer or cached tail replaces the complete audit. The existing fallible HAL
+file allocation is reused within replay, rather than repeated per frame.
+Before append the read handle closes, and size/readback reopens storage so the
+reservation and receipt checks still inspect persisted data. Reconfiguration
+also releases any reader before changing paths. HAL operations retain their
+per-operation storage lock; replay does not hold the SD mutex across the loop.
+`WeReadTimeStorageTest` guards constant open count, sequential reads, cleanup on
+open/short-read/corruption failures, offset reads, and fresh append readback.
 
 `/.crosspoint/weread/time/<account>/<source>/<day>.wrs1` stores append-only
 256-byte WRS1 frames: identity, fixed direct prefix, bound service device,
@@ -157,9 +188,9 @@ Build and native tests do not prove physical-device Wi-Fi/TLS/SD operation.
 After installing the package, verify one genuinely new, unsent reading range,
 the server's durable receipt, device disconnect, and later exact cloud credit.
 
-## Unified managed reading (development branch)
+## Unified managed reading
 
-`codex/weread-managed-session` adds backend-managed shelf, detail, catalog,
+The integrated managed-session implementation provides backend-managed shelf, detail, catalog,
 notes/reviews, content context/shards and registered images. The device requires
 `managed_reading_v1` from `/api/v2/device/status` with exact account/device
 identity. Enable it separately with `WESYNC_MANAGED_READING=true` on the backend;

@@ -38,3 +38,6 @@ weread_apikey*.bin
 sdkconfig.sticky
 sdkconfig.x4pro
 flake.*
+
+# Local-only temporary and verification artifacts
+/artifacts/

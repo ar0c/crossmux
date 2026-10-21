@@ -1,6 +1,6 @@
 # Build System & Build Flags
 
-> Current scope (2026-10-08): only Waveshare ePaper 3.97 development/Nightly firmware is maintained, built, checked and packaged. X4 Pro instructions below describe retired history, not an active build/release target. Previous releases/backups are retained. Embedded hyphenation patterns are English-only; Chinese uses existing CJK breaking without a dictionary. UI translations and font glyph coverage are unchanged. No Stable firmware target is configured.
+> Current scope (2026-10-08): only Waveshare ePaper 3.97 development/Nightly reader firmware is maintained, built, checked and packaged. X4 Pro instructions below describe retired history, not an active build/release target. Previous releases/backups are retained. Embedded hyphenation patterns are English-only; Chinese uses existing CJK breaking without a dictionary. UI translations and font glyph coverage are unchanged. No Stable firmware target is configured.
 
 
 > Deep reference for [AGENTS.md](../../AGENTS.md). Covers PlatformIO usage, the
@@ -35,6 +35,20 @@ Install packages through PlatformIO; do not copy a mutable/customized framework
 from another checkout. An explicit `PLATFORMIO_CORE_DIR` still overrides this
 default for the isolated cache-switch tests below.
 
+## Companion remote build
+
+The StickS3 BLE HID remote lives in [`remotes/sticks3/`](../../remotes/sticks3/README.md).
+From the repository root, run `pio run -d remotes/sticks3 -e sticks3_remote -j 4`.
+It uses its own PlatformIO configuration and local tool directory, pinned to
+platform 55.03.37 / Arduino 3.3.7. It does not inherit reader libraries, source
+filters or build hooks. The default root build and canonical Nightly/OTA matrix
+remain Waveshare-only. The independent `sticks3-remote.yml` workflow runs the
+remote's host tests and exports an application binary and SHA-256 without publishing.
+Remote-only changes run the dedicated CI without selecting reader builds; mixed
+changes still select the affected reader checks. Generic remote upload/erase
+targets are rejected; use the identity/backup-gated
+application-only flasher described in its README.
+
 ## Tool initialization
 
 Use pioarduino 6.2.0 with pinned platform 55.03.311. In a new project-local
@@ -48,8 +62,8 @@ python scripts/patch_pioarduino_cache.py --prepare-platform
 Preparation removes the platform installer's SCons replacement; the Core still
 supplies SCons. Keep each build job's tool directory isolated and include
 `.platformio` in its path for the framework-restoration check. Ubuntu cppcheck
-also needs `libpcre3`. X4 Pro and Waveshare use application LTO with their
-prebuilt `dio_opi` TinyUSB core to fit the existing 6.25 MiB OTA partitions.
+also needs `libpcre3`. Waveshare uses application LTO with its prebuilt
+`dio_opi` TinyUSB core to fit the existing 6.25 MiB OTA partitions.
 
 ## Build Environment
 
@@ -65,17 +79,63 @@ local development artifacts. X4 Pro builds and exports are retired.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.
 * **Environments** (in `platformio.ini`):
   * `waveshare_epaper_397`: Waveshare ePaper 3.97 development build
+  * `waveshare_epaper_397_debug`: USB-only control/diagnostic build (`-ws397-dbg`), never an OTA target
   * `waveshare_epaper_397_nightly`: Waveshare Nightly build
   * `simulator`: Native desktop simulator for UI development
+  * `simulator_waveshare_ui`: Button-driven 800×480 Waveshare UI preview
+  * `simulator_managed_acceptance`: Managed-service contract acceptance on the Waveshare UI profile
+
+### Nightly version inputs
+
+`waveshare_epaper_397_nightly` interpolates `CROSSPOINT_RC_HASH` and
+`CROSSPOINT_BUILD_KIND` into the embedded version. Set both before a direct
+Nightly build or the Nightly build step in `./bin/ci-check`:
+
+```bash
+export CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)"
+export CROSSPOINT_BUILD_KIND=rc
+pio run -e waveshare_epaper_397_nightly
+```
+
+PowerShell equivalents are `$env:CROSSPOINT_RC_HASH = git rev-parse --short=7 HEAD`
+and `$env:CROSSPOINT_BUILD_KIND = 'rc'`. GitHub's release workflow supplies these
+automatically. The separate local-release preparer supplies a staged-tree hash
+and `local`; follow [its release procedure](firmware-release.md#local-waveshare-nightly-test-release)
+rather than assigning a commit identity to uncommitted source. A local build
+does not publish a release or establish the exact identity of a dirty checkout.
+
+### USB debug isolation
+
+The optional debug build inherits the same board, optimization and LTO policy.
+Only that environment defines `CROSSMUX_USB_DEBUG=1` and includes `src/debug/`;
+the base source filter excludes it. HAL input and ActivityManager observations
+are compile-time guarded, with no debug state or control parser in development
+or Nightly images. The former unguarded `CMD:SCREENSHOT` parser now belongs to
+the dedicated protocol; normal UI screenshot/export features remain available.
+
+`scripts/debug_build_policy.py` rejects a debug define outside the explicit
+environment, checks source filtering, and checks the final image identity.
+`scripts/package_nightly_target.py` independently rejects that identity even
+when presented with a correctly named ESP image and board marker. Debug is not
+added to the canonical OTA matrix. Replacing a debug image with the ordinary
+firmware removes the module; no settings/NVS migration is required.
+
+The module uses fixed protocol/input storage, three render observation atomics,
+and existing render/USB resources. It creates no task, heap allocation, network
+listener or second framebuffer. Compare map/BSS/image size after changes rather
+than assuming the debug cost or claiming a measured zero-cost release delta.
+See [USB development sessions](testing-and-debugging.md#usb-development-sessions)
+for commands and acceptance boundaries.
 
 Development and Nightly environments build the same Waveshare board, with one unified
 language firmware. Routine CI and Hardware CI build only this physical board.
 
-Bluetooth Page Turner Beta is compiled into the Waveshare hardware target,
-including development, Nightly, release-candidate, and stable builds.
+Bluetooth Page Turner Beta is compiled into the Waveshare development, USB
+debug and Nightly builds. No Stable firmware environment is configured.
 The runtime Bluetooth switch defaults to off; native simulators use SDK stubs.
-Both S3 hardware profiles inherit the PSRAM and IPC configuration and retain
-their prebuilt `dio_opi` core so the TinyUSB MSC component graph remains intact.
+All maintained hardware environments inherit the Waveshare PSRAM and IPC
+configuration and retain the prebuilt `dio_opi` core so the TinyUSB MSC component
+graph remains intact.
 
 The SDK's obsolete passkey callback is removed only from a generated source copy
 under `$BUILD_DIR/ble-compat`; the SDK and NimBLE dependency sources are never
@@ -109,7 +169,6 @@ export PLATFORMIO_CORE_DIR="$PWD/.platformio/ble-psram"
 export PLATFORMIO_BUILD_DIR="$PWD/.pio/ble-psram-build"
 export PLATFORMIO_BUILD_CACHE_DIR="$PWD/.cache/ble-psram"
 export IDF_COMPONENT_CACHE_PATH="$PWD/.cache/ble-psram-idf-components"
-pio run -e waveshare_epaper_397_nightly
 pio run -e waveshare_epaper_397_nightly
 ```
 
@@ -150,6 +209,13 @@ pio run -e simulator -t run_simulator
 The simulator implementation and launcher come from the pinned
 [`0x1abin/crosspoint-simulator`](https://github.com/0x1abin/crosspoint-simulator)
 fork; the exact revision is recorded in `platformio.ini`.
+
+Use `pio run -e simulator_waveshare_ui -t run_simulator` for the maintained
+board's button UI and 800×480 geometry. It uses the simulator's non-touch
+profile, without emulating Waveshare GPIO, PMIC, PSRAM, SDMMC or panel waveforms.
+`simulator_managed_acceptance` adds the managed-service acceptance mode; see
+[local validation](weread-local-validation.md). These are native development
+environments, not additional hardware or release targets.
 The firmware repository does not carry a second host implementation. Arrow
 keys are Up/Down, `P` is Power, mouse input provides touch, and `S` sleeps.
 
@@ -238,7 +304,11 @@ build_flags =
 
 See also: [getting-started](../contributing/getting-started.md) for first-time toolchain setup, [testing-and-debugging.md](testing-and-debugging.md) for build/monitor commands.
 
-### Historical local integration builds (2026-10-02)
+### Historical local integration rehearsal (2026-10-02)
+
+This dated record describes an earlier multi-device rehearsal. Its pins and
+environment list are not the current build matrix; current firmware builds
+are Waveshare-only and use the environments listed above.
 
 The SDK/Simulator/Reader pins are `98b4e427`, `20e73803`, and `38280863`.
 Use the real source exports recorded by `sync-upstream start --local-rehearsal`;
@@ -247,10 +317,11 @@ fork includes all six ReadPico fixes through `e3550ec`. Production dependency
 commits remain unchanged during rehearsal; the ignored local PlatformIO config
 selects reviewed exports. No commit, push, PR or flashing is part of this stage.
 
-Validate `default`, `gh_release`, `readpico`, `readpico_nightly`, and `metalio_eink4`,
-and all six existing simulator environments. Only the explicit ReadPico profiles
-use high-density metrics. Keep host tests, whole-page visuals, Flash/static RAM,
-and physical-device acceptance as separate results.
+The rehearsal's planned matrix listed `default`, `gh_release`, `readpico`, `readpico_nightly`,
+`metalio_eink4`, and six simulator environments. Those retired names are not
+current build commands. Only the explicit ReadPico profiles used high-density
+metrics. Host tests, whole-page visuals, Flash/static RAM and physical-device
+acceptance remain separate results.
 
 The integrated SD catalog retains at most 48KiB of row/container data and checks
 32KiB free-heap plus 4KiB contiguous headroom before growth. Installed discovery
