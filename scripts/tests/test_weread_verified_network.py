@@ -15,6 +15,8 @@ class VerifiedNetworkTest(unittest.TestCase):
         start = source.rfind("WeReadHttpClient::Result runRequest(", 0, signature)
         end = source.index("\n}\n", signature) + 3
         request = source[start:end]
+        start = source.index("bool isAborted(")
+        abort_check = source[start:source.index("\n}\n", start) + 3]
         start = source.index("Result requestVerified(")
         verified = source[start:source.index("\n}\n", start) + 3]
         boundary = r'''
@@ -99,7 +101,7 @@ int main() {
             path = Path(tmp)
             cpp = path / "network.cpp"
             exe = path / ("network.exe" if os.name == "nt" else "network")
-            cpp.write_text(boundary + request + "\nnamespace WeReadHttpClient {\n" + verified + "\n}\n" + main,
+            cpp.write_text(boundary + abort_check + request + "\nnamespace WeReadHttpClient {\n" + verified + "\n}\n" + main,
                            encoding="utf-8")
             subprocess.run([os.environ.get("CXX", "g++"), "-std=c++17", "-UNDEBUG", "-Wall", "-Wextra", "-Werror",
                 "-I" + str(ROOT / "lib/WeReadWebApi/src"),

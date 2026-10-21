@@ -24,6 +24,11 @@ namespace {
 // slow servers room.
 constexpr int HTTP_TIMEOUT_MS = 60000;
 
+// Written after every request, and read by the UI right after a failure.
+int g_lastStatus = 0;
+// Whether the last answer came from another origin than the request started at.
+bool g_lastRedirected = false;
+
 // Ordinary content fetches go through wolfSSL, which speaks TLS 1.3 and reads
 // large bodies reliably. Fork OTA manifests use the separate CA-verified
 // transport below. Plain-http URLs still use a
@@ -41,9 +46,11 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   WifiPowerSaveGuard psGuard;
   freeink::FetchOptions options;
   options.redirectToHttp = downgradeRedirectsToHttp;
+  bool answeredBySameOrigin = true;
   const freeink::FetchResult result = freeink::fetchResumable(
       url, options,
       [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
+        answeredBySameOrigin = sameOrigin;
         http.setTimeout(HTTP_TIMEOUT_MS);
         http.setInsecure();
         // setUserAgent replaces SecureHttpClient's built-in UA; addHeader would
@@ -61,6 +68,9 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
       },
       sink, [cancelFlag] { return cancelFlag && *cancelFlag; });
   if (bytesOut) *bytesOut = result.bytes;
+  // FetchResult::status is -1 when no response arrived (bad URL, DNS, connect, TLS).
+  g_lastStatus = result.status < 0 ? 0 : result.status;
+  g_lastRedirected = !answeredBySameOrigin;
 
   if (result.aborted) return HttpDownloader::ABORTED;
   if (result.stopped) return HttpDownloader::FILE_ERROR;
@@ -220,6 +230,9 @@ bool HttpDownloader::hasMemoryForTls() {
           psram.freeBytes, psram.largestBlockBytes);
   return false;
 }
+int HttpDownloader::lastStatus() { return g_lastStatus; }
+
+bool HttpDownloader::lastAnswerRedirected() { return g_lastRedirected; }
 
 bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const std::string& username,
                               const std::string& password) {

@@ -1,6 +1,7 @@
 #include "SettingsActivity.h"
 
 #include <BoardConfig.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalDisplay.h>
 #include <HalStorage.h>
@@ -41,6 +42,7 @@
 #include "SettingsList.h"
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
+#include "TapZoneSettingsActivity.h"
 #include "TextSettingsActivity.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -287,6 +289,20 @@ void SettingsActivity::selectMainTabContentEdge(const MainTabContentEdge edge) {
 }
 
 void SettingsActivity::rebuildSettingsLists() {
+  RenderLock lock(*this);
+  closeRouting();
+  SettingInfo dictionarySetting;
+  bool hasDictionary = false;
+  if (!resourcesDirty) {
+    const auto dictionary = std::find_if(readerSettings.begin(), readerSettings.end(), [](const SettingInfo& setting) {
+      return setting.nameId == StrId::STR_DICTIONARY;
+    });
+    if (dictionary != readerSettings.end()) {
+      dictionarySetting = std::move(*dictionary);
+      if (!dictionarySetting.enumStringValues.empty()) dictionarySetting.enumStringValues[0] = tr(STR_NONE_OPT);
+      hasDictionary = true;
+    }
+  }
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
@@ -294,10 +310,10 @@ void SettingsActivity::rebuildSettingsLists() {
 
   // Pick up any fonts uploaded/deleted over the web server since the last
   // reader activity ran — otherwise the font-family picker shows stale list.
-  sdFontSystem.refreshIfDirty();
+  if (resourcesDirty) sdFontSystem.refreshIfDirty();
 
   std::vector<DictionaryEntry> dictionaries;
-  if (!usesAccordion() || dictionariesLoaded) DictionaryRegistry::discover(dictionaries);
+  if (resourcesDirty) DictionaryRegistry::discover(dictionaries);
 
   for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
     if (setting.category == StrId::STR_NONE_OPT || home_button::isSetting(setting.valuePtr)) continue;
@@ -337,6 +353,9 @@ void SettingsActivity::rebuildSettingsLists() {
       systemSettings.push_back(setting);
     }
   }
+
+  if (hasDictionary) readerSettings.push_back(std::move(dictionarySetting));
+  resourcesDirty = false;
 
   // Append device-only ACTION items
   if (!BoardConfig::hasTouch()) {
@@ -422,7 +441,7 @@ void SettingsActivity::onEnter() {
   // from the base's per-tab nav reset)
   selectedCategoryIndex = 0;
   expandedCategories = 0;
-  dictionariesLoaded = !usesAccordion();
+  resourcesDirty = true;
   preserveQuickResumeTimeoutOn =
       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
   quickResumeTimeoutAutoEnabled = false;
@@ -432,6 +451,8 @@ void SettingsActivity::onEnter() {
 }
 
 void SettingsActivity::selectCategory(const int categoryIndex) {
+  RenderLock lock(*this);
+  closeRouting();
   selectedCategoryIndex = categoryIndex;
   switch (selectedCategoryIndex) {
     case 0:
@@ -520,11 +541,10 @@ void SettingsActivity::activateIndex(const int index) {
     app.clearTapFlash();
     return;
   }
-  (void)index;  // toggleCurrentSetting reads the ring position
   // Most rows repaint a different surface (popup, sub-activity, new value);
   // a lingering tap flash would gray an unrelated element.
   app.clearTapFlash();
-  toggleCurrentSetting();
+  toggleSetting((*currentSettings)[index]);
   // Tap-first: a tapped row is not a cursor position. Leaving it focused
   // (inverted) after the tap meant the row stayed black once its sub-screen or
   // popup closed, and Back then had to clear that focus before a second Back
@@ -555,14 +575,15 @@ void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valueP
   if (valuePtr != &CrossPointSettings::uiTheme) {
     return;
   }
-  RenderLock lock(*this);
-  UITheme::getInstance().reload();
-  expandedCategories = 0;
-  nav.reset();
+  {
+    RenderLock lock(*this);
+    UITheme::getInstance().reload();
+    expandedCategories = 0;
+    clearContentSelection();
+    nav.reset();
+    resetUi();
+  }
   rebuildSettingsLists();
-  // Re-derive the shared tokens for the new look; the gate stays closed until
-  // the repaint that rebuilds the interaction table in the new layout.
-  resetUi();
 }
 
 bool SettingsActivity::handleCustomInput() {
@@ -596,6 +617,8 @@ bool SettingsActivity::handleButtons() {
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       if (expandedCategories != 0) {
+        RenderLock lock(*this);
+        closeRouting();
         const auto row = InxAccordionGeometry::rowAt(accordionSettingCounts(), expandedCategories, nav.selected);
         const uint8_t mask = row.category >= 0 ? static_cast<uint8_t>(uint8_t{1} << row.category) : 0;
         expandedCategories =
@@ -613,7 +636,7 @@ bool SettingsActivity::handleButtons() {
     if (ringPos() == 0) {
       stepTab(1);
     } else {
-      toggleCurrentSetting();
+      activateIndex(ringPos() - 1);
       requestUpdate();
     }
     return true;
@@ -655,44 +678,31 @@ std::array<int, SettingsActivity::categoryCount> SettingsActivity::accordionSett
 }
 
 void SettingsActivity::toggleAccordionCategory(const int categoryIndex) {
+  const auto started = millis();
   if (categoryIndex < 0 || categoryIndex >= categoryCount) return;
   const uint8_t mask = static_cast<uint8_t>(uint8_t{1} << categoryIndex);
-  if (categoryIndex == 1 && !dictionariesLoaded && (expandedCategories & mask) == 0) {
-    dictionariesLoaded = true;
-    rebuildSettingsLists();
-  }
+  RenderLock lock(*this);
+  const auto locked = millis();
+  closeRouting();
   expandedCategories ^= mask;
   rebuildAccordionRows();
   nav.selected = InxAccordionGeometry::categoryRow(accordionSettingCounts(), expandedCategories, categoryIndex);
   nav.follow(listCount());
   requestUpdate();
+  LOG_DBG("SET", "Category %d expanded=%u rows=%d handler=%lu lockWait=%lu ms", categoryIndex,
+          static_cast<unsigned>(expandedCategories), listCount(), millis() - started, locked - started);
 }
 
 void SettingsActivity::toggleAccordionSetting(const int categoryIndex, const int settingIndex) {
   if (categoryIndex < 0 || categoryIndex >= categoryCount) return;
   const auto& settings = settingsForCategory(categoryIndex);
   if (settingIndex < 0 || settingIndex >= static_cast<int>(settings.size())) return;
-  selectedCategoryIndex = categoryIndex;
-  currentSettings = &settings;
-  settingsCount = static_cast<int>(settings.size());
-  tabNavs[static_cast<size_t>(categoryIndex)].selected = settingIndex + 1;
-  toggleCurrentSetting();
-  if (!usesAccordion()) return;
-  rebuildAccordionRows();
-  nav.selected =
-      InxAccordionGeometry::categoryRow(accordionSettingCounts(), expandedCategories, categoryIndex) + 1 + settingIndex;
-  nav.follow(listCount());
+  toggleSetting(settings[settingIndex]);
   requestUpdate();
 }
 
-void SettingsActivity::toggleCurrentSetting() {
+void SettingsActivity::toggleSetting(const SettingInfo& setting) {
   mappedInput.resetHomeButtonInput();
-  int selectedSetting = ringPos() - 1;
-  if (selectedSetting < 0 || selectedSetting >= settingsCount) {
-    return;
-  }
-
-  const auto& setting = (*currentSettings)[selectedSetting];
   const auto changedValuePtr = setting.valuePtr;
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
   const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
@@ -711,31 +721,10 @@ void SettingsActivity::toggleCurrentSetting() {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
-  } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-    const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
-    const auto enumLabels = setting.enumLabels();
-    if (enumLabels.size() > 2) {
-      const auto valuePtr = setting.valuePtr;
-      optionPopup.show(
-          setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), currentValue,
-          [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
-            SETTINGS.*valuePtr = idx;
-#if FREEINK_CAP_HAPTIC && !defined(SIMULATOR)
-            if (valuePtr == &CrossPointSettings::hapticFeedbackLevel && idx == CrossPointSettings::HAPTIC_FEEDBACK_OFF)
-              gpio.stopHapticFeedback();
-#endif
-            syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-            SETTINGS.saveToFile();
-            if (valuePtr == &CrossPointSettings::uiTheme)
-              applyUiSettingChange(valuePtr);
-            else
-              rebuildSettingsLists();
-          });
-      requestUpdate();
-      return;
-    }
-    SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(enumLabels.size());
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
+    // A DynamicEnum owns the mapping between the stored value and the rows it
+    // shows, so it wins over the raw field: the stored value is not a row index
+    // there (the page-turn gestures keep DISABLED at 4 behind four rows).
     const uint8_t totalValues = setting.enumStringValues.empty()
                                     ? static_cast<uint8_t>(setting.enumLabels().size())
                                     : static_cast<uint8_t>(setting.enumStringValues.size());
@@ -750,7 +739,7 @@ void SettingsActivity::toggleCurrentSetting() {
         if (managedPicker) return;
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
         SETTINGS.saveToFile();
-        rebuildSettingsLists();
+        requestUpdate();
       };
       if (!setting.enumStringValues.empty()) {
         optionPopup.show(setting.nameId, setting.enumStringValues, cur, std::move(onSelect));
@@ -763,6 +752,22 @@ void SettingsActivity::toggleCurrentSetting() {
       return;
     }
     setting.valueSetter((cur + 1) % totalValues);
+  } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
+    const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
+    const auto enumLabels = setting.enumLabels();
+    if (enumLabels.size() > 2) {
+      const auto valuePtr = setting.valuePtr;
+      optionPopup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), currentValue,
+                       [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
+                         SETTINGS.*valuePtr = idx;
+                         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
+                         SETTINGS.saveToFile();
+                         refreshAfterSettingChange(valuePtr);
+                       });
+      requestUpdate();
+      return;
+    }
+    SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(enumLabels.size());
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (currentValue + setting.valueRange.step > setting.valueRange.max) {
@@ -868,6 +873,7 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::ManageDictionaries:
         startActivityForResultWith<DictionaryDownloadActivity>([this](const ActivityResult&) {
+          resourcesDirty = true;
           SETTINGS.saveToFile();
           rebuildSettingsLists();
           requestUpdate();
@@ -896,10 +902,7 @@ void SettingsActivity::toggleCurrentSetting() {
         });
         break;
       case SettingAction::About:
-        if (usesAccordion())
-          startActivityForResultWith<InxAboutActivity>(resultHandler);
-        else
-          startActivityForResultWith<AboutActivity>(resultHandler);
+        startActivityForResultWith<AboutActivity>(resultHandler);
         break;
       case SettingAction::Plugins:
         startActivityForResultWith<PluginCatalogActivity>(resultHandler);
@@ -910,6 +913,9 @@ void SettingsActivity::toggleCurrentSetting() {
         } else {
           LOG_ERR("SETTINGS", "OOM: KeyboardLayoutsActivity");
         }
+        break;
+      case SettingAction::TapZones:
+        startActivityForResultWith<TapZoneSettingsActivity>(resultHandler);
         break;
       case SettingAction::None:
         // Do nothing
@@ -922,12 +928,18 @@ void SettingsActivity::toggleCurrentSetting() {
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
   SETTINGS.saveToFile();
-  if (changedValuePtr == &CrossPointSettings::uiTheme) {
-    applyUiSettingChange(changedValuePtr);
-  } else {
+  refreshAfterSettingChange(changedValuePtr);
+}
+
+void SettingsActivity::refreshAfterSettingChange(uint8_t CrossPointSettings::* valuePtr) {
+  if (valuePtr == &CrossPointSettings::uiTheme) {
+    applyUiSettingChange(valuePtr);
+  } else if (valuePtr == &CrossPointSettings::shortPwrBtn) {
     rebuildSettingsLists();
-    activeNav().selected = std::min(ringPos(), settingsCount);
+    activeNav().selected = std::min(activeNav().selected.load(), std::max(0, listCount() - (usesAccordion() ? 1 : 0)));
+    activeNav().follow(listCount());
   }
+  requestUpdate();
 }
 
 void SettingsActivity::confirmRestoreSystemSettings() {
@@ -981,6 +993,7 @@ void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChan
 }
 
 void SettingsActivity::releaseListsForMemoryHungryChild() {
+  resourcesDirty = true;
   RenderLock lock(*this);
   closeRouting();
   // clear() keeps vector capacity; swap it out so a stacked Settings activity
@@ -1069,17 +1082,6 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
     return SETTINGS.readingBackgroundEnabled ? tr(STR_CUSTOM_IMAGE) : tr(STR_STATE_OFF);
   }
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
-  if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-    // Guard like the valueGetter branch below: a corrupt/migrated settings
-    // byte must not index past the enum table.
-    const uint8_t value = setting.valuePtr == &CrossPointSettings::uiTheme &&
-                                  SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && !UITheme::supportsCoverGrid()
-                              ? CrossPointSettings::LYRA
-                              : SETTINGS.*(setting.valuePtr);
-    const auto enumLabels = setting.enumLabels();
-    if (value >= enumLabels.size()) return "";
-    return I18N.get(enumLabels[value]);
-  }
   if (setting.type == SettingType::ENUM && setting.valueGetter) {
     const uint8_t value = setting.valueGetter();
     if (!setting.enumStringValues.empty() && value < setting.enumStringValues.size()) {
@@ -1090,6 +1092,17 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
       return I18N.get(enumLabels[value]);
     }
     return "";
+  }
+  if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
+    // Guard like the valueGetter branch above: a corrupt/migrated settings
+    // byte must not index past the enum table.
+    const uint8_t value = setting.valuePtr == &CrossPointSettings::uiTheme &&
+                                  SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && !UITheme::supportsCoverGrid()
+                              ? CrossPointSettings::LYRA
+                              : SETTINGS.*(setting.valuePtr);
+    const auto enumLabels = setting.enumLabels();
+    if (value >= enumLabels.size()) return "";
+    return I18N.get(enumLabels[value]);
   }
   if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
@@ -1222,5 +1235,13 @@ void SettingsActivity::drawFooter() {
 
 void SettingsActivity::render(RenderLock&& lock) {
   if (optionPopup.processRender(renderer, mappedInput)) return;
+#if LOG_LEVEL >= 2
+  const auto started = millis();
+  if (auto* fonts = renderer.getFontCacheManager()) fonts->resetStats();
+#endif
   UiListActivity::render(std::move(lock));
+#if LOG_LEVEL >= 2
+  LOG_DBG("SET", "Settings render including display: %lu ms", millis() - started);
+  if (auto* fonts = renderer.getFontCacheManager()) fonts->logStats("settings");
+#endif
 }

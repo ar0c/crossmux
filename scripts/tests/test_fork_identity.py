@@ -37,11 +37,29 @@ class ForkIdentityTest(unittest.TestCase):
             def AddPostAction(self, target, action):
                 self.action = action
 
+            def AddBuildMiddleware(self, callback):
+                self.middleware = callback
+
+            def Clone(self):
+                return Env(self)
+
+            def Object(self, node):
+                return self, node
+
         env = Env(PIOENV='waveshare_epaper_397', PROJECT_DIR=str(root))
         module['inject_version'](env)
         base_version = module['get_base_version'](str(root))
         short_sha = module['get_git_short_sha'](str(root))
-        self.assertIn(f'{base_version}-{short_sha[:7]}-ws397-dev', env['CPPDEFINES'][0][1])
+        class VersionNode:
+            def srcnode(self):
+                return self
+
+            def get_contents(self):
+                return b'CROSSPOINT_VERSION'
+
+        version_env, _ = env.middleware(env, VersionNode())
+        self.assertNotIn('CPPDEFINES', env)
+        self.assertIn(f'{base_version}-{short_sha[:7]}-ws397-dev', version_env['CPPDEFINES'][0][1])
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / 'firmware.bin'
             image.write_bytes(b'test image bytes')

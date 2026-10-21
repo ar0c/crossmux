@@ -92,9 +92,11 @@ class Operation {
 
   bool begin(Kind kind, const WeReadStore::ShelfRecord* book = nullptr, DownloadOptions options = {},
              ShelfCoverScope shelfCoverScope = ShelfCoverScope::None);
+  bool beginCover(const WeReadStore::ShelfRecord& book);
   bool beginProgressSync(const char* bookId, ProgressSyncInput input, ProgressSyncMode mode);
   bool beginBrowseCache(const WeReadStore::BookRecord& book);
-  Event step(WeReadStore::WorkCallback callback = nullptr, void* callbackContext = nullptr);
+  Event step(WeReadStore::WorkCallback callback = nullptr, void* callbackContext = nullptr,
+             WeReadHttpClient::AbortCallback shouldCancel = nullptr, void* cancelContext = nullptr);
   void cancel();
   void reset();
   bool readChapter(uint32_t index, WeReadStore::TocRecord& record);
@@ -113,6 +115,7 @@ class Operation {
   const char* finalPath() const { return outputPath_.c_str(); }
   const ProgressSyncResult& progressSyncResult() const { return progressSyncResult_; }
   bool active() const;
+  bool authenticating() const;
   bool needsCoverConversionScratch() const { return coverConversionNeedsScratch(phase_, progressStage_); }
 
  private:
@@ -160,6 +163,7 @@ class Operation {
     OrganizeShelf,
     ShelfCovers,
     Renew,
+    PrepareCover,
     PrepareDetail,
     FetchDetail,
     PrepareBrowseCache,
@@ -357,10 +361,11 @@ class Operation {
   void startDownloadMetrics();
   void logDownloadMetrics(const char* result) const;
   Event inspectPrimary();
-  Event decodeChapter(bool plainText);
+  Event decodeChapter(bool plainText, WeReadStore::WorkCallback callback, void* callbackContext);
   Event finishWholeBook(const std::string& source);
   bool persistCoverOverride();
   Event cancelNow();
+  static bool checkCancellation(void* context);
   Error prepareImageWork(WeReadStore::WorkCallback callback, void* callbackContext);
   Event downloadNextImage();
   Error requestImage(WeReadStore::ImageRecord& image, WeReadStore::ImageWorkState& state, uint8_t& attempts,
@@ -408,6 +413,8 @@ class Operation {
   uint8_t coverRedirects_ = 0;
   WeReadStore::ImageWorkState coverState_ = WeReadStore::ImageWorkState::Pending;
   bool cancelRequested_ = false;
+  WeReadHttpClient::AbortCallback shouldCancel_ = nullptr;
+  void* cancelContext_ = nullptr;
   bool renewalAttempted_ = false;
   bool loginRecoveryAttempted_ = false;
   bool loginConfirmed_ = false;

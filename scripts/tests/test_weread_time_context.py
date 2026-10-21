@@ -82,9 +82,12 @@ struct ResponseSink {
 bool noOpFinish(void*) { return true; }
 std::vector<std::string> requests;
 bool networkFails = false;
+bool acceptAuthenticatedStatus(int status) { return status != 401 && status != 403; }
 Error requestOnce(const char* method, const char* path, const uint8_t* body, size_t length,
                   WeReadStore::Session*, const char* referer, ResponseSink& sink, int& status,
-                  char*, size_t, char*, size_t, uint8_t*, size_t, void*, bool) {
+                  char*, size_t, char*, size_t, uint8_t*, size_t, void*,
+                  bool (*abort)(void*), void* abortContext, bool (*acceptStatus)(int), bool verified) {
+  assert(!abort && !abortContext && verified && acceptStatus && !acceptStatus(401) && acceptStatus(200));
   assert(std::string(method) == "POST" && std::string(path) == "/web/book/read");
   assert(std::string(referer) == "https://weread.qq.com/web/reader/fixture");
   requests.emplace_back(reinterpret_cast<const char*>(body), length);

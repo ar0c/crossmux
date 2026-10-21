@@ -7,7 +7,7 @@ that matches your task — don't load everything at once.
 
 | Doc | Read this when… |
 |---|---|
-| [hardware-constraints.md](hardware-constraints.md) | Touching RAM/flash budgets, allocations, `std::vector`/string usage, SPIFFS writes, or detecting the host platform. The Resource Protocol (9 rules) lives here. |
+| [hardware-constraints.md](hardware-constraints.md) | Touching RAM/flash budgets, allocations, `std::vector`/string usage, SD persistence, or detecting the host platform. The Resource Protocol (9 rules) lives here. |
 | [memory-and-allocation.md](memory-and-allocation.md) | Allocating heap memory, using `new`/`malloc`/`makeUniqueNoThrow`, smart pointers, or RAII cleanup. |
 | [esp32-pitfalls.md](esp32-pitfalls.md) | Writing ISRs, `string_view` at C boundaries, raw buffer casts (RISC-V alignment), templates/`std::function`, or parsing network JSON (ArduinoJson v7). |
 | [build-system.md](build-system.md) | Working with PlatformIO, build environments, the critical build flags (DESTRUCTOR_CLOSES_FILE / SINGLE_BUFFER_MODE), or `platformio.local.ini`. |

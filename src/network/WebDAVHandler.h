@@ -19,7 +19,7 @@ class WebDAVHandler : public RequestHandler {
   bool _putExisted = false;
 
   // WebDAV method handlers
-  void handleOptions(WebServer& s);
+  static void handleOptions(WebServer& s);
   void handlePropfind(WebServer& s);
   void handleGet(WebServer& s);
   void handleHead(WebServer& s);
@@ -29,7 +29,7 @@ class WebDAVHandler : public RequestHandler {
   void handleMove(WebServer& s);
   void handleCopy(WebServer& s);
   void handleLock(WebServer& s);
-  void handleUnlock(WebServer& s);
+  static void handleUnlock(WebServer& s);
 
   // Utilities
   String getRequestPath(WebServer& s) const;

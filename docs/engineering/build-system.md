@@ -174,7 +174,6 @@ These flags in `platformio.ini` fundamentally affect firmware behavior:
 -DARDUINO_USB_CDC_ON_BOOT=1          // Serial available immediately at boot
 -DXML_CONTEXT_BYTES=1024             // XML parser memory limit (EPUB parsing)
 -DUSE_UTF8_LONG_NAMES=1              // SD card long filename support
--DMINIZ_NO_ZLIB_COMPATIBLE_NAMES=1   // Avoid zlib name conflicts
 -DXML_GE=0                           // Disable XML general entities (security)
 -DDESTRUCTOR_CLOSES_FILE=1           // FsFile destructor auto-closes (SdFat)
 ```
@@ -239,7 +238,7 @@ build_flags =
 
 See also: [getting-started](../contributing/getting-started.md) for first-time toolchain setup, [testing-and-debugging.md](testing-and-debugging.md) for build/monitor commands.
 
-### Fixed local integration builds (2026-10-02)
+### Historical local integration builds (2026-10-02)
 
 The SDK/Simulator/Reader pins are `98b4e427`, `20e73803`, and `38280863`.
 Use the real source exports recorded by `sync-upstream start --local-rehearsal`;
@@ -263,3 +262,46 @@ responses remain on SD (up to 1MiB), while API responses retain the upstream
 48KiB cap and fallible Arduino String reserve. TLS is released before downloads
 and on exit. These limits protect C3 shared code; simulator heap numbers are
 synthetic and do not verify hardware runtime headroom.
+
+## Existing environments and build graph contracts
+
+Routine builds reuse installed tools, packages, local overrides and caches.
+Install/upgrade/re-download only for requested setup or an identified missing or
+incompatible dependency, repairing the affected component after diagnosis.
+`platformio.local.ini` is ignored. A local `build_flags` value replaces the
+selected environment's list; preserve `${base.build_flags}` plus its device,
+capability, logging and version flags. A branch/SHA change alone is not a reason
+to clean unrelated objects. After an interrupted custom-core rebuild, diagnose
+duplicate `app_main` and remove only generated core scaffolding; do not use
+`git clean -fdX`, which also deletes personal overrides and unrelated work.
+
+Preserve the pinned platform/dependencies and selected core graph. USB-MSC
+profiles use the prebuilt Arduino/TinyUSB graph; custom-sdk profiles rebuild a
+core. SdFat `USE_SPI_ARRAY_TRANSFER` / `USE_SEPARATE_FAT_CACHE` depend on
+`scripts/patch_sdfat.py` and its pin; SPI array send adds stack use while SDMMC
+uses the block-device interface. Miniz defines belong in
+`lib/miniz/src/MinizConfig.h`, not obsolete global flags. `XML_GE=0` remains the
+XML general-entity security boundary.
+
+## Fixed local integration snapshot (2026-10-13)
+
+Reader `ba39565ce7b3a8aab14ca86da4fa4c3ca140f007`, SDK
+`7fcd3b34c108f28c086ade3b433924022dbc0998` and Simulator
+`1915ee0a15564c3f49d74fa2334f773f282c5364` are the upstream inputs against
+CrossMux base `83b0f810c8628701456e028c2d8566a9be149755`. Validation uses
+reviewed source exports and their recorded Git tree fingerprints. This local
+rehearsal does not commit, publish, flash, or change the Nightly/OTA registry.
+Formal publication needs real dependency commits and renewed validation.
+
+Keep the pioarduino 6.2.0 setup/preparation, CJK embedded fonts and the existing
+Waveshare-only reader build/release matrix. Incoming SDK board adapters do not
+add maintained reader targets to this fork. Preserve the selected profile's
+effective loop-stack configuration when integrating reader or SDK changes.
+Verify WeRead and other deep loop call chains with stack high-water logs; a
+successful build does not establish that stack budget on hardware.
+
+The documented `python scripts/patch_pioarduino_cache.py --prepare-platform`
+step also repairs the pinned factory-image action. It invokes esptool through
+the platform-managed Python interpreter (`-m esptool`) and propagates tool
+failures and process-start exceptions to SCons. Check the actual image files
+and packaging checksums; a printed success banner alone is insufficient.

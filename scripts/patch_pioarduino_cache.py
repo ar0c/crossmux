@@ -8,6 +8,26 @@ def cache_matches(requested, cached_request):
     return bool(requested.strip()) and requested.strip() == cached_request.strip()
 
 
+def patch_factory_source(source):
+    start = source.find("def esp32_create_combined_bin(")
+    end = source.find("\n#\n# Target:", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Unsupported pioarduino factory-image action")
+    action = source[start:end]
+    marker = '[PYTHON_EXE, "-m", "esptool", *cmd]'
+    if marker in action and "return result.returncode" in action and "return 1" in action:
+        return source
+    expected = "[esptool, *cmd], check=False, capture_output=True, text=True"
+    failure = '            if result.stderr:\n                print(result.stderr)'
+    exception = '        print(f"Error creating factory binary: {e}")'
+    if expected not in action or failure not in action or exception not in action:
+        raise RuntimeError("Unsupported pioarduino factory-image subprocess; review the pinned platform")
+    action = action.replace(expected, marker + ", check=False, capture_output=True, text=True", 1)
+    action = action.replace(failure, failure + "\n            return result.returncode", 1)
+    action = action.replace(exception, exception + "\n        return 1\n    return 0", 1)
+    return source[:start] + action + source[end:]
+
+
 if "--prepare-platform" in sys.argv:
     from platformio.package.manager.platform import PlatformPackageManager
     from platformio.project.config import ProjectConfig
@@ -23,6 +43,11 @@ if "--prepare-platform" in sys.argv:
         platform_file.write_text(source.replace(old_tools, new_tools, 1), encoding="utf-8")
     elif new_tools not in source:
         raise RuntimeError("Unsupported pioarduino IDF tool list")
+    main_builder = Path(package.path) / "builder" / "main.py"
+    original = main_builder.read_text(encoding="utf-8")
+    patched = patch_factory_source(original)
+    if patched != original:
+        main_builder.write_text(patched, encoding="utf-8", newline="\n")
     raise SystemExit(0)
 
 
