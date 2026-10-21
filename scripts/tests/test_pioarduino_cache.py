@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from test_factory_image_action import SOURCE as FACTORY_SOURCE
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "patch_pioarduino_cache.py"
 ORIGINAL_CHECK = (
@@ -22,6 +24,7 @@ class PioarduinoCacheTest(unittest.TestCase):
         self.builder = self.root / "builder/frameworks/arduino.py"
         self.builder.parent.mkdir(parents=True)
         self.builder.write_text(ORIGINAL_CHECK)
+        (self.root / "builder/main.py").write_text(FACTORY_SOURCE)
         self.builder.with_name("component_manager.py").write_text("# Legacy platform without memory fingerprint\n")
         self.chip = self.root / "esp32s3"
         self.chip.mkdir()

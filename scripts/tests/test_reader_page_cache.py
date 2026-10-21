@@ -210,6 +210,7 @@ struct EpubReaderActivity {
   ReaderPageCacheKey renderedPageKey_;
   uint32_t sectionGeneration_=1,renderEpoch_=1,pageCacheMissingCodepoint_[kPageCacheSlots]={};
   int currentSpineIndex=2;
+  uint8_t appliedOrientation=SETTINGS.orientation;
   bool pageCacheFailed_=false;
   enum class Overlay {None,Menu}; Overlay overlay=Overlay::None;
   enum class FontPromptState {Idle,Asking}; FontPromptState fontPromptState=FontPromptState::Idle;

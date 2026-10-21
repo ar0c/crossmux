@@ -19,9 +19,9 @@ try {
   foreach ($module in $modules) {
     $argsList=@('-std=c++17','-UNDEBUG','-Wall','-Wextra','-Werror',
       '-Itest/weread_webapi/time_cloud_stubs','-Itest/weread_webapi/time_storage_stubs',
-      '-Ilib/WeReadWebApi/src','-Ilib/JsonParser','-Iscripts/diagnostics',"test/weread_webapi/WeRead${module}StandaloneTest.cpp")
+      '-Ilib/WeReadWebApi/src','-Ilib/JsonParser','-Ifreeink-sdk/libs/network/JsonSax/include','-Iscripts/diagnostics',"test/weread_webapi/WeRead${module}StandaloneTest.cpp")
     if ($module -in @('TimeCloud','TimeQuery','TimeReplay')) {
-      $argsList+=@('lib/WeReadWebApi/src/WeReadTimeResponse.cpp','lib/JsonParser/StreamingJsonParser.cpp')
+      $argsList+=@('lib/WeReadWebApi/src/WeReadTimeResponse.cpp','freeink-sdk/libs/network/JsonSax/src/StreamingJsonParser.cpp')
     }
     if ($module -in @('TimeQuery','TimeReplay')) { $argsList+='lib/WeReadWebApi/src/WeReadTimeCloud.cpp' }
     $exe=Join-Path $out "$module.exe"
