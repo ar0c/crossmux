@@ -11,3 +11,7 @@ endif()
 add_test(NAME PersistableStoreWrite
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check_write.py
     ${CMAKE_CXX_COMPILER} ${arduinojson_SOURCE_DIR}/src ${crosspoint_simulator_SOURCE_DIR}/src)
+
+add_test(NAME RecentBooksPersistence
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check_recent_books.py
+    ${CMAKE_CXX_COMPILER} ${arduinojson_SOURCE_DIR}/src)

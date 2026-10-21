@@ -2,6 +2,8 @@
 #include <ArduinoJson.h>
 #include <PersistableStore.h>
 
+#include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,9 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
  public:
  private:
   std::vector<RecentBook> recentBooks;
+  // Singleton-owned retry state outlives readers; no additional task or heap allocation.
+  mutable std::atomic<bool> savePending{false};
+  mutable std::atomic<uint32_t> lastSaveAttemptMs{0};
 
   RecentBooksStore() = default;
   ~RecentBooksStore() = default;
@@ -30,6 +35,10 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   static const char* getFilePath() { return "/.crosspoint/recent.json"; }
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
+  bool saveToFile() const;
+  // Retry the current snapshot, never re-add an entry that was subsequently removed.
+  // force is reserved for exit/sleep checkpoints. Ordinary retries are throttled.
+  bool retryPendingSave(bool force = false) const;
 
   // Add a book to the recent list (moves to front if already exists)
   // Returns whether the updated list was persisted; the in-memory list is updated even on failure.

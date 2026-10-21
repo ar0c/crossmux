@@ -8,6 +8,26 @@
 
 #include "util/BookCacheUtils.h"
 
+bool RecentBooksStore::saveToFile() const {
+  // Update the dirty flag under the snapshot/write lock so an older successful
+  // save cannot clear a newer failure from another task.
+  std::lock_guard<std::mutex> lock(storeMutex);
+  JsonDocument doc;
+  toJson(doc);
+  const bool saved = writeDocToFile(getFilePath(), doc);
+  lastSaveAttemptMs.store(static_cast<uint32_t>(millis()));
+  savePending.store(!saved);
+  return saved;
+}
+
+bool RecentBooksStore::retryPendingSave(const bool force) const {
+  if (!savePending.load()) return true;
+  constexpr uint32_t retryIntervalMs = 5000;
+  const uint32_t elapsed = static_cast<uint32_t>(millis()) - lastSaveAttemptMs.load();
+  if (!force && elapsed < retryIntervalMs) return false;
+  return saveToFile();
+}
+
 void RecentBooksStore::toJson(JsonDocument& doc) const {
   JsonArray arr = doc["books"].to<JsonArray>();
   for (const auto& book : recentBooks) {

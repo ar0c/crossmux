@@ -19,7 +19,7 @@ class ReaderActivity : public Activity {
   std::atomic<bool> endOfBookOptionsReady{false};
   ReaderSession readerSession;
   std::atomic<bool> pageRendered{false};
-  bool bookRemembered = false;
+  bool bookRegistered = false;
   bool renderCommitted = false;
   void markPageRendered() {
     renderCommitted = true;

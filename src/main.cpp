@@ -475,6 +475,8 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   deliverSleepPluginEvents();
 
+  RECENT_BOOKS.retryPendingSave(true);
+
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&

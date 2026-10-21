@@ -14,6 +14,7 @@
 #include "CrossPointSettings.h"
 #include "HapticFeedback.h"
 #include "OpdsServerStore.h"
+#include "RecentBooksStore.h"
 #include "apps/2048/Game2048Activity.h"
 #include "apps/AppsMenuActivity.h"
 #include "apps/airpage/AirPageActivity.h"
@@ -167,6 +168,9 @@ void ActivityManager::loop() {
     }
     return;
   }
+
+  // USB Drive owns the raw SD above: never retry a filesystem write there.
+  RECENT_BOOKS.retryPendingSave();
 
   if (currentActivity && pendingAction.load() == PendingAction::None) {
     if (handleMainTabInput()) {

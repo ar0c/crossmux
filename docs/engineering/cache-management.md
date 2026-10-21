@@ -20,6 +20,13 @@ thumbnail height. Lyra Carousel redirects only its in-memory `RecentBook` copy
 to `cover.bmp`, generating that full cover when missing; switching themes must
 not replace the persisted template.
 
+Failed recent-list saves remain pending in the singleton, including after a
+reader exits. The ordinary activity loop retries the latest list at most once
+every five seconds; it never re-registers a removed book or repeats reader-open
+events. Reader exit and deep-sleep preparation attempt a final flush. Retries
+are skipped while USB Drive owns the raw SD card. Pending state is RAM-only:
+loss of power before a successful save can still lose an uncommitted update.
+
 When an EPUB has no `book.bin`, thumbnail generation first builds metadata but
 continues to skip CSS. Inx resolves each target and compatibility thumbnail at
 most once per Activity, displays the existing localized loading popup while it

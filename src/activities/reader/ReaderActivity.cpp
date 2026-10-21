@@ -86,11 +86,15 @@ void ReaderActivity::onEnter() {
 }
 
 void ReaderActivity::rememberBookOnceRendered() {
-  if (bookRemembered || !pageRendered.load(std::memory_order_acquire)) return;
-  bookRemembered = true;
+  if (bookRegistered || !pageRendered.load(std::memory_order_acquire)) return;
+  // Registration/events happen once; the singleton retains failed persistence
+  // across reader destruction and retries it from the ordinary activity loop.
+  bookRegistered = true;
   APP_STATE.openEpubPath = bookPath;
   APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
+  if (!RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath())) {
+    LOG_ERR("READER", "Recent book save deferred; will retry");
+  }
   const pluginevents::Var openVars[] = {{"book", bookPath.c_str()}};
   pluginevents::emit(pluginevents::Event::ReaderOpen, openVars, 1);
 }
@@ -102,6 +106,8 @@ void ReaderActivity::onExit() {
   if (auto* fontCache = renderer.getFontCacheManager()) {
     fontCache->releaseSdFontCaches();
   }
+
+  RECENT_BOOKS.retryPendingSave(true);
 
   LOG_INF("MEM", "reader exit: free=%u max_block=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
