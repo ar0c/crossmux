@@ -11,6 +11,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 
 import manual_nightly_release as manual
+from verify_nightly_release import validate_url
 
 
 class ManualNightlyReleaseTest(unittest.TestCase):
@@ -25,7 +26,7 @@ class ManualNightlyReleaseTest(unittest.TestCase):
         old = {"schemaVersion": 1, "channel": "nightly", "targets": {
             "xteink_x4_pro": {"historical": True}, manual.TARGET: {"targetId": manual.TARGET}}}
         previous = manual.canonical_json(old)
-        index_url = manual.PUBLIC_INDEX + "?local=1"
+        index_url = manual.PUBLIC_INDEX
         def verify(url, sha, channel, *, fetch, only_target):
             self.assertEqual(url, index_url)
             self.assertEqual(only_target, manual.TARGET)
@@ -50,7 +51,7 @@ class ManualNightlyReleaseTest(unittest.TestCase):
 
     def test_public_readback_requires_both_targets_and_rewritten_urls(self):
         github = "https://github.com/ar0c/crossmux/releases/download/"
-        public = "https://ooo.ar0c.com/releases/download/"
+        public = "https://release.ar0c.com/releases/download/"
         targets = {
             name: {"variants": {
                 "global": {"manifestUrl": github + tag + "/global-manifest.json"},
@@ -79,6 +80,21 @@ class ManualNightlyReleaseTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no longer this prepared release"):
                 manual.rollback(SimpleNamespace(prepared=Path("."), wait_seconds=0))
             command.assert_not_called()
+
+    def test_rollback_keeps_the_public_index_url_valid_for_asset_checks(self):
+        tag = "nightly-build-" + "a" * 40 + "-1-1"
+        previous = manual.canonical_json({"targets": {manual.TARGET: {"variants": {
+            "global": {"crossmuxSha": "a" * 40}}}}})
+        def verify(url, saved, sha):
+            self.assertEqual(saved, previous)
+            self.assertEqual(sha, "a" * 40)
+            manifest = "https://release.ar0c.com/releases/download/" + tag + "/global-manifest.json"
+            validate_url(manifest, url, "nightly")
+        with (mock.patch.object(manual, "load_prepared", return_value=({"buildTag": tag}, previous, b"new")),
+              mock.patch.object(manual, "current_index", side_effect=[b"new", previous]),
+              mock.patch.object(manual, "run"), mock.patch.object(manual, "wait_public_index"),
+              mock.patch.object(manual, "verify_restored_waveshare", side_effect=verify)):
+            manual.rollback(SimpleNamespace(prepared=Path("."), wait_seconds=0))
 
     def test_prepared_checksum_filename_is_accepted_and_tampering_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -291,7 +291,7 @@ def publish(args: argparse.Namespace) -> None:
     if current_index() != candidate:
         raise RuntimeError("GitHub rolling index readback differs from the candidate")
     wait_public_index(candidate, args.wait_seconds)
-    verify_release(f"{PUBLIC_INDEX}?local={int(time.time())}", state["sourceTree"], CHANNEL, only_target=TARGET)
+    verify_release(PUBLIC_INDEX, state["sourceTree"], CHANNEL, only_target=TARGET)
     print(f"Published and verified {tag} on GitHub and the public K3s mirror")
 
 
@@ -306,7 +306,7 @@ def rollback(args: argparse.Namespace) -> None:
         raise RuntimeError("GitHub rollback index readback differs from the backup")
     wait_public_index(previous, args.wait_seconds)
     old_sha = json.loads(previous)["targets"][TARGET]["variants"]["global"]["crossmuxSha"]
-    verify_restored_waveshare(f"{PUBLIC_INDEX}?local={int(time.time())}", previous, old_sha)
+    verify_restored_waveshare(PUBLIC_INDEX, previous, old_sha)
     print(f"Restored the previous Nightly index from before {state['buildTag']}")
 
 

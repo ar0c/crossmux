@@ -52,6 +52,7 @@ python3 -m unittest discover -v -s scripts/tests
 
 echo "Building Waveshare 3.97 Nightly firmware and simulator..."
 export CROSSPOINT_RC_HASH="$(git rev-parse --short=7 HEAD)"
+export CROSSPOINT_BUILD_KIND=rc
 pio run -e waveshare_epaper_397_nightly -e simulator
 python3 scripts/package_nightly_target.py waveshare_epaper_397 --channel nightly
 (cd dist/nightly/waveshare_epaper_397 && sha256sum --check *-SHA256SUMS)

@@ -9,7 +9,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = textwrap.dedent((ROOT / '.github/workflows/pr-firmware-links.yml').read_text().split('script: |\n', 1)[1])
-NAMES = ['firmware.bin', 'firmware-sticky.bin', 'firmware-x4pro.bin', 'firmware-x4c.bin', 'firmware-papermono.bin']
+FIRMWARE = 'crossmux-ar0c-waveshare-epaper-397-firmware.bin'
+RETIRED = ['firmware.bin', 'firmware-sticky.bin', 'firmware-x4pro.bin', 'firmware-x4c.bin', 'firmware-papermono.bin']
 RUNNER = r'''
 const fixture = JSON.parse(require('fs').readFileSync(0, 'utf8'));
 const writes = [], notices = [];
@@ -43,32 +44,35 @@ class PrFirmwareLinksTest(unittest.TestCase):
         return json.loads(result.stdout)['writes']
 
     def test_partial_build_keeps_the_available_link(self):
-        writes = self.run_workflow(artifacts=[{'id': 1, 'name': NAMES[0], 'expired': False},
-                                             {'id': 2, 'name': NAMES[2], 'expired': True},
+        writes = self.run_workflow(artifacts=[{'id': 1, 'name': FIRMWARE, 'expired': False},
+                                             {'id': 2, 'name': RETIRED[2], 'expired': True},
                                              {'id': 3, 'name': 'unrelated', 'expired': False}])
         body = writes[0]['body']
-        self.assertIn('[X3 / X4 (`firmware.bin`)]', body)
+        self.assertIn(f'[Waveshare 3.97 (`{FIRMWARE}`)]', body)
         self.assertIn('/actions/runs/123/artifacts/1', body)
         self.assertNotIn('/artifacts/2', body)
         self.assertNotIn('/artifacts/3', body)
         self.assertNotIn('Firmware is not available', body)
         self.assertNotIn('X4 Pro', body)
 
-    def test_all_supported_builds_remain_linked(self):
-        artifacts = [{'id': i + 1, 'name': name, 'expired': False} for i, name in enumerate(NAMES)]
+    def test_only_maintained_builds_remain_linked(self):
+        artifacts = [{'id': i + 1, 'name': name, 'expired': False}
+                     for i, name in enumerate([FIRMWARE, *RETIRED])]
         body = self.run_workflow(artifacts=artifacts)[0]['body']
-        for artifact in artifacts:
-            self.assertIn(f"/artifacts/{artifact['id']}", body)
+        self.assertIn('/artifacts/1', body)
+        for artifact in artifacts[1:]:
+            self.assertNotIn(f"/artifacts/{artifact['id']}", body)
 
     def test_missing_or_expired_artifacts_show_no_download(self):
-        for artifacts in ([], [{'id': 1, 'name': NAMES[0], 'expired': True}]):
+        for artifacts in ([], [{'id': 1, 'name': FIRMWARE, 'expired': True}],
+                          [{'id': 1, 'name': name, 'expired': False} for name in RETIRED]):
             with self.subTest(artifacts=artifacts):
                 body = self.run_workflow(artifacts=artifacts)[0]['body']
                 self.assertIn('Firmware is not available', body)
                 self.assertNotIn('/artifacts/', body)
 
     def test_other_ci_failures_do_not_hide_a_successful_build(self):
-        body = self.run_workflow(conclusion='failure', artifacts=[{'id': 1, 'name': NAMES[0]}])[0]['body']
+        body = self.run_workflow(conclusion='failure', artifacts=[{'id': 1, 'name': FIRMWARE}])[0]['body']
         self.assertIn('/artifacts/1', body)
         self.assertIn('another CI check finished with failure', body)
 
