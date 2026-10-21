@@ -60,14 +60,21 @@ def main():
         custom = sleep[sleep.index('void SleepActivity::renderCustomSleepScreen()'):sleep.index('// Sleep screens paint')]
         bitmap_sleep = sleep[sleep.index('void SleepActivity::renderBitmapSleepScreen('):sleep.index('bool SleepActivity::renderSleepOverlayFile(')]
         probe = """#include "util/SleepCover.h"
+    #include "components/EnvironmentOverlay.h"
     #include <cmath>
     #include <Logging.h>
+    // This native EPDIY fixture has no SHTC3; preserve its no-overlay behavior.
+    // The Waveshare sensor and real overlay are exercised by EnvironmentStandby.
+    namespace EnvironmentOverlay {
+    inline void draw(const GfxRenderer&, const HalEnvironmentSensor::Reading&, bool, int) {}
+    }
     enum class SleepRecentKind { Standard };
     inline bool selectRandomSleepFile(const char*, SleepRecentKind, std::string&) { return false; }
     class SleepProbe {
      public:
       explicit SleepProbe(GfxRenderer& value) : renderer(value) {}
       GfxRenderer& renderer;
+      HalEnvironmentSensor::Reading environment_;
       mutable int defaults = 0;
       void renderDefaultSleepScreen() const { ++defaults; }
       void renderCustomSleepScreen() const;
