@@ -18,6 +18,7 @@
 
 namespace {
 constexpr char READING_STATS_FILE_JSON[] = "/.crosspoint/reading_stats.json";
+constexpr char READING_STATS_FILE_TEMP[] = "/.crosspoint/reading_stats.json.tmp";
 constexpr unsigned long MAX_READING_GAP_MS = 30UL * 60UL * 1000UL;
 constexpr unsigned long SESSION_HEARTBEAT_MS = 60UL * 1000UL;
 constexpr unsigned long CHECKPOINT_INTERVAL_MS = 10UL * 60UL * 1000UL;
@@ -1136,7 +1137,7 @@ bool ReadingStatsStore::exportToFile(const std::string& path) const {
 }
 
 bool ReadingStatsStore::importFromFile(const std::string& path) {
-  if (path.empty() || !Storage.exists(path.c_str())) {
+  if (path.empty()) {
     return false;
   }
 
@@ -1173,17 +1174,6 @@ bool ReadingStatsStore::saveToFile() const {
 }
 
 bool ReadingStatsStore::loadFromFile() {
-  const std::string tempPath = std::string(READING_STATS_FILE_JSON) + ".tmp";
-  if (!Storage.exists(READING_STATS_FILE_JSON) && Storage.exists(tempPath.c_str())) {
-    if (Storage.rename(tempPath.c_str(), READING_STATS_FILE_JSON)) {
-      LOG_DBG("RST", "Recovered reading_stats.json from interrupted temp file");
-    }
-  }
-
-  if (!Storage.exists(READING_STATS_FILE_JSON)) {
-    return false;
-  }
-
   const bool loaded = JsonSettingsIO::loadReadingStatsFromFile(*this, READING_STATS_FILE_JSON);
   if (loaded) {
     const bool needsSave = dirty;
@@ -1251,7 +1241,7 @@ bool ReadingStatsStore::releaseMemoryForNetwork() {
 }
 
 bool ReadingStatsStore::reloadAfterNetwork() {
-  if (!Storage.exists(READING_STATS_FILE_JSON)) {
+  if (!Storage.exists(READING_STATS_FILE_JSON) && !Storage.exists(READING_STATS_FILE_TEMP)) {
     return true;
   }
 
