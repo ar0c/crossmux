@@ -13,7 +13,9 @@ namespace {
 constexpr size_t kSectors = 1024;
 std::array<uint8_t, kSectors * 512> media;
 struct sdmmc_card_t {
-  struct { size_t capacity; } csd;
+  struct {
+    size_t capacity;
+  } csd;
 };
 constexpr int ESP_OK = 0;
 size_t reads = 0;
