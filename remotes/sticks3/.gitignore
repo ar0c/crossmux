@@ -1,0 +1,5 @@
+.pio/
+.platformio/
+artifacts/
+firmware/
+__pycache__/

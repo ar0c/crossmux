@@ -1,0 +1,59 @@
+name: StickS3 remote
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'remotes/sticks3/**'
+      - '.github/workflows/sticks3-remote.yml'
+  pull_request:
+    paths:
+      - 'remotes/sticks3/**'
+      - '.github/workflows/sticks3-remote.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sticks3-remote-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: remotes/sticks3
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned tools
+        run: python -m pip install -r requirements.txt clang-format==21.1.8
+      - name: Check C++ formatting
+        run: clang-format --dry-run --Werror src/*.cpp include/*.h tests/*.cpp
+      - name: Test transport and gestures
+        run: |
+          python -m unittest discover -s tests -v
+          mkdir -p artifacts
+          g++ -std=c++17 -Wall -Wextra -Werror -I include tests/gesture_test.cpp -o artifacts/gesture_test
+          g++ -std=c++17 -Wall -Wextra -Werror -I include tests/joystick_test.cpp -o artifacts/joystick_test
+          ./artifacts/gesture_test
+          ./artifacts/joystick_test
+      - name: Build remote application
+        run: pio run -e sticks3_remote -j 4
+      - name: Export application
+        run: |
+          cp .pio/build/sticks3_remote/firmware.bin artifacts/StickS3-CrossMux-Remote-app.bin
+          cd artifacts
+          sha256sum StickS3-CrossMux-Remote-app.bin > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sticks3-remote-app
+          path: |
+            remotes/sticks3/artifacts/StickS3-CrossMux-Remote-app.bin
+            remotes/sticks3/artifacts/SHA256SUMS
+          if-no-files-found: error

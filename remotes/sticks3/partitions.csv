@@ -1,0 +1,7 @@
+# Matches this StickS3's verified table. Preserve rescue, NVS, OTA and SPIFFS.
+nvs,data,nvs,0x9000,0x5000,
+otadata,data,ota,0xe000,0x2000,
+rescue,app,factory,0x10000,0xc0000,
+reader,app,ota_0,0xd0000,0x3a0000,
+spiffs,data,spiffs,0x470000,0x380000,
+coredump,data,coredump,0x7f0000,0x10000,
