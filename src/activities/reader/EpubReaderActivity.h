@@ -18,6 +18,7 @@
 #include "ReaderActivity.h"
 #include "ReaderFontPreview.h"
 #include "ReaderPageCache.h"
+#include "ReaderRotationAnchor.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
 
@@ -31,6 +32,7 @@ class EpubReaderActivity final : public ReaderActivity {
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
   std::optional<uint32_t> cachedVisibleTextOffset;
+  ReaderRotationAnchor rotationAnchor;
   std::optional<uint32_t> currentPageVisibleOffset;
   std::optional<uint32_t> pendingOffsetJump;
   unsigned long lastPageTurnTime = 0UL;
@@ -216,8 +218,8 @@ class EpubReaderActivity final : public ReaderActivity {
   bool buildPopupPending = false;
   void showBuildPopup(GfxRenderer& renderer, int& pagesUntilFullRefresh);
   bool applyDeferredReposition();
-  void clearDeferredReposition();
-  void rememberCurrentContentOffset();
+  void clearDeferredReposition(bool preserveRotationAnchor = false);
+  void rememberCurrentContentOffset(bool preserveRotationAnchor = false);
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   bool jumpToFraction(float fraction);
   void jumpToPercent(int percent);
@@ -322,12 +324,14 @@ class EpubReaderActivity final : public ReaderActivity {
                               int pageNumber = -1) const;
   void renderStatusBar() const;
   void applyOrientation(uint8_t orientation);
+  bool applyRuntimeOrientation(uint8_t orientation, RenderLock::Mode mode = RenderLock::Mode::Blocking);
   void applyInitialOrientation() override;
   // The orientation the current layout was built for. The control center's
   // orientation tile can move SETTINGS.orientation while this reader sits on
   // the activity stack, and Pop restores it without onEnter(), so the drift has
   // to be noticed here rather than assumed away.
   uint8_t appliedOrientation = 0;
+  uint8_t savedOrientation = 0;
 
   // Modal shown when a protected book refuses to open (loan expired /
   // date unverified); OK exits, "Sync time" (when offered) verifies the
@@ -351,6 +355,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void onEndOfBookRendered() override;
 
  public:
+  bool allowsReaderAutoRotation() const override;
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
                               bool allowFastInitialRefresh)
       : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}

@@ -3,10 +3,9 @@
 #include <Arduino.h>
 #include <Imu.h>
 
+#include "OrientationTracker.h"
+
 // TODO: Move enums into new header and share with CrossPointSettings.h
-namespace CrossPointOrientation {
-enum Value : uint8_t { PORTRAIT = 0, LANDSCAPE_CW = 1, INVERTED = 2, LANDSCAPE_CCW = 3 };
-}
 
 namespace CrossPointTiltPageTurn {
 enum Value : uint8_t { TILT_OFF = 0, TILT_NORMAL = 1, TILT_INVERTED = 2 };
@@ -16,8 +15,11 @@ class HalTiltSensor;
 extern HalTiltSensor halTiltSensor;  // Singleton
 
 class HalTiltSensor {
+  static constexpr uint8_t NO_ORIENTATION = 255;
   bool _available = false;
-  mutable Imu _sdkImu;
+  Imu _sdkImu;
+  OrientationTracker _orientationTracker;
+  uint8_t _pendingOrientation = NO_ORIENTATION;
 
   // Tilt gesture state machine
   bool _tiltForwardEvent = false;  // Consumed by wasTiltedForward()
@@ -56,9 +58,6 @@ class HalTiltSensor {
   CrossPointOrientation::Value _accelOrientation = CrossPointOrientation::PORTRAIT;
   bool _accelReading = false;
 
-  bool readGyro(float& gx, float& gy, float& gz) const;
-  bool readAccel(float& ax, float& ay, float& az) const;
-
  public:
   // Call after BoardConfig has selected the active device.
   void begin();
@@ -73,7 +72,10 @@ class HalTiltSensor {
   bool isAvailable() const { return _available; }
 
   // Poll the accelerometer and update tilt gesture state.
-  void update(const uint8_t mode, const uint8_t orientation, const bool inReader);
+  void update(uint8_t mode, uint8_t orientation, bool inReader, bool autoRotate = false);
+
+  bool supportsAutoRotation() const;
+  bool takeOrientation(uint8_t& orientation);
 
   // Returns true once per tilt-forward gesture (next page direction).
   // Consumed on read — subsequent calls return false until next gesture.

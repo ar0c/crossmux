@@ -152,9 +152,11 @@ const ThemeMetrics& UITheme::getMetrics() const {
   if (!metricsValid || showButtonHints != metricsForButtonHints) {
     adjustedMetrics = *currentMetrics;
     UiHighDpiProfile::apply(adjustedMetrics);
-    // Waveshare hints follow the wheel and BOOT/PWR edges, not the footer.
-    if (!showButtonHints || inputCapabilities::hasWheelAndBootButtons(gpio)) {
+    // Keep the content reservation identical to the shared Waveshare footer.
+    if (!showButtonHints) {
       adjustedMetrics.buttonHintsHeight = 0;
+    } else if (inputCapabilities::hasWheelAndBootButtons(gpio)) {
+      adjustedMetrics.buttonHintsHeight = BaseTheme::WHEEL_HINTS_HEIGHT;
     }
     metricsForButtonHints = showButtonHints;
     metricsValid = true;

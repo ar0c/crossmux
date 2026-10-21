@@ -339,7 +339,8 @@ class BaseTheme {
   // wrapping to two lines rather than overflowing when it's too wide to fit.
   static void drawHintLabel(const GfxRenderer& renderer, int fontId, const char* label, int x, int boxWidth, int boxTop,
                             int boxHeight);
-  // Put Waveshare wheel hints on the left and BOOT/PWR hints on the right.
+  // One compact bottom band: rocker up/press/down, PWR, BOOT.
+  static constexpr int WHEEL_HINTS_HEIGHT = 40;
   bool drawWheelAndBootButtonHints(GfxRenderer& renderer, const char* back, const char* confirm, const char* left,
                                    const char* right) const;
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;

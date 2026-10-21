@@ -1112,10 +1112,10 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
       } else if (state_ == State::TimeUploading) {
         for (int action = 0; action < 2; ++action) {
           const auto rect = timeActionRect(content, metrics.menuRowHeight, action);
-          UITheme::drawCenteredText(
-              renderer, rect, UI_10_FONT_ID, rect.y,
-              action == 0 ? tr(STR_WEREAD_TIME_BACKGROUND_READ) : tr(STR_WEREAD_TIME_BACKGROUND_PAUSE), true,
-              EpdFontFamily::BOLD);
+          UITheme::drawCenteredWrappedText(
+              renderer, rect, UI_10_FONT_ID,
+              action == 0 ? tr(STR_WEREAD_TIME_BACKGROUND_READ_HINT) : tr(STR_WEREAD_TIME_BACKGROUND_PAUSE_HINT), 2,
+              true, EpdFontFamily::BOLD);
         }
       } else if (state_ == State::TimeResult && !timeCollectionFailed_ && selectedTimeDay_) {
         UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID,
@@ -1237,8 +1237,9 @@ void WeReadProgressSyncActivity::render(RenderLock&&) {
   } else if (state_ == State::TimeUploading || state_ == State::TimeResult) {
     const bool resumable = state_ == State::TimeResult && !timeCollectionFailed_ && selectedTimeDay_;
     const auto labels =
-        mappedInput.mapLabels(tr(STR_BACK), state_ == State::TimeUploading ? tr(STR_WEREAD_TIME_BACKGROUND_PAUSE) : "",
-                              "", resumable ? tr(STR_WEREAD_TIME_RESUME) : "");
+        mappedInput.mapLabels(state_ == State::TimeUploading ? tr(STR_WEREAD_TIME_BACKGROUND_READ) : tr(STR_BACK),
+                              state_ == State::TimeUploading ? tr(STR_WEREAD_TIME_BACKGROUND_PAUSE) : "", "",
+                              resumable ? tr(STR_WEREAD_TIME_RESUME) : "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state_ == State::ChoosingDirection) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

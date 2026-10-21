@@ -18,6 +18,12 @@ namespace fui = freeink::ui;
 
 void MappedInputManager::update(const bool deferHomeButtonAction) const {
   gpio.update();
+#if CROSSMUX_USB_DEBUG
+  if (gpio.debugInputCancelledThisFrame()) {
+    suppressedReleaseButtons = 0;
+    longPressFiredButtons = 0;
+  }
+#endif
 #if FREEINK_CAP_BLE_HID_HOST
   BleHid.poll();
   pollBle();
@@ -246,7 +252,7 @@ void MappedInputManager::pollBle() const {
     }
 
     bleinput::Action action;
-    if (!bleinput::lookup(SETTINGS.bleKeyMap, kind, value, action)) continue;
+    if (!bleinput::resolveAction(SETTINGS.bleKeyMap, kind, value, action)) continue;
     const Button button = buttonForAction(action);
     const uint8_t index = static_cast<uint8_t>(button);
     if (index >= kButtonCount) continue;

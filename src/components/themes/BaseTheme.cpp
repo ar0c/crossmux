@@ -37,28 +37,6 @@
 #include "platform/InputCapabilities.h"
 #include "util/TimeUtils.h"
 
-namespace {
-// Hint orientation uses script coverage, independently of paragraph line breaking.
-constexpr bool isCjkHintCodepoint(const uint32_t cp) {
-  return (cp >= 0x1100 && cp <= 0x11FF)        // Hangul Jamo
-         || (cp >= 0x2E80 && cp <= 0x2FDF)     // CJK Radicals Supplement, Kangxi Radicals
-         || (cp >= 0x3000 && cp <= 0x33FF)     // CJK punctuation, Kana, Bopomofo, Hangul Compat
-                                               // Jamo, Kanbun, strokes, enclosed + compat forms
-         || (cp >= 0x3400 && cp <= 0x4DBF)     // CJK Extension A
-         || (cp >= 0x4E00 && cp <= 0x9FFF)     // CJK Unified Ideographs
-         || (cp >= 0xA960 && cp <= 0xA97F)     // Hangul Jamo Extended-A
-         || (cp >= 0xAC00 && cp <= 0xD7FF)     // Hangul Syllables, Hangul Jamo Extended-B
-         || (cp >= 0xF900 && cp <= 0xFAFF)     // CJK Compatibility Ideographs
-         || (cp >= 0xFE10 && cp <= 0xFE1F)     // Vertical Forms
-         || (cp >= 0xFE30 && cp <= 0xFE4F)     // CJK Compatibility Forms
-         || (cp >= 0xFF01 && cp <= 0xFF60)     // Fullwidth Latin / Punctuation
-         || (cp >= 0xFF65 && cp <= 0xFFEF)     // Halfwidth Katakana / Hangul
-         || (cp >= 0x20000 && cp <= 0x2EBEF)   // CJK Extensions B-F
-         || (cp >= 0x2F800 && cp <= 0x2FA1F)   // CJK Compatibility Ideographs Supplement
-         || (cp >= 0x30000 && cp <= 0x323AF);  // CJK Extensions G-H
-}
-}  // namespace
-
 freeink::ui::BitmapRef BaseTheme::checkboxIcon(const bool checked) {
   return freeink::ui::bitmapFromIcon(checked ? icon_checkbox_on_32 : icon_checkbox_off_32);
 }
@@ -351,76 +329,117 @@ void BaseTheme::drawHintLabel(const GfxRenderer& renderer, const int fontId, con
 bool BaseTheme::drawWheelAndBootButtonHints(GfxRenderer& renderer, const char* back, const char* confirm,
                                             const char* left, const char* right) const {
   if (!inputCapabilities::hasWheelAndBootButtons(gpio)) return false;
-
-  // Hardware positions in the default portrait view: wheel upper left,
-  // PWR above BOOT on the upper right.
   const auto originalOrientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Portrait);
-
   const int pageWidth = renderer.getScreenWidth();
-  const int pageHeight = renderer.getScreenHeight();
-  constexpr int hintWidth = 22;
-  constexpr int hintHeight = 88;
-  constexpr int hintGap = 8;
-  constexpr int wheelHeight = hintHeight * 3 + hintGap * 2;
-  const int width = std::min(hintWidth, pageWidth / 8);
-  const int top = std::clamp(pageHeight / 10, 0, pageHeight - wheelHeight);
-  const int rightX = pageWidth - width - 4;
-
-  const auto drawHint = [&](const char* label, const int x, const int y) {
-    if (!label || !*label) return;
-    // Leave existing content visible; a hint is only drawn on a clear edge.
-    constexpr int contentGap = 8;
-    const int clearX = x == 0 ? x : x - contentGap;
-    if (!renderer.isRectMostlyWhite(clearX, y, width + contentGap, hintHeight, 24)) return;
-    GfxRenderer::ClipScope clip(renderer, x + 1, y + 1, width - 2, hintHeight - 2);
-    const unsigned char* cursor = reinterpret_cast<const unsigned char*>(label);
-    bool hasCjk = false;
-    uint32_t cp = 0;
-    while ((cp = utf8NextCodepoint(&cursor))) {
-      if (isCjkHintCodepoint(cp)) hasCjk = true;
+  const int top = renderer.getScreenHeight() - WHEEL_HINTS_HEIGHT;
+  const bool grayscale = renderer.getRenderMode() != GfxRenderer::BW && !renderer.grayPlanesAreAbsolute();
+  renderer.fillRect(0, top, pageWidth, WHEEL_HINTS_HEIGHT, grayscale);
+  if (grayscale) {
+    renderer.setOrientation(originalOrientation);
+    return true;
+  }
+  renderer.drawLine(0, top, pageWidth - 1, top);
+  constexpr int margin = 8;
+  constexpr int gap = 8;
+  constexpr int markerGap = 6;
+  const char* power =
+      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ? tr(STR_SLEEP) : tr(STR_HOLD_POWER_TO_SLEEP);
+  const char* actions[] = {left, confirm, right, power, back};
+  const char* keys[] = {nullptr, nullptr, nullptr, tr(STR_HW_PWR_HINT), tr(STR_HW_BOOT_HINT)};
+  const int markerWidths[] = {14, 3, 14, renderer.getTextWidth(SMALL_FONT_ID, keys[3]),
+                              renderer.getTextWidth(SMALL_FONT_ID, keys[4])};
+  int textWidths[5]{};
+  int activeCount = 0;
+  int fixedWidth = 0;
+  int maximumTextWidth = 0;
+  for (int i = 0; i < 5; ++i) {
+    if (!actions[i] || !*actions[i]) continue;
+    ++activeCount;
+    fixedWidth += markerWidths[i] + markerGap;
+    textWidths[i] = renderer.getTextWidth(SMALL_FONT_ID, actions[i]);
+    maximumTextWidth = std::max(maximumTextWidth, textWidths[i]);
+  }
+  const int textBudget = std::max(0, pageWidth - margin * 2 - gap * (activeCount - 1) - fixedWidth);
+  // Cap only the long actions. Short actions give their unused space back to
+  // the others, so one line stays readable without five rigid narrow boxes.
+  int lower = 0;
+  int upper = maximumTextWidth;
+  while (lower <= upper) {
+    const int candidate = lower + (upper - lower) / 2;
+    int required = 0;
+    for (const int textWidth : textWidths) required += std::min(textWidth, candidate);
+    if (required <= textBudget) {
+      lower = candidate + 1;
+    } else {
+      upper = candidate - 1;
     }
-    if (hasCjk) {
-      constexpr int glyphCellHeight = 20;
-      constexpr int maxGlyphs = 4;
-      cursor = reinterpret_cast<const unsigned char*>(label);
-      int count = 0;
-      while (count < maxGlyphs && (cp = utf8NextCodepoint(&cursor))) {
-        if (cp != ' ') ++count;
-      }
-      const int firstY = y + (hintHeight - count * glyphCellHeight) / 2;
-      cursor = reinterpret_cast<const unsigned char*>(label);
-      for (int index = 0; index < count;) {
-        const unsigned char* start = cursor;
-        cp = utf8NextCodepoint(&cursor);
-        if (!cp) break;
-        if (cp == ' ') continue;
-        const size_t bytes = static_cast<size_t>(cursor - start);
-        if (bytes > 4) break;
-        char glyph[5]{};
-        std::memcpy(glyph, start, bytes);
-        const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, glyph);
-        renderer.drawText(UI_10_FONT_ID, x + (width - textWidth) / 2, firstY + index * glyphCellHeight, glyph);
-        ++index;
+  }
+  const int textCap = std::max(0, upper);
+  int rowWidth = fixedWidth;
+  for (const int textWidth : textWidths) rowWidth += std::min(textWidth, textCap);
+  const int groupGap = activeCount > 1 ? std::max(gap, (pageWidth - margin * 2 - rowWidth) / (activeCount - 1)) : 0;
+  const int textY = top + (WHEEL_HINTS_HEIGHT - renderer.getLineHeight(SMALL_FONT_ID)) / 2;
+  const int centerY = top + WHEEL_HINTS_HEIGHT / 2;
+  int x = margin;
+  for (int i = 0; i < 5; ++i) {
+    const char* action = actions[i];
+    if (!action || !*action) continue;
+    const int labelWidth = std::min(textWidths[i], textCap);
+    const int groupWidth = markerWidths[i] + markerGap + labelWidth;
+    const int centerX = x + markerWidths[i] / 2;
+    GfxRenderer::ClipScope clip(renderer, x, top + 2, groupWidth, WHEEL_HINTS_HEIGHT - 4);
+    if (i == 1) {
+      renderer.fillRect(centerX - 1, centerY - 1, 3, 3);
+    } else if (i == 0 || i == 2) {
+      // Procedural filled arrows and dot need no new font glyphs or bitmaps.
+      renderer.fillRect(centerX - 1, centerY + (i == 0 ? -2 : -6), 3, 8);
+      for (int step = 0; step < 7; ++step) {
+        const int y = centerY + (i == 0 ? -8 + step : 7 - step);
+        renderer.drawLine(centerX - step, y, centerX + step, y);
       }
     } else {
-      const auto visibleLabel = renderer.truncatedText(UI_10_FONT_ID, label, hintHeight - 8);
-      const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, visibleLabel.c_str());
-      const int textHeight = renderer.getTextHeight(UI_10_FONT_ID);
-      renderer.drawTextRotated90CW(UI_10_FONT_ID, x + (width - textHeight) / 2, y + (hintHeight + textWidth) / 2,
-                                   visibleLabel.c_str());
+      renderer.drawText(SMALL_FONT_ID, x, textY, keys[i]);
     }
-  };
-
-  const char* powerHint =
-      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ? tr(STR_SLEEP) : tr(STR_HOLD_POWER_TO_SLEEP);
-  drawHint(powerHint, rightX, top);
-  drawHint(back, rightX, top + hintHeight + hintGap);
-  const char* wheelLabels[] = {left, confirm, right};
-  for (int i = 0; i < 3; ++i) {
-    drawHint(wheelLabels[i], 0, top + i * (hintHeight + hintGap));
+    // Bounded UTF-8 label with ellipsis. A stack buffer avoids transient strings
+    // and vectors on each redraw; translations remain the source of action text.
+    char label[96]{};
+    const unsigned char* cursor = reinterpret_cast<const unsigned char*>(action);
+    size_t used = 0;
+    bool truncated = false;
+    for (;;) {
+      const unsigned char* start = cursor;
+      const auto cp = utf8NextCodepoint(&cursor);
+      if (!cp) break;
+      if (cp == 0xAB || cp == 0xBB || (cp == ' ' && used == 0)) continue;
+      const size_t bytes = static_cast<size_t>(cursor - start);
+      if (bytes > 4 || used + bytes + 4 > sizeof(label)) {
+        truncated = true;
+        break;
+      }
+      std::memcpy(label + used, start, bytes);
+      label[used + bytes] = '\0';
+      if (renderer.getTextWidth(SMALL_FONT_ID, label) > labelWidth) {
+        label[used] = '\0';
+        truncated = true;
+        break;
+      }
+      used += bytes;
+    }
+    if (truncated) {
+      constexpr char ellipsis[] = "\xe2\x80\xa6";
+      while (used && renderer.getTextWidth(SMALL_FONT_ID, label) + renderer.getTextWidth(SMALL_FONT_ID, ellipsis) >
+                         labelWidth) {
+        do {
+          --used;
+        } while (used && (static_cast<unsigned char>(label[used]) & 0xC0) == 0x80);
+        label[used] = '\0';
+      }
+      std::memcpy(label + used, ellipsis, sizeof(ellipsis));
+    }
+    renderer.drawText(SMALL_FONT_ID, x + markerWidths[i] + markerGap, textY, label);
+    x += groupWidth + groupGap;
   }
-
   renderer.setOrientation(originalOrientation);
   return true;
 }

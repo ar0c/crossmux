@@ -8,6 +8,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "ReaderOrientationSettings.h"
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "components/themes/lyra/LyraTheme.h"
@@ -98,13 +99,15 @@ void EpubReaderMenuActivity::activateIndex(const int index) {
 
   const auto selectedAction = menuItems[index].action;
   if (selectedAction == MenuAction::ROTATE_SCREEN) {
+    const auto orientationLabels = ReaderOrientationSettings::labels();
     optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
                      pendingOrientation, [this](int idx) {
                        pendingOrientation = idx;
                        // Rotate the menu immediately. Only the renderer turns;
                        // SETTINGS.orientation stays unchanged so the reader's
                        // result handler still detects the change and reflows.
-                       ReaderUtils::applyOrientation(renderer, pendingOrientation);
+                       if (pendingOrientation != ReaderOrientationSettings::AUTO)
+                         ReaderUtils::applyOrientation(renderer, pendingOrientation);
                        app.setDevice(uiTarget.deviceContext());  // hit rects follow the new frame
                        requestUpdate(true);
                      });
@@ -189,7 +192,7 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   for (size_t i = 0; i < menuItems.size(); i++) {
     const auto action = menuItems[i].action;
     if (action == MenuAction::ROTATE_SCREEN) {
-      menuRowItems[i].value = I18N.get(orientationLabels[pendingOrientation]);
+      menuRowItems[i].value = I18N.get(ReaderOrientationSettings::LABELS[pendingOrientation]);
     } else if (action == MenuAction::AUTO_PAGE_TURN) {
       menuRowItems[i].value = pageTurnLabels[selectedPageTurnOption];
     } else if (action == MenuAction::NIGHT_MODE) {

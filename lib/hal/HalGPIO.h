@@ -6,6 +6,9 @@
 #include <atomic>
 
 #include "InputModality.h"
+#if CROSSMUX_USB_DEBUG
+#include "DebugInputState.h"
+#endif
 
 // Display SPI pins (custom pins for XteinkX4, not hardware SPI defaults)
 #define EPD_SCLK 8   // SPI Clock
@@ -54,6 +57,9 @@ class HalGPIO {
   bool inputModalityChanged = false;
   uint8_t previousCapacitivePageButtons = 0;
   bool capacitivePagePressed = false;
+#if CROSSMUX_USB_DEBUG
+  DebugInputState debugInput;
+#endif
 
  public:
   enum class DeviceType : uint8_t { X4, X3 };
@@ -100,6 +106,12 @@ class HalGPIO {
 
   // Button input methods
   void update();
+#if CROSSMUX_USB_DEBUG
+  enum class DebugButton : uint8_t { RockerUp, RockerPress, RockerDown, Boot, Power };
+  bool debugPulse(DebugButton button, uint32_t durationMs);
+  DebugInputState::Result debugInputResult() const { return debugInput.result(); }
+  bool debugInputCancelledThisFrame() const { return debugInput.cancelledThisFrame(); }
+#endif
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   uint8_t physicalPressedMask() const;

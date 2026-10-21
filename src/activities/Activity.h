@@ -55,7 +55,18 @@ class Activity {
   // transitions so no filesystem code races a raw SD-card owner.
   virtual bool requiresExclusiveStorageLoop() const { return false; }
   virtual bool isReaderActivity() const { return false; }
-  virtual bool keepsBluetoothAlive() const { return isReaderActivity(); }
+  // Only the current reading surface may own posture changes; stacked readers
+  // do not opt menus, synchronization or other child activities into rotation.
+  virtual bool allowsReaderAutoRotation() const { return false; }
+  virtual bool keepsBluetoothAlive() const {
+    // Waveshare's remote controls the awake UI, including Home and settings.
+    // Radio/storage exclusion and memory gates remain in the main lifecycle.
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+    return true;
+#else
+    return isReaderActivity();
+#endif
+  }
   virtual bool deferBluetoothStart() const { return false; }
   // Reading surfaces opt into output-polarity inversion; menus and overlays stay normal.
   virtual bool appliesNightMode() const { return false; }

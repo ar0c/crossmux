@@ -70,6 +70,9 @@ enum class StartFailure : uint8_t { None, Busy, InvalidSource, Network, Headroom
 StartFailure lastStartFailure();  // Main task only; separate from a running job's status.
 bool active();
 bool status(const char* book, Status& result, const char* account = nullptr);
+#if CROSSMUX_USB_DEBUG
+bool debugStatus(Status& result);  // Published snapshot only; no account/book identifiers.
+#endif
 void dismiss(const char* book);
 void pause();
 void poll();  // Reap finished work; retain only bounded, credential-free status.

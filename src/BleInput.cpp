@@ -244,6 +244,29 @@ bool encodeKey(const freeink::KeyEvent& event, uint8_t& kind, uint8_t& value) {
   return true;
 }
 
+bool resolveAction(const KeyMap& map, const uint8_t kind, const uint8_t value, Action& action) {
+  // An explicit learned binding always wins. Unbound standard arrows work
+  // immediately for a joystick/keyboard, without rewriting persisted mappings.
+  if (lookup(map, kind, value, action)) return true;
+  if (kind != 0) return false;
+  switch (static_cast<freeink::SpecialKey>(value)) {
+    case freeink::SpecialKey::Up:
+      action = Action::Up;
+      return true;
+    case freeink::SpecialKey::Down:
+      action = Action::Down;
+      return true;
+    case freeink::SpecialKey::Left:
+      action = Action::Left;
+      return true;
+    case freeink::SpecialKey::Right:
+      action = Action::Right;
+      return true;
+    default:
+      return false;  // Other keys still require an explicit mapping.
+  }
+}
+
 void describeKey(const uint8_t kind, const uint8_t value, char* out, const size_t outLen) {
   if (!out || outLen == 0) return;
   if (kind == 0) {

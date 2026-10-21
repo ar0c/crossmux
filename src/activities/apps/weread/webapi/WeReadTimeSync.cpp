@@ -1,7 +1,9 @@
 #include "WeReadTimeSync.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include <Arduino.h>
+#include <HalMemory.h>
 #include <HalSystem.h>
+#include <HalTlsMemory.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -604,6 +606,15 @@ bool status(const char* book, Status& result, const char* account) {
   return matches;
 }
 
+#if CROSSMUX_USB_DEBUG
+bool debugStatus(Status& result) {
+  taskENTER_CRITICAL(&statusLock);
+  result = published;
+  taskEXIT_CRITICAL(&statusLock);
+  return result.available;
+}
+#endif
+
 void dismiss(const char* book) {
   if (active()) return;
   taskENTER_CRITICAL(&statusLock);
@@ -624,21 +635,51 @@ bool start(const Source& source, const char* account) {
     startFailure = StartFailure::Busy;
     return false;
   }
-  unsigned freeHeap = ESP.getFreeHeap();
-  unsigned largestBlock = ESP.getMaxAllocHeap();
+  auto internalHeap = HalMemory::getInternalHeap();
+  unsigned freeHeap = internalHeap.freeBytes;
+  unsigned largestBlock = internalHeap.largestBlockBytes;
   size_t budget = 0, contiguous = 0;
+  // 64 KiB stays internal for TLS/network/reader small allocations, including
+  // a 16 KiB contiguous floor for remaining internal allocations.
+  // TLS's external capacity is usable only with the boot-installed allocator.
+  // The other 32 KiB of the old 96 KiB reserve may
+  // live in PSRAM only when the job actually lives there and that heap has
+  // 256 KiB plus 32 KiB spare. Stack, audit, source and fallback workspace are
+  // still charged entirely to internal RAM; no default-allocator guess here.
+  constexpr size_t externalReserve = 32 * 1024;
+  size_t freeReserve = 96 * 1024;
+  size_t blockReserve = 32 * 1024;
+  bool splitReserve = false;
+  bool postAllocation = false;
+  const auto externalHeadroom = [&] {
+    // Explicit PSRAM allocation alone does not prove malloc/TLS/reader buffers
+    // can use it. Default-capability free space must include the external
+    // reserve in addition to ALL free internal bytes, avoiding double counting.
+    const auto available = HalMemory::getDefaultHeap();
+    return HalTlsMemory::usesPsram() && memory::psramHasHeadroom(externalReserve, externalReserve, 32 * 1024) &&
+           memory::hasAllocationHeadroom(available.freeBytes, available.largestBlockBytes, externalReserve,
+                                         externalReserve, internalHeap.freeBytes + memory::PSRAM_FREE_RESERVE, 0);
+  };
+  const auto refreshHeap = [&] {
+    internalHeap = HalMemory::getInternalHeap();
+    freeHeap = internalHeap.freeBytes;
+    largestBlock = internalHeap.largestBlockBytes;
+  };
   const auto recordStart = [&](StartFailure reason) {
     // Bounded, credential-free evidence for file-manager-only devices. Keep
     // startup evidence separate from the last transaction/cloud receipt. A
     // successful start replaces a stale failure record from an earlier run.
     char record[384];
-    const int n = std::snprintf(record, sizeof(record),
-                                "{\"schema\":1,\"reason\":%u,\"free_heap\":%u,\"largest_block\":%u,"
-                                "\"budget\":%u,\"contiguous\":%u,\"free_reserve\":98304,\"block_reserve\":32768,"
-                                "\"wifi_connected\":%u,\"days\":%u,\"uptime_ms\":%lu}\n",
-                                unsigned(reason), freeHeap, largestBlock, unsigned(budget), unsigned(contiguous),
-                                unsigned(WiFi.status() == WL_CONNECTED), unsigned(source.count),
-                                static_cast<unsigned long>(millis()));
+    const int n =
+        std::snprintf(record, sizeof(record),
+                      "{\"schema\":2,\"reason\":%u,\"free_heap\":%u,\"largest_block\":%u,"
+                      "\"budget\":%u,\"contiguous\":%u,\"free_reserve\":%u,\"block_reserve\":%u,"
+                      "\"psram_free\":%u,\"split_reserve\":%u,\"post_allocation\":%u,"
+                      "\"wifi_connected\":%u,\"days\":%u,\"uptime_ms\":%lu}\n",
+                      unsigned(reason), freeHeap, largestBlock, unsigned(budget), unsigned(contiguous),
+                      unsigned(freeReserve), unsigned(blockReserve), unsigned(HalMemory::getPsramHeap().freeBytes),
+                      unsigned(splitReserve), unsigned(postAllocation), unsigned(WiFi.status() == WL_CONNECTED),
+                      unsigned(source.count), static_cast<unsigned long>(millis()));
     HalFile file;
     if (n > 0 && size_t(n) < sizeof(record) && Storage.ensureDirectoryExists("/WeReadSync") &&
         Storage.openFileForWrite("WRTime", "/WeReadSync/last-start-diagnostic.json", file)) {
@@ -668,18 +709,23 @@ bool start(const Source& source, const char* account) {
   constexpr size_t stackBytes = 12 * 1024;
   // CPU-only workspace, never an ISR or DMA buffer. Allocate <=21 KiB once
   // in PSRAM where available; a task-stack/static workspace is unsuitable for
-  // its size/lifetime. Preserve the C3 fallback and both internal reserves.
+  // its size/lifetime. Preserve the conservative internal-only fallback.
   memory::ByteBuffer externalJob;
   if (memory::psramHasHeadroom(sizeof(Job), sizeof(Job), 32 * 1024))
     externalJob = memory::makePsramByteBufferNoThrow(sizeof(Job));
+  refreshHeap();
+  splitReserve = externalJob && externalHeadroom();
+  if (splitReserve) {
+    freeReserve = 64 * 1024;
+    blockReserve = 16 * 1024;
+  }
   const size_t internalJobBytes = externalJob ? 0 : sizeof(Job);
   const bool serviceMode = WeReadTime::ServiceClient::configured();
   const size_t serviceScratchBytes =
       serviceMode && !memory::psramHasHeadroom(sizeof(ServiceWorkspace), sizeof(ServiceWorkspace), 32 * 1024)
           ? sizeof(ServiceWorkspace)
           : 0;
-  freeHeap = ESP.getFreeHeap();
-  largestBlock = ESP.getMaxAllocHeap();
+  refreshHeap();
   static_assert(sizeof(ReadingDayStats) <= 16, "Source snapshot day budget changed");
 #if !defined(SIMULATOR)
   budget =
@@ -687,8 +733,8 @@ bool start(const Source& source, const char* account) {
   contiguous = std::max({internalJobBytes, source.count * sizeof(ReadingDayStats), stackBytes, serviceScratchBytes});
   // A single largest block need not hold both the task stack and the TLS
   // reserve. Check each actual allocation first, then measure the remainder.
-  contiguous = std::max(contiguous, size_t(32 * 1024));
-  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, 96 * 1024, 0)) {
+  contiguous = std::max(contiguous, blockReserve);
+  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, freeReserve, 0)) {
     LOG_ERR("WRTime", "Insufficient heap for background sync and reader (%u bytes)", unsigned(budget));
     return fail(StartFailure::Headroom);
   }
@@ -746,11 +792,12 @@ bool start(const Source& source, const char* account) {
     return fail(StartFailure::TaskMemory);
   }
 #if !defined(SIMULATOR)
-  freeHeap = ESP.getFreeHeap();
-  largestBlock = ESP.getMaxAllocHeap();
+  postAllocation = true;
+  refreshHeap();
   budget = 6 * 1024 + 1024;
   contiguous = 0;
-  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, 96 * 1024, 32 * 1024)) {
+  if (!memory::hasAllocationHeadroom(freeHeap, largestBlock, budget, contiguous, freeReserve, blockReserve) ||
+      (splitReserve && !externalHeadroom())) {
     vTaskDelete(task);  // The worker is still blocked on its start notification.
     workerDone.store(true, std::memory_order_release);
     job.reset();
@@ -765,6 +812,9 @@ bool start(const Source& source, const char* account) {
 #endif
   wifiOwned = true;
   recordStart(StartFailure::None);
+  LOG_INF("WRTime", "Startup admitted free=%u largest=%u reserve=%u block_reserve=%u psram=%u split=%u", freeHeap,
+          largestBlock, unsigned(freeReserve), unsigned(blockReserve), unsigned(HalMemory::getPsramHeap().freeBytes),
+          unsigned(splitReserve));
   xTaskNotify(task, 0, eIncrement);
   return true;
 }

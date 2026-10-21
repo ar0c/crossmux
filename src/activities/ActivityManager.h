@@ -81,6 +81,10 @@ class ActivityManager {
   // loop() consumes and clears it with exchange(false).
   std::atomic<bool> requestedUpdate{false};
   std::atomic<uint32_t> idleRenderGeneration{0};
+#if CROSSMUX_USB_DEBUG
+  std::atomic<uint32_t> debugRenderIssued{0}, debugRenderCompleted{0};
+  std::atomic<bool> debugRenderBusy{false};
+#endif
 
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -91,6 +95,14 @@ class ActivityManager {
   ~ActivityManager() { assert(false); /* should never be called */ };
 
   void begin();
+#if CROSSMUX_USB_DEBUG
+  const char* debugActivityName() const;
+  bool debugReady() const {
+    return !debugRenderBusy.load() && debugRenderIssued.load() == debugRenderCompleted.load() &&
+           !requestedUpdate.load() && !isSwitchPending();
+  }
+  uint32_t debugFrame() const { return debugRenderCompleted.load(); }
+#endif
   void loop();
   void cancelIdleRender() { idleRenderGeneration.fetch_add(1, std::memory_order_relaxed); }
   bool idleRenderCancelled(uint32_t generation) const {
@@ -167,6 +179,7 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
+  bool allowsReaderAutoRotation() const;
   bool keepsBluetoothAlive() const;
   bool deferBluetoothStart() const;
   bool handleForcedRefresh();

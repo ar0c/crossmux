@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "BleKeyMapping.h"
+
 class GfxRenderer;
 
 namespace bleinput {
@@ -40,6 +42,7 @@ StartResult ensureStarted(GfxRenderer& renderer, StartContext context);
 void stop();
 void logDiagnostics(const char* phase);
 bool encodeKey(const freeink::KeyEvent& event, uint8_t& kind, uint8_t& value);
+bool resolveAction(const KeyMap& map, uint8_t kind, uint8_t value, Action& action);
 void describeKey(uint8_t kind, uint8_t value, char* out, size_t outLen);
 
 #if FREEINK_CAP_BLE_HID_HOST

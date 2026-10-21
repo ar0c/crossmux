@@ -3,6 +3,8 @@
 #include <BoardConfig.h>
 #include <Logging.h>
 
+#include "HalDeviceCapabilities.h"
+
 HalTiltSensor halTiltSensor;  // Singleton instance
 
 namespace {
@@ -28,24 +30,6 @@ float tiltAxisFor(const uint8_t mode, const uint8_t orientation, const float pri
 }
 
 }  // namespace
-
-bool HalTiltSensor::readGyro(float& gx, float& gy, float& gz) const {
-  Imu::Sample sample;
-  if (!_sdkImu.read(sample)) return false;
-  gx = sample.gx;
-  gy = sample.gy;
-  gz = sample.gz;
-  return true;
-}
-
-bool HalTiltSensor::readAccel(float& ax, float& ay, float& az) const {
-  Imu::Sample sample;
-  if (!_sdkImu.read(sample)) return false;
-  ax = sample.ax;
-  ay = sample.ay;
-  az = sample.az;
-  return true;
-}
 
 void HalTiltSensor::begin() {
   _available = _sdkImu.begin();
@@ -110,17 +94,38 @@ bool HalTiltSensor::deepSleep() {
   }
 
   clearPendingEvents();
+  _orientationTracker.reset();
+  _pendingOrientation = NO_ORIENTATION;
   _inTilt = false;
   _isAwake = false;
   return true;
 }
 
-void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const bool inReader) {
+bool HalTiltSensor::supportsAutoRotation() const {
+  return _available && HalDeviceCapabilities::supportsReaderAutoRotation();
+}
+
+bool HalTiltSensor::takeOrientation(uint8_t& orientation) {
+  if (_pendingOrientation == NO_ORIENTATION) return false;
+  orientation = _pendingOrientation;
+  _pendingOrientation = NO_ORIENTATION;
+  clearPendingEvents();
+  return true;
+}
+
+void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const bool inReader, bool autoRotate) {
   if (!_available) {
     return;
   }
 
-  const bool shouldBeAwake = mode != CrossPointTiltPageTurn::TILT_OFF && inReader;
+  autoRotate = autoRotate && inReader && supportsAutoRotation();
+  const bool tiltEnabled = mode != CrossPointTiltPageTurn::TILT_OFF && inReader;
+  const bool shouldBeAwake = tiltEnabled || autoRotate;
+  if (!autoRotate) {
+    _orientationTracker.reset();
+    _pendingOrientation = NO_ORIENTATION;
+  }
+  if (!tiltEnabled) clearPendingEvents();
   if (_accelOnly && (mode != _accelMode || orientation != _accelOrientation || shouldBeAwake != _accelReading)) {
     _accelMode = static_cast<CrossPointTiltPageTurn::Value>(mode);
     _accelOrientation = static_cast<CrossPointOrientation::Value>(orientation);
@@ -154,6 +159,28 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
   }
   _lastPollMs = now;
 
+  // Share one I2C sample between the posture and flick consumers.
+  Imu::Sample imuSample;
+  if (!_sdkImu.read(imuSample)) {
+    _orientationTracker.reset();
+    _lastTiltGMs = 0;
+    return;
+  }
+  if (autoRotate) {
+    // Posture uses stable gravity; a saturated gyro must not freeze orientation.
+    // The tracker rejects moving/invalid gravity for a complete dwell interval.
+    if (_orientationTracker.update(imuSample.ax, imuSample.ay, imuSample.az, now, orientation, _pendingOrientation)) {
+      LOG_INF("ROT", "Stable direction=%u gravity=%.3f,%.3f,%.3f", _pendingOrientation, imuSample.ax, imuSample.ay,
+              imuSample.az);
+      clearPendingEvents();
+      _lastTiltMs = now;
+      return;
+    }
+  }
+  // Automatic posture changes and flick-to-turn are mutually exclusive while
+  // auto mode owns the sensor, so turning the device cannot turn a book page.
+  if (!tiltEnabled || autoRotate) return;
+
   // Gyro boards read an angular rate directly; accelerometer boards differentiate the
   // gravity component, so the two arrive here in different units and against thresholds
   // converted from the same 270 dps. See RATE_THRESHOLD_GPS in the header.
@@ -161,11 +188,8 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
   float rateThreshold;
   float neutralRate;
   if (_accelOnly) {
-    float ax, ay, az;
-    if (!readAccel(ax, ay, az)) {
-      _lastTiltGMs = 0;
-      return;
-    }
+    const float ax = imuSample.ax;
+    const float ay = imuSample.ay;
     // The gyro measures angular rate ABOUT the tilt axis; the accelerometer measures the
     // gravity component ALONG the axis perpendicular to it. The gesture is a LEFT/RIGHT
     // sway, so in portrait the device rolls about its up/down axis and gravity swings
@@ -187,12 +211,8 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
     rateThreshold = RATE_THRESHOLD_GPS;
     neutralRate = NEUTRAL_RATE_GPS;
   } else {
-    float gx, gy, gz;
-    if (!readGyro(gx, gy, gz)) {
-      return;
-    }
     // On the X3 PCB: X axis = left/right in portrait, Y axis = left/right in landscape.
-    tiltAxis = tiltAxisFor(mode, orientation, gx, gy);
+    tiltAxis = tiltAxisFor(mode, orientation, imuSample.gx, imuSample.gy);
     rateThreshold = RATE_THRESHOLD_DPS;
     neutralRate = NEUTRAL_RATE_DPS;
   }

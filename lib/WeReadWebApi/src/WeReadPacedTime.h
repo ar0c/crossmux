@@ -283,6 +283,7 @@ class PacedJournal {
     ready_ = permit_ = issued_ = false;
     PacedLedger candidate;
     if (!candidate.initialize(receipt)) return false;
+    ByteLog::ReadScope readScope(log_);
     uint64_t size = 0;
     const auto state = log_.size(size);
     if (state == ByteLog::ReadState::Missing) {

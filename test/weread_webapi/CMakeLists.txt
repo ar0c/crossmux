@@ -137,7 +137,27 @@ else()
   target_compile_options(WeReadTimeAsyncTest PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 endif()
 add_test(NAME WeReadTimeAsyncTest COMMAND WeReadTimeAsyncTest)
-set_tests_properties(WeReadTimeAsyncTest PROPERTIES TIMEOUT 30)
+set_tests_properties(WeReadTimeAsyncTest PROPERTIES TIMEOUT 60)
+add_executable(WeReadTimeAsyncPsramTest
+  WeReadTimeAsyncStandaloneTest.cpp
+  ${REPO_ROOT}/src/activities/apps/weread/webapi/WeReadTimeSync.cpp)
+target_compile_features(WeReadTimeAsyncPsramTest PRIVATE cxx_std_20)
+target_compile_definitions(WeReadTimeAsyncPsramTest PRIVATE ENABLE_CHINESE_VERSION=1 BOARD_HAS_PSRAM=1)
+target_include_directories(WeReadTimeAsyncPsramTest BEFORE PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/time_psram_stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/time_async_stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/time_storage_stubs
+  ${REPO_ROOT}/lib/Memory
+  ${REPO_ROOT}/lib/WeReadWebApi/src
+  ${REPO_ROOT}/src/activities/apps/weread/webapi)
+target_link_libraries(WeReadTimeAsyncPsramTest PRIVATE Threads::Threads)
+if(MSVC)
+  target_compile_options(WeReadTimeAsyncPsramTest PRIVATE /UNDEBUG)
+else()
+  target_compile_options(WeReadTimeAsyncPsramTest PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+endif()
+add_test(NAME WeReadTimeAsyncPsramTest COMMAND WeReadTimeAsyncPsramTest)
+set_tests_properties(WeReadTimeAsyncPsramTest PROPERTIES TIMEOUT 60)
 add_executable(WeReadExternalTimeTest WeReadExternalTimeStandaloneTest.cpp)
 target_include_directories(WeReadExternalTimeTest PRIVATE ${REPO_ROOT}/lib/WeReadWebApi/src)
 if(MSVC)

@@ -17,6 +17,7 @@
 #include "HomeButtonSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "ReaderFontSizes.h"
+#include "ReaderOrientationSettings.h"
 #include "SdCardFontSystem.h"
 #include "activities/settings/SettingsActivity.h"
 #include "components/UITheme.h"
@@ -815,6 +816,15 @@ inline bool isSettingAvailableOnBoard(const SettingInfo& setting) {
 
 // Visits the shared list without copying it. Dynamic font entries are built
 // only while their callback runs, keeping the web request's peak heap bounded.
+inline SettingInfo buildReaderOrientationSetting() {
+  // Static labels and stateless accessors: no extra vector allocation for this row.
+  auto setting = SettingInfo::StaticEnum(StrId::STR_ORIENTATION, nullptr, ReaderOrientationSettings::labels(),
+                                         "orientation", StrId::STR_CAT_READER);
+  setting.valueGetter = [] { return ReaderOrientationSettings::selected(); };
+  setting.valueSetter = [](uint8_t option) { ReaderOrientationSettings::select(option); };
+  return setting;
+}
+
 template <typename Callback>
 inline void forEachSettingsListEntry(const SdCardFontRegistry* registry, Callback&& callback) {
   for (const auto& setting : getBaseSettingsList()) {
@@ -825,6 +835,9 @@ inline void forEachSettingsListEntry(const SdCardFontRegistry* registry, Callbac
       callback(dynamicSetting);
     } else if (setting.nameId == StrId::STR_FONT_SIZE) {
       const SettingInfo dynamicSetting = buildFontSizeSetting(registry);
+      callback(dynamicSetting);
+    } else if (setting.nameId == StrId::STR_ORIENTATION) {
+      const SettingInfo dynamicSetting = buildReaderOrientationSetting();
       callback(dynamicSetting);
     } else {
       callback(setting);
@@ -877,6 +890,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
   }
   v.erase(std::remove_if(v.begin(), v.end(), [](const SettingInfo& s) { return !isSettingAvailableOnBoard(s); }),
           v.end());
+  for (auto& setting : v) {
+    if (setting.nameId != StrId::STR_ORIENTATION) continue;
+    setting = buildReaderOrientationSetting();
+  }
   {
     auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_FONT_FAMILY; });
     if (it != v.end()) {

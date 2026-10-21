@@ -96,6 +96,7 @@ class SdByteLog final : public ByteLog {
   enum class Format { Legacy60, Paced30, Service };
   bool configure(const char* account, const char* book, const char* source, uint32_t day,
                  Format format = Format::Legacy60) {
+    endRead();
     configured_ = false;
     Ledger validation;
     if (!validation.bind(account, book, source, day)) return false;
@@ -110,9 +111,17 @@ class SdByteLog final : public ByteLog {
   }
 
   ReadState size(uint64_t& length) override {
+    // Never reuse a cached length, including the post-append readback.
+    reader_ = HalFile();
+    readerOffset_ = 0;
     length = 0;
     if (!configured_ || !Storage.ready()) return ReadState::Error;
     if (!Storage.exists(path_)) return ReadState::Missing;
+    if (reading_) {
+      if (!Storage.openFileForRead("WRTime", path_, reader_)) return ReadState::Error;
+      length = reader_.fileSize64();
+      return ReadState::Ready;
+    }
     HalFile file;
     if (!Storage.openFileForRead("WRTime", path_, file)) return ReadState::Error;
     length = file.fileSize64();
@@ -121,12 +130,23 @@ class SdByteLog final : public ByteLog {
 
   bool read(uint64_t offset, uint8_t* out, size_t count) override {
     if (!configured_) return false;
+    if (reading_) {
+      if (!reader_ || (offset != readerOffset_ && !reader_.seek64(offset))) return false;
+      if (reader_.read(out, count) != static_cast<int>(count)) {
+        reader_ = HalFile();
+        return false;
+      }
+      readerOffset_ = offset + count;
+      return true;
+    }
     HalFile file;
     return Storage.openFileForRead("WRTime", path_, file) && file.seek64(offset) &&
            file.read(out, count) == static_cast<int>(count);
   }
 
   bool appendAndSync(const uint8_t* data, size_t count) override {
+    // Release the read handle before writing; the next size() reopens it.
+    reader_ = HalFile();
     if (!configured_ || !Storage.ensureDirectoryExists(directory_)) return false;
     auto file = Storage.open(path_, O_WRONLY | O_CREAT | O_APPEND);
     if (!file || file.write(data, count) != count) return false;
@@ -145,10 +165,28 @@ class SdByteLog final : public ByteLog {
     return length <= kJournalBudget - bytes;
   }
 
+  void beginRead() override {
+    endRead();
+    reading_ = true;
+  }
+  void endRead() override {
+    // HAL close() retains Impl; resetting releases both the file and allocation.
+    reader_ = HalFile();
+    reading_ = false;
+    readerOffset_ = 0;
+  }
+
  private:
   char directory_[144] = {};
   char path_[168] = {};
   bool configured_ = false;
+  // Reuse the existing fallible HAL handle allocation for one replay only.
+  // No history buffer or extra simultaneous file: the scope closes on return.
+  HalFile reader_;
+  uint64_t readerOffset_ = 0;
+  bool reading_ = false;
 };
+
+static_assert(sizeof(SdByteLog) <= 384, "Scoped journal reader must remain bounded");
 
 }  // namespace WeReadTime

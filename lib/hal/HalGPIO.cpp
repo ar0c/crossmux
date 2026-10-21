@@ -321,21 +321,50 @@ void HalGPIO::update() {
   const bool connected = isUsbConnected();
   usbStateChanged = (connected != lastUsbConnected);
   lastUsbConnected = connected;
+#if CROSSMUX_USB_DEBUG
+  debugInput.update(millis(), connected,
+                    inputMgr.physicalPressedMask() != 0 || inputMgr.wasAnyPressed() || inputMgr.wasAnyReleased());
+#endif
 }
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
-bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
+bool HalGPIO::isPressed(uint8_t buttonIndex) const {
+#if CROSSMUX_USB_DEBUG
+  if (debugInput.held(buttonIndex)) return true;
+#endif
+  return inputMgr.isPressed(buttonIndex);
+}
 
-bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }
+bool HalGPIO::wasPressed(uint8_t buttonIndex) const {
+#if CROSSMUX_USB_DEBUG
+  if (debugInput.pressed(buttonIndex)) return true;
+#endif
+  return inputMgr.wasPressed(buttonIndex);
+}
 
 uint8_t HalGPIO::physicalPressedMask() const { return inputMgr.physicalPressedMask(); }
 
-bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
+bool HalGPIO::wasAnyPressed() const {
+#if CROSSMUX_USB_DEBUG
+  if (debugInput.anyPressed()) return true;
+#endif
+  return inputMgr.wasAnyPressed();
+}
 
-bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleased(buttonIndex); }
+bool HalGPIO::wasReleased(uint8_t buttonIndex) const {
+#if CROSSMUX_USB_DEBUG
+  if (debugInput.released(buttonIndex)) return true;
+#endif
+  return inputMgr.wasReleased(buttonIndex);
+}
 
-bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
+bool HalGPIO::wasAnyReleased() const {
+#if CROSSMUX_USB_DEBUG
+  if (debugInput.anyReleased()) return true;
+#endif
+  return inputMgr.wasAnyReleased();
+}
 
 bool HalGPIO::rawInputActive() {
   if (inputMgr.isPowerButtonPhysicallyPressed()) return true;
@@ -346,9 +375,38 @@ bool HalGPIO::rawInputActive() {
   return (g1.raw >= 0 && g1.raw < kIdleRailMin) || (g2.raw >= 0 && g2.raw < kIdleRailMin);
 }
 
-unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
+unsigned long HalGPIO::getHeldTime() const {
+#if CROSSMUX_USB_DEBUG
+  if (debugInput.hasDuration()) return debugInput.elapsed();
+#endif
+  return inputMgr.getHeldTime();
+}
 
-unsigned long HalGPIO::getPowerButtonHeldTime() const { return inputMgr.getPowerButtonHeldTime(); }
+unsigned long HalGPIO::getPowerButtonHeldTime() const {
+#if CROSSMUX_USB_DEBUG
+  if (debugInput.held(BTN_POWER) || debugInput.released(BTN_POWER)) return debugInput.elapsed();
+#endif
+  return inputMgr.getPowerButtonHeldTime();
+}
+
+#if CROSSMUX_USB_DEBUG
+bool HalGPIO::debugPulse(DebugButton button, uint32_t durationMs) {
+  if (!isUsbConnected() || physicalPressedMask() != 0) return false;
+  switch (button) {
+    case DebugButton::RockerUp:
+      return debugInput.start(BTN_LEFT, durationMs);
+    case DebugButton::RockerPress:
+      return debugInput.start(BTN_CONFIRM, durationMs);
+    case DebugButton::RockerDown:
+      return debugInput.start(BTN_RIGHT, durationMs);
+    case DebugButton::Boot:
+      return debugInput.start(BTN_BACK, durationMs);
+    case DebugButton::Power:
+      return debugInput.start(BTN_POWER, durationMs);
+  }
+  return false;
+}
+#endif
 
 bool HalGPIO::hasTouch() const { return inputMgr.hasTouch(); }
 

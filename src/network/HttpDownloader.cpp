@@ -14,6 +14,7 @@
 #include <functional>
 #include <string>
 
+#include "OtaReleaseUrl.h"
 #include "WifiPowerSaveGuard.h"
 
 extern "C" void wolfSSL_Arduino_Serial_Print(const char* const msg) { LOG_DBG("WOLFSSL", "%s", msg); }
@@ -250,7 +251,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
 }
 
 bool HttpDownloader::fetchVerifiedUrl(const std::string& url, const DataCallback& onData) {
-  if (!url.starts_with("https://ooo.ar0c.com/releases/download/")) return false;
+  if (!ota_release::isReleaseUrl(url)) return false;
   char userAgent[USER_AGENT_CAPACITY];
   const int length =
       snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION, HalSystem::getDeviceModel());

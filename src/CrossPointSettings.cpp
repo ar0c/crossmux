@@ -1,6 +1,7 @@
 #include "CrossPointSettings.h"
 
 #include <BoardConfig.h>
+#include <HalDeviceCapabilities.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -241,6 +242,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // once: without it the version check reads 0 on every boot and re-applies the
   // side swap to a save that already has it.
   doc["touchControlsVersion"] = TOUCH_CONTROLS_VERSION;
+  if (HalDeviceCapabilities::supportsReaderAutoRotation()) doc["readerAutoRotate"] = readerAutoRotate;
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   doc["frontButtonBack"] = frontButtonBack;
   doc["frontButtonConfirm"] = frontButtonConfirm;
@@ -451,6 +453,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       clamp(doc["frontButtonRight"] | (uint8_t)FRONT_HW_RIGHT, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_RIGHT);
   validateFrontButtonMapping(s);
   bluetoothEnabled = clamp(doc["bluetoothEnabled"] | static_cast<uint8_t>(0), static_cast<uint8_t>(2), 0);
+  readerAutoRotate = HalDeviceCapabilities::supportsReaderAutoRotation()
+                         ? clamp(doc["readerAutoRotate"] | static_cast<uint8_t>(0), static_cast<uint8_t>(2), 0)
+                         : 0;
   bleKeyMap = {};
   const JsonArrayConst storedBleMap = doc["bleKeyMap"];
   if (!storedBleMap.isNull()) {

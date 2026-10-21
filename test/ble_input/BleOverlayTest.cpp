@@ -37,6 +37,28 @@ TEST_F(BleOverlayTest, ReleaseDoesNotInheritPhysicalHeldTime) {
   EXPECT_EQ(input.getHeldTime(), 5000U);
 }
 
+TEST_F(BleOverlayTest, StandardArrowsNavigateWithoutLearningAndRespectBindings) {
+  for (const auto special :
+       {freeink::SpecialKey::Up, freeink::SpecialKey::Down, freeink::SpecialKey::Left, freeink::SpecialKey::Right}) {
+    BleHid.events.push_back({special, 0});
+  }
+  input.update();
+  EXPECT_TRUE(input.wasPressed(Button::Up));
+  EXPECT_TRUE(input.wasPressed(Button::Down));
+  EXPECT_TRUE(input.wasPressed(Button::Left));
+  EXPECT_TRUE(input.wasPressed(Button::Right));
+  input.update();
+  EXPECT_TRUE(input.wasReleased(Button::Up));
+  EXPECT_TRUE(input.wasReleased(Button::Right));
+  input.update();
+  ASSERT_TRUE(
+      bleinput::assign(SETTINGS.bleKeyMap, 0, static_cast<uint8_t>(freeink::SpecialKey::Up), bleinput::Action::Back));
+  BleHid.events.push_back({freeink::SpecialKey::Up, 0});
+  input.update();
+  EXPECT_TRUE(input.wasPressed(Button::Back));
+  EXPECT_FALSE(input.wasPressed(Button::Up));
+}
+
 TEST_F(BleOverlayTest, ReleaseDoesNotInheritTouchHeldTime) {
   gpio.touchTap = true;
   gpio.touchHeldTime = 3000;

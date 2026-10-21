@@ -159,6 +159,7 @@ void FrontlightPanelActivity::runTile(const int idx) {
       close();
       break;
     case 2:  // Cycle the reading orientation
+      SETTINGS.readerAutoRotate = 0;
       SETTINGS.orientation = static_cast<uint8_t>((SETTINGS.orientation + 1) % 4);
       SETTINGS.saveToFile();
       // Only the setting changes: turning the renderer cropped the portrait-only

@@ -23,10 +23,11 @@
 #include "CrossPointSettings.h"
 #include "FirmwareBoardTag.h"
 #include "FirmwareFlasher.h"
+#include "OtaReleaseUrl.h"
 
 namespace {
 constexpr size_t MAX_RELEASE_JSON = 8192;
-constexpr std::string_view FORK_RELEASE_BASE = "https://ooo.ar0c.com/releases/download/";
+constexpr std::string_view FORK_RELEASE_BASE = ota_release::BASE;
 
 const char* targetId() {
 #if FREEINK_DEVICE_X4PRO
@@ -39,13 +40,7 @@ const char* targetId() {
 }
 
 bool isForkBuildUrl(const std::string_view url, const std::string_view channel) {
-  if (!url.starts_with(FORK_RELEASE_BASE)) return false;
-  const std::string_view path = url.substr(FORK_RELEASE_BASE.size());
-  const std::string prefix = std::string(channel) + "-build-";
-  const size_t slash = path.find('/');
-  return slash != std::string_view::npos && path.starts_with(prefix) && slash > prefix.size() &&
-         slash + 1 < path.size() && path.find('/', slash + 1) == std::string_view::npos &&
-         path.find_first_of("?#\\") == std::string_view::npos;
+  return ota_release::isBuildUrl(url, channel);
 }
 
 bool fetchBoundedJson(const std::string& url, uint8_t* buffer, size_t& size) {

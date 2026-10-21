@@ -97,7 +97,11 @@ void ActivityManager::renderTaskLoop() {
   auto waitTicks = portMAX_DELAY;
   uint32_t idleGeneration = 0;
   while (true) {
-    const bool foreground = ulTaskNotifyTake(pdTRUE, waitTicks) != 0;
+    const auto notifications = ulTaskNotifyTake(pdTRUE, waitTicks);
+    const bool foreground = notifications != 0;
+#if CROSSMUX_USB_DEBUG
+    debugRenderBusy = true;
+#endif
     // ponytail: one idle attempt per render, including cancellations and I/O
     // failures; re-arm after quiet input only if measured cache hit rate needs it.
     waitTicks = portMAX_DELAY;
@@ -118,6 +122,10 @@ void ActivityManager::renderTaskLoop() {
     }
     // An idle timeout must never acknowledge requestUpdateAndWait(): its
     // notification may have arrived while the idle callback was cancelling.
+#if CROSSMUX_USB_DEBUG
+    if (foreground) debugRenderCompleted.fetch_add(notifications);
+    debugRenderBusy = false;
+#endif
     if (!foreground) continue;
     TaskHandle_t waiter = nullptr;
     taskENTER_CRITICAL(&activityManagerSpinlock);
@@ -152,6 +160,9 @@ void ActivityManager::loop() {
     // processing a pending action here could re-enable filesystem users while
     // the USB host still owns the raw SD card.
     if (requestedUpdate.exchange(false) && renderTaskHandle) {
+#if CROSSMUX_USB_DEBUG
+      debugRenderIssued.fetch_add(1);
+#endif
       xTaskNotify(renderTaskHandle, 1, eIncrement);
     }
     return;
@@ -309,6 +320,9 @@ void ActivityManager::loop() {
     // Using direct notification to signal the render task to update
     // Increment counter so multiple rapid calls won't be lost
     if (renderTaskHandle) {
+#if CROSSMUX_USB_DEBUG
+      debugRenderIssued.fetch_add(1);
+#endif
       xTaskNotify(renderTaskHandle, 1, eIncrement);
     }
   }
@@ -708,6 +722,12 @@ bool ActivityManager::requiresExclusiveStorageLoop() const {
   return currentActivity && currentActivity->requiresExclusiveStorageLoop();
 }
 
+#if CROSSMUX_USB_DEBUG
+const char* ActivityManager::debugActivityName() const {
+  return currentActivity ? currentActivity->name.c_str() : "None";
+}
+#endif
+
 bool ActivityManager::isReaderActivity() const {
   return std::any_of(stackActivities.begin(), stackActivities.end(),
                      [](const auto& activity) { return activity->isReaderActivity(); }) ||
@@ -718,6 +738,10 @@ bool ActivityManager::keepsBluetoothAlive() const {
   return std::any_of(stackActivities.begin(), stackActivities.end(),
                      [](const auto& activity) { return activity->keepsBluetoothAlive(); }) ||
          (currentActivity && currentActivity->keepsBluetoothAlive());
+}
+
+bool ActivityManager::allowsReaderAutoRotation() const {
+  return !isSwitchPending() && currentActivity && currentActivity->allowsReaderAutoRotation();
 }
 
 bool ActivityManager::deferBluetoothStart() const {
@@ -753,6 +777,9 @@ void ActivityManager::requestUpdate(bool immediate) {
   cancelIdleRender();
   if (immediate) {
     if (renderTaskHandle) {
+#if CROSSMUX_USB_DEBUG
+      debugRenderIssued.fetch_add(1);
+#endif
       xTaskNotify(renderTaskHandle, 1, eIncrement);
     }
   } else {
@@ -787,6 +814,9 @@ void ActivityManager::requestUpdateAndWait() {
   // Cannot call while holding RenderLock or it will cause a deadlock
   assert(!holdingRenderLock && "Cannot call requestUpdateAndWait() while holding RenderLock");
 
+#if CROSSMUX_USB_DEBUG
+  debugRenderIssued.fetch_add(1);
+#endif
   xTaskNotify(renderTaskHandle, 1, eIncrement);
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }

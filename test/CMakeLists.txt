@@ -139,6 +139,10 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME ClippingHighlightPlanes COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/test_clipping_highlight_planes.py)
 add_test(NAME ClippingSelectionText COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/test_clipping_selection_text.py)
 add_test(NAME SelectionButtons COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/test_selection_buttons.py)
+add_test(NAME OtaReleaseUrl
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_ota_release_url.py)
+add_test(NAME OtaMirrorAndServer
+  COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${REPO_ROOT}/deploy/k3s/ota -p test_ota_*.py)
 add_test(NAME WeReadLogout
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_weread_logout.py)
 add_test(NAME WeReadConnection
@@ -174,6 +178,7 @@ add_subdirectory(home_button)
 add_subdirectory(button_press_navigation)
 
 add_subdirectory(inflate_stream)
+add_subdirectory(tls_memory)
 add_subdirectory(fs_helpers)
 add_subdirectory(txt_to_html)
 

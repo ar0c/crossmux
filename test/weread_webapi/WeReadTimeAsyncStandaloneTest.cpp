@@ -8,6 +8,7 @@
 #include <iostream>
 
 #include "HalSystem.h"
+#include "HalTlsMemory.h"
 #include "ReadingStatsStore.h"
 #include "WeReadDeviceTimeSource.h"
 #include "WeReadDeviceTimeTransport.h"
@@ -87,6 +88,90 @@ int main() {
   }
 
 #ifdef BOARD_HAS_PSRAM
+  // Waveshare's saved failure profile: plenty of PSRAM, 96,024 bytes internal.
+  // Exercise the real start path and the post-stack gate, not a copied formula.
+  ReadingDayStats measuredDays[11]{};
+  for (unsigned i = 0; i < 11; ++i) measuredDays[i] = {20709 + i, 125000};
+  Sync::Source measured{"b", "s", measuredDays, 11, 11 * 125000};
+  struct Profile {
+    unsigned free, largest, postFree, postLargest;
+  };
+  // Post-allocation values model the existing 13,224-byte task/TCB charge;
+  // the pre-allocation pairs are captured physical rejection profiles.
+  for (const auto& profile : {Profile{96024, 47092, 82800, 34804}, Profile{86920, 32756, 73696, 20460}}) {
+    fixture(125000);
+    fakePsram::available = true;
+    ESP.free = profile.free;
+    ESP.largest = profile.largest;
+    fakeTask::freeAfterCreate = profile.postFree;
+    fakeTask::largestAfterCreate = profile.postLargest;
+    fakeTransport::blockPrepare = true;
+    assert(Sync::start(measured, "a"));
+    waitFor(fakeTransport::enteredPrepare);
+    Sync::pause();
+    unblock(fakeTransport::blockPrepare);
+    finish();
+  }
+  fakeTask::freeAfterCreate = 0;
+  fakeTask::largestAfterCreate = 0;
+  // Abundant PSRAM must never hide internal exhaustion/fragmentation. Loss of
+  // PSRAM reserve after creating the gated task must cancel before any request.
+  for (unsigned failure = 0; failure < 10; ++failure) {
+    fixture(125000);
+    fakePsram::available = true;
+    fakePsram::fail = false;
+    fakePsram::defaultEligible = true;
+    fakePsram::freeBytes = fakePsram::largestBlock = 8 * 1024 * 1024;
+    ESP.free = 96024;
+    ESP.largest = 47092;
+    fakeTask::freeAfterCreate = 82800;
+    fakeTask::largestAfterCreate = 34804;
+    switch (failure) {
+      case 0:
+        ESP.free = 64 * 1024;
+        break;
+      case 1:
+        ESP.largest = 16383;
+        break;
+      case 2:
+        fakeTask::freeAfterCreate = 64 * 1024 + 7 * 1024 - 1;
+        break;
+      case 3:
+        fakeTask::largestAfterCreate = 16383;
+        break;
+      case 4:
+        fakePsram::available = false;
+        break;
+      case 5:
+        fakePsram::fail = true;
+        break;
+      case 6:
+        fakeTask::afterCreate = [] { fakePsram::freeBytes = 256 * 1024; };
+        break;
+      case 7:
+        fakePsram::defaultEligible = false;
+        break;
+      case 8:
+        fakePsram::largestBlock = 64 * 1024 - 1;
+        break;
+      case 9:
+        fakeTlsMemory::external = false;
+        break;
+    }
+    assert(!Sync::start(measured, "a"));
+    assert(Sync::lastStartFailure() == Sync::StartFailure::Headroom);
+    assert(!Sync::active() && !Sync::ownsWifi());
+    assert(fakeTransport::reports == 0 && fakeService::requests == 0);
+    assert(!fakeTransport::enteredPrepare && !fakeTransport::enteredReport);
+    fakeTask::afterCreate = nullptr;
+    fakeTlsMemory::external = true;
+  }
+  fakePsram::fail = false;
+  fakePsram::defaultEligible = true;
+  fakePsram::freeBytes = fakePsram::largestBlock = 8 * 1024 * 1024;
+  fakeTask::freeAfterCreate = 0;
+  fakeTask::largestAfterCreate = 0;
+  fakePsram::available = false;
   // Measured X4 Pro rejection: enough total memory, fragmented internal heap.
   ReadingDayStats probeDay{20709, 125000};
   Sync::Source probe{"b", "s", &probeDay, 1, probeDay.readingMs};
@@ -117,7 +202,7 @@ int main() {
   ESP.free = 139884;
   ESP.largest = 40948;
   fakeTask::freeAfterCreate = 126660;
-  fakeTask::largestAfterCreate = 32760;
+  fakeTask::largestAfterCreate = 16383;
   assert(!Sync::start(probe, "a"));
   assert(Sync::lastStartFailure() == Sync::StartFailure::Headroom);
   assert(!Sync::active() && !Sync::ownsWifi());

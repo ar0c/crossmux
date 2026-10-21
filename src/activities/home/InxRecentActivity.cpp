@@ -135,7 +135,11 @@ Rect InxRecentActivity::contentRect() const {
   content.y += topInset + metrics.verticalSpacing;
   content.height -= topInset + metrics.verticalSpacing * 2;
   if (!mainTabsAtBottom()) {
-    content.height -= std::max(0, InxRecentGeometry::footerReservedHeight - metrics.buttonHintsHeight);
+    // A button footer and the separate battery strip both need space.
+    const int batteryReserve = !mappedInput.hasTouch() && metrics.buttonHintsHeight > 0
+                                   ? InxRecentGeometry::footerReservedHeight
+                                   : std::max(0, InxRecentGeometry::footerReservedHeight - metrics.buttonHintsHeight);
+    content.height -= batteryReserve;
   }
   return content;
 }
@@ -573,7 +577,9 @@ void InxRecentActivity::drawFooter() {
     GUI.drawMainTabStatusBar(renderer, Rect{left, footerTop, std::max(0, width - left - right),
                                             std::max(0, renderer.getScreenHeight() - bottom - footerTop)});
   } else if (!hasMainTabStatusBar()) {
-    Rect battery = InxRecentGeometry::batteryRect(safeArea);
+    Rect batteryArea = safeArea;
+    if (!mappedInput.hasTouch()) batteryArea.height -= metrics.buttonHintsHeight;
+    Rect battery = InxRecentGeometry::batteryRect(batteryArea);
     if (mainTabsAtBottom()) battery.y = safeArea.y + metrics.topPadding + 5;
     GUI.drawBatteryRight(renderer, battery,
                          SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS);

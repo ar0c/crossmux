@@ -16,6 +16,20 @@ class ByteLog {
   // Pre-send budget only. Acknowledgement/verification must still be allowed
   // to use reserved space after a network write has already happened.
   virtual bool canReserve(size_t) { return true; }
+  // A replay may reuse one read handle; it must release it on every exit and
+  // before any append. size() must still observe fresh storage metadata.
+  virtual void beginRead() {}
+  virtual void endRead() {}
+  class ReadScope {
+   public:
+    explicit ReadScope(ByteLog& log) : log_(log) { log_.beginRead(); }
+    ~ReadScope() { log_.endRead(); }
+    ReadScope(const ReadScope&) = delete;
+    ReadScope& operator=(const ReadScope&) = delete;
+
+   private:
+    ByteLog& log_;
+  };
 };
 
 // Append-only checkpoints: a torn tail blocks reporting instead of silently
@@ -29,6 +43,7 @@ class Journal {
     ready_ = false;
     Ledger candidate;
     if (!candidate.bind(account, book, source, day)) return false;
+    ByteLog::ReadScope readScope(log_);
     uint64_t length = 0;
     const auto state = log_.size(length);
     if (state == ByteLog::ReadState::Missing) {

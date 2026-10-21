@@ -15,6 +15,7 @@
 #include <HalStorage.h>
 #include <HalSystem.h>
 #include <HalTiltSensor.h>
+#include <HalTlsMemory.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -55,6 +56,9 @@
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#if CROSSMUX_USB_DEBUG
+#include "debug/DebugBridge.h"
+#endif
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
 #include "util/PluginEvents.h"
@@ -115,15 +119,15 @@ void updateBluetoothLifecycle() {
   // Preparation blocks new starts; C3 and PSRAM readers keep existing links
   // through chapter construction and book indexing.
   if (bleinput::isRunning() || activityManager.deferBluetoothStart() || millis() < nextStartAttemptAt) return;
-  // Non-reader pages that keep an existing link alive own their explicit start
-  // attempts; only readers use the automatic reader-memory gate and retry loop.
+  // Waveshare's global remote uses the conservative reader memory gate on all
+  // awake pages. Other targets retain their explicit non-reader start policy.
+#if !FREEINK_DEVICE_WAVESHARE_EPAPER_397
   if (!activityManager.isReaderActivity()) return;
+#endif
   RenderLock lock(RenderLock::Mode::Try);
   if (!lock.ownsLock()) return;
   // Rendering may have started a chapter build while we were acquiring the lock.
-  if (!wanted() || activityManager.deferBluetoothStart() || !activityManager.isReaderActivity() ||
-      bleinput::isRunning())
-    return;
+  if (!wanted() || activityManager.deferBluetoothStart() || bleinput::isRunning()) return;
   const auto result = bleinput::ensureStarted(renderer, bleinput::StartContext::Reader);
   if (result == bleinput::StartResult::LowMemory || result == bleinput::StartResult::Failed) {
     nextStartAttemptAt = millis() + 2000;
@@ -734,6 +738,10 @@ void setup() {
 #endif
 
   HalSystem::begin();
+  // Install once before activities, Wi-Fi and TLS users can run concurrently.
+  const bool externalTls = HalTlsMemory::initialize();
+  LOG_INF("MAIN", "TLS memory allocator: %s", externalTls ? "PSRAM" : "SDK default");
+  (void)externalTls;  // Initialization must also run when logging is disabled.
   const bool otaPendingAtBoot = HalOtaSlot::runningImageState() == HalOtaSlot::RunningImageState::PendingVerify;
 
   // Read-and-clear so a panic later in setup() doesn't loop into silent reboot.
@@ -1119,7 +1127,26 @@ void loop() {
     return;
   }
 
+#if defined(SIMULATOR)
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
+#else
+  const bool autoRotate = SETTINGS.readerAutoRotate && halTiltSensor.supportsAutoRotation();
+  // Auto posture owns the sensor instead of flick gestures. A modal/held button
+  // freezes it and clears candidates; it must not re-enable flick-to-turn.
+  bool rotationInputIdle = false;
+  if (autoRotate) {
+    rotationInputIdle = !mappedInputManager.wasAnyPressed() && !mappedInputManager.wasAnyReleased();
+    for (uint8_t i = 0; i < MappedInputManager::kButtonCount && rotationInputIdle; ++i) {
+      rotationInputIdle = !mappedInputManager.isPressed(static_cast<MappedInputManager::Button>(i));
+    }
+    int touchX, touchY;
+    rotationInputIdle = rotationInputIdle && !mappedInputManager.isScreenTouchHeld(touchX, touchY);
+  }
+  const bool rotationAllowed = autoRotate && rotationInputIdle && activityManager.allowsReaderAutoRotation();
+  halTiltSensor.update(autoRotate ? CrossPointTiltPageTurn::TILT_OFF : SETTINGS.tiltPageTurn,
+                       static_cast<uint8_t>(renderer.getOrientation()),
+                       autoRotate ? rotationAllowed : activityManager.isReaderActivity(), rotationAllowed);
+#endif
   halClock.update();
 
   // Under the render lock, so a step never overlaps the themes' gauge reads.
@@ -1143,23 +1170,6 @@ void loop() {
 #endif
     if (bleinput::isRunning()) bleinput::logDiagnostics("running");
     lastMemPrint = millis();
-  }
-
-  // Handle incoming serial commands,
-  // nb: we use logSerial from logging to avoid deprecation warnings
-  if (logSerial.available() > 0) {
-    String line = logSerial.readStringUntil('\n');
-    if (line.startsWith("CMD:")) {
-      String cmd = line.substring(4);
-      cmd.trim();
-      if (cmd == "SCREENSHOT") {
-        const uint32_t bufferSize = display.getBufferSize();
-        logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
-        uint8_t* buf = display.getFrameBuffer();
-        logSerial.write(buf, bufferSize);
-        logSerial.printf("SCREENSHOT_END\n");
-      }
-    }
   }
 
   // Check for any real user activity (button, touch, or tilt).
@@ -1236,8 +1246,24 @@ void loop() {
     return;
   }
 
+#if CROSSMUX_USB_DEBUG
+  static bool debugWasKeepingAwake = false;
+  const bool debugKeepAwake = debugbridge::preventAutoSleep();
+  if (debugKeepAwake != debugWasKeepingAwake) {
+    lastActivityTime = millis();
+    debugWasKeepingAwake = debugKeepAwake;
+  }
+#endif
+#if CROSSMUX_USB_DEBUG
+  const unsigned long sleepTimeoutMs = debugbridge::sleepTimeout(SETTINGS.getSleepTimeoutMs());
+#else
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
-  if (sleepTimeoutMs > 0 && !activityManager.preventAutoSleep() && millis() - lastActivityTime >= sleepTimeoutMs) {
+#endif
+  if (sleepTimeoutMs > 0 && !activityManager.preventAutoSleep()
+#if CROSSMUX_USB_DEBUG
+      && !debugKeepAwake
+#endif
+      && millis() - lastActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep(true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
@@ -1315,6 +1341,9 @@ void loop() {
   const unsigned long activityStartTime = millis();
   const bool readerWasActive = activityManager.isReaderActivity();
   activityManager.loop();
+#if CROSSMUX_USB_DEBUG
+  debugbridge::poll();
+#endif
   updateBluetoothLifecycle();
   const bool readerIsActive = activityManager.isReaderActivity();
   const unsigned long activityDuration = millis() - activityStartTime;

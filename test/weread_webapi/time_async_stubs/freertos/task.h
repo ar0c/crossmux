@@ -12,6 +12,7 @@ inline bool failCreate = false;
 inline uint32_t freeAfterCreate = 0;
 inline uint32_t largestAfterCreate = 0;
 inline unsigned lastStackBytes = 0;
+inline void (*afterCreate)() = nullptr;
 inline std::mutex gateMutex;
 inline std::condition_variable gate;
 inline bool notified = false;
@@ -32,6 +33,7 @@ inline int xTaskCreate(void (*fn)(void*), const char*, unsigned stackBytes, void
   }
   if (fakeTask::freeAfterCreate) ESP.free = fakeTask::freeAfterCreate;
   if (fakeTask::largestAfterCreate) ESP.largest = fakeTask::largestAfterCreate;
+  if (fakeTask::afterCreate) fakeTask::afterCreate();
   fakeTask::worker = std::thread(fn, arg);
   *task = reinterpret_cast<void*>(1);
   return 1;

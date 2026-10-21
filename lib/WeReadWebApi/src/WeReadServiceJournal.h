@@ -27,6 +27,7 @@ class ServiceJournal {
     Ledger validator;
     if (!validator.bind(id.account, id.book, id.source, id.day) || consumed > measured || measured > 86400)
       return false;
+    ByteLog::ReadScope readScope(log_);
     const auto status = log_.size(length_);
     if (status == ByteLog::ReadState::Missing) {
       ready_ = true;
