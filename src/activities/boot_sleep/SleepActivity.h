@@ -1,4 +1,6 @@
 #pragma once
+#include <HalEnvironmentSensor.h>
+
 #include <string>
 
 #include "activities/Activity.h"
@@ -26,4 +28,5 @@ class SleepActivity final : public Activity {
   void renderBlankSleepScreen() const;
 
   bool fromTimeout = false;
+  HalEnvironmentSensor::Reading environment_;
 };

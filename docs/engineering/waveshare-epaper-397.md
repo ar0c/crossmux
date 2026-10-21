@@ -49,9 +49,51 @@ qualifies for the one-shot splashless sleep wake. USB insertion, hard power-off,
 mixed/unknown PMIC sources, and missing reads retain the normal startup page.
 The e-paper keeps its sleep frame visible until Home's first physical paint.
 QMI8658 is probed at startup and put into standby until reading requests it;
-SHTC3 remains uninitialized. Automatic direction is limited to opted-in reading
+SHTC3 is sampled on demand by the consumer HAL for standby and sleep screens.
+Automatic direction is limited to opted-in reading
 surfaces; see [reader-auto-rotation.md](reader-auto-rotation.md) for hardware
 gating, axes, power and physical acceptance requirements.
+
+### Ambient temperature and humidity
+
+`HalEnvironmentSensor` uses the SHTC3 at I2C address `0x70` on the existing
+SDA41/SCL42 bus. This is separate from the ESP's internal chip temperature.
+The pinned SDK's `EnvironmentSensor` supports SHT40 only, so its commands and
+humidity conversion must not be used for this board. The HAL follows the
+[Sensirion SHTC3 datasheet](https://sensirion.com/file/datasheet_shtc3): wake
+`0x3517`, normal-mode temperature-first measurement without clock stretching
+`0x7866`, both CRC-8 checks, and sleep `0xB098`. It waits 1 ms after waking and
+13 ms for the conversion (12.1 ms maximum). Every read attempts sleep, including
+failed reads; no bus reset, persistent calibration, new task or heap allocation
+is introduced. The shared bus is initialized by existing hardware startup.
+
+Apps → Standby shows Celsius and relative humidity below both the clock and
+Chinese-calendar faces, reserving a band above the existing face dots. It
+samples on entry and at most once per 60 seconds, including in immersive mode;
+face navigation, inverse mode, time synchronization and gray enhancement remain.
+Sampling happens outside rendering and is serialized with the render lock.
+The calendar's independent day tick does not prevent ambient refreshes.
+
+All Waveshare sleep-screen modes (default, blank, cover, bitmap wallpaper,
+transparent BMP/PNG overlay and quick resume) show a small bottom badge marked
+“Before sleep”. It is sampled once on sleep entry and drawn into the existing
+BW/gray passes, without a second full-screen refresh. PMIC power-off is retained:
+the badge is a snapshot and does not update after shutdown. No RTC alarm or
+automatic power-on is added. Selector gray planes exclude the badge so they do
+not tint its BW pixels; absolute planes carry its actual pixels.
+
+A failed I2C transfer, short response, either CRC failure or failed sleep command
+invalidates the reading; the UI shows an unavailable state rather than stale
+values. A later scheduled read can recover. Each activity holds only its current
+reading and the standby polling timestamp; formatting uses bounded stack buffers.
+Other boards and the simulator neither access SHTC3 nor reserve a footer band.
+
+Host validation: `python3 test/environment/test_environment.py` covers protocol,
+conversion, failures/recovery, sleep attempts, badge layout and gray-plane gates.
+Physical acceptance remains separate: compare ambient readings with a reference,
+test both faces and sleep modes, disconnect/reconnect the sensor only while
+powered off, and measure standby/sleep current. Board self-heating and enclosure
+placement can affect readings; no unmeasured correction offset is applied.
 
 System Settings exposes **Sound Feedback** with Off/Low/Medium/High levels;
 Medium is the default on this target. Low/Medium map to the previous Medium/High

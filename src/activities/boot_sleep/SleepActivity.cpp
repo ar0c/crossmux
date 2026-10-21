@@ -24,6 +24,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "activities/reader/ReaderUtils.h"
+#include "components/EnvironmentOverlay.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/MoonIcon.h"
@@ -348,7 +349,8 @@ AlphaScanResult scanForUsefulAlpha(HalFile& file, const OverlayBmpInfo& info, ui
   return AlphaScanResult::NotUseful;
 }
 
-AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& renderer, const char* pathForLog) {
+AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& renderer, const char* pathForLog,
+                                                  const HalEnvironmentSensor::Reading& environment) {
   OverlayBmpInfo info;
   if (!parseOverlayBmpHeader(file, info, false)) return AlphaOverlayResult::NotAlphaOverlay;
 
@@ -367,6 +369,7 @@ AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& re
 
   if (!renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::BW))
     return AlphaOverlayResult::Error;
+  EnvironmentOverlay::draw(renderer, environment, true);
   const bool absolute = renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
   if (absolute) {
     cleanBeforeAbsoluteGray(renderer);
@@ -384,6 +387,7 @@ AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& re
     // framebuffer that now contains an incomplete gray plane.
     return AlphaOverlayResult::Rendered;
   }
+  EnvironmentOverlay::draw(renderer, environment, true);
   renderer.copyGrayscaleLsbBuffers();
 
   if (!absolute) renderer.clearScreen(0x00);
@@ -392,6 +396,7 @@ AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& re
     renderer.setRenderMode(GfxRenderer::BW);
     return AlphaOverlayResult::Rendered;
   }
+  EnvironmentOverlay::draw(renderer, environment, true);
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBuffer();
@@ -520,6 +525,7 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+  HalEnvironmentSensor::read(environment_);
   if (!sleepCover::recover()) {
     display.setInverted(false);
     return renderDefaultSleepScreen();
@@ -689,6 +695,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
     renderer.invertScreen();
   }
 
+  EnvironmentOverlay::draw(renderer, environment_, true);
   renderer.displayBuffer(kSleepClean);
 }
 
@@ -724,6 +731,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
   }
 
   if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, preserveBackground)) {
+    EnvironmentOverlay::draw(renderer, environment_, true);
     renderer.displayBuffer(kSleepClean);
     return;
   }
@@ -733,6 +741,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
     renderer.invertScreen();
   }
 
+  EnvironmentOverlay::draw(renderer, environment_, true);
   const bool absolute = hasGreyscale && renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
   if (absolute) {
     cleanBeforeAbsoluteGray(renderer);
@@ -760,6 +769,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
         ready = false;
         break;
       }
+      EnvironmentOverlay::draw(renderer, environment_, true);
       if (plane == GfxRenderer::GRAYSCALE_LSB)
         renderer.copyGrayscaleLsbBuffers();
       else
@@ -774,7 +784,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
 }
 
 bool SleepActivity::renderSleepOverlayFile(HalFile& file, const char* pathForLog) const {
-  const auto alphaResult = tryRenderTransparentOverlayBmp(file, renderer, pathForLog);
+  const auto alphaResult = tryRenderTransparentOverlayBmp(file, renderer, pathForLog, environment_);
   if (alphaResult == AlphaOverlayResult::Rendered) return true;
   if (alphaResult == AlphaOverlayResult::Error) return false;
 
@@ -810,6 +820,7 @@ bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
   LOG_DBG("SLP", "Rendering transparent PNG overlay: %s (%dx%d)", path.c_str(), dimensions.width, dimensions.height);
 
   if (!converter.decodeToFramebuffer(path, renderer, config)) return false;
+  EnvironmentOverlay::draw(renderer, environment_, true);
   const bool absolute = renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
   if (absolute) {
     if (!renderer.displayGrayscaleBase(sleepGrayscaleMode(renderer))) return false;
@@ -824,6 +835,7 @@ bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
     renderer.setRenderMode(GfxRenderer::BW);
     return true;
   }
+  EnvironmentOverlay::draw(renderer, environment_, true);
   renderer.copyGrayscaleLsbBuffers();
 
   if (!absolute) renderer.clearScreen(0x00);
@@ -832,6 +844,7 @@ bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
     renderer.setRenderMode(GfxRenderer::BW);
     return true;
   }
+  EnvironmentOverlay::draw(renderer, environment_, true);
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBuffer();
@@ -947,6 +960,7 @@ void SleepActivity::renderCoverSleepScreen() const {
 void SleepActivity::renderLastScreenSleepScreen() const {
   const auto pageHeight = renderer.getScreenHeight();
   renderer.drawImage(MoonIcon, 0, pageHeight - MOONICON_HEIGHT, MOONICON_WIDTH, MOONICON_HEIGHT);
+  EnvironmentOverlay::draw(renderer, environment_, true);
   // Only the moon differs from the displayed frame, so a differential FAST
   // update adds it without the flashing clean pass (which sweeps the panel
   // through the inverse — a full white flash on a night-mode page).
@@ -959,5 +973,6 @@ void SleepActivity::renderLastScreenSleepScreen() const {
 
 void SleepActivity::renderBlankSleepScreen() const {
   renderer.clearScreen();
+  EnvironmentOverlay::draw(renderer, environment_, true);
   renderer.displayBuffer(kSleepClean);
 }

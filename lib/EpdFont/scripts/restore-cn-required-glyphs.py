@@ -86,7 +86,8 @@ def repair_font(text, archive, name, required):
     output = re.sub(r"static const EpdUnicodeInterval " + name + r"Intervals\[\] = \{.*?\n\};", lambda _: interval_array, output, count=1, flags=re.S)
     output = re.sub(r"(" + name + r"Intervals,\n\s*)\d+,", lambda match: match[1] + str(len(intervals)) + ",", output, count=1)
     notice = f" * Required UI glyph additions restored by restore-cn-required-glyphs.py from {REFERENCE}.\n"
-    output = output.replace(" */\n", notice + " */\n", 1)
+    if notice not in output:
+        output = output.replace(" */\n", notice + " */\n", 1)
     checked_bitmap, checked_glyphs = parse_font(output, name)
     if checked_bitmap[:len(bitmap)] != bitmap or any(
         glyph_content(bitmap, glyph) != glyph_content(checked_bitmap, checked_glyphs[cp]) for cp, glyph in glyphs.items()

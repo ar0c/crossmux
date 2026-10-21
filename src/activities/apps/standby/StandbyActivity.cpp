@@ -30,6 +30,7 @@
 #include "SloppyClockFace.h"
 #include "StandbyTime.h"
 #include "WifiCredentialStore.h"
+#include "components/EnvironmentOverlay.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -38,6 +39,8 @@ namespace {
 constexpr uint32_t kWifiTimeoutMs = 15000u;  // Same as WifiSelectionActivity
 constexpr uint32_t kNtpTimeoutMs = 12000u;
 constexpr uint32_t kSyncDelayMs = 1500u;
+constexpr uint32_t kEnvironmentIntervalMs = 60000u;
+constexpr int kEnvironmentBottomInset = 38;  // leave the face pagination dots visible
 #if CROSSPOINT_EMULATED == 0
 constexpr uint32_t kMaxLightSleepSeconds = 60u;
 #endif
@@ -128,6 +131,7 @@ void StandbyActivity::onEnter() {
     return;
   }
   currentFace_->onEnter();
+  updateEnvironment();
   mode_ = DisplayMode::Normal;
   lastInputMs_ = millis();
   if (!TimeUtils::isClockValid() && SETTINGS.clockAutoSync) {
@@ -368,12 +372,25 @@ void StandbyActivity::completeTimeSync() {
   requestUpdate();
 }
 
+bool StandbyActivity::updateEnvironment() {
+  if (!HalEnvironmentSensor::supported()) return false;
+  const uint32_t now = millis();
+  if (environmentSampled_ && now - environmentPollMs_ < kEnvironmentIntervalMs) return false;
+  RenderLock lock;
+  HalEnvironmentSensor::read(environment_);
+  environmentSampled_ = true;
+  environmentPollMs_ = millis();
+  return true;
+}
+
 void StandbyActivity::processFaceTick(const bool waitForUpdate) {
   if (!currentFace_) return;
+  const bool environmentChanged = updateEnvironment();
 
   switch (currentFace_->tick()) {
     case StandbyFace::TickResult::None:
-      return;
+      if (!environmentChanged) return;
+      break;
     case StandbyFace::TickResult::Redraw:
       break;
     case StandbyFace::TickResult::RedrawWithGhostCleanup:
@@ -549,7 +566,9 @@ void StandbyActivity::render(RenderLock&&) {
   int viewBottom = 0;
   int viewLeft = 0;
   renderer.getOrientedViewableTRBL(&viewTop, &viewRight, &viewBottom, &viewLeft);
-  const Rect faceViewport{viewLeft, viewTop, sw - viewLeft - viewRight, sh - viewTop - viewBottom};
+  const Rect faceViewport{
+      viewLeft, viewTop, sw - viewLeft - viewRight,
+      sh - viewTop - viewBottom - EnvironmentOverlay::reservedHeight(renderer, kEnvironmentBottomInset)};
   const int overlayTop = std::max(metrics.topPadding, viewTop);
 
   renderer.clearScreen();
@@ -561,6 +580,7 @@ void StandbyActivity::render(RenderLock&&) {
                                       faceViewport.height);
     currentFace_->render(renderer, faceViewport);
   }
+  EnvironmentOverlay::draw(renderer, environment_, false, kEnvironmentBottomInset);
 
   const bool clockValid = TimeUtils::isClockValid();
   if (!clockValid) {
@@ -617,6 +637,7 @@ void StandbyActivity::applyGrayscalePass(const Rect& viewport) {
     const GfxRenderer::ClipScope clip(renderer, viewport.x, viewport.y, viewport.width, viewport.height);
     currentFace_->render(renderer, viewport);
   }
+  EnvironmentOverlay::draw(renderer, environment_, false, kEnvironmentBottomInset);
   renderer.copyGrayscaleLsbBuffers();
 
   renderer.clearScreen(0x00);
@@ -625,6 +646,7 @@ void StandbyActivity::applyGrayscalePass(const Rect& viewport) {
     const GfxRenderer::ClipScope clip(renderer, viewport.x, viewport.y, viewport.width, viewport.height);
     currentFace_->render(renderer, viewport);
   }
+  EnvironmentOverlay::draw(renderer, environment_, false, kEnvironmentBottomInset);
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBuffer();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <HalEnvironmentSensor.h>
+
 #include <cstdint>
 #include <memory>
 
@@ -45,6 +47,9 @@ class StandbyActivity final : public Activity {
   DisplayMode mode_ = DisplayMode::Normal;
   uint32_t lastInputMs_ = 0;
   bool inverseMode_ = false;  // Confirm toggles black-bg/white-content. Not persisted.
+  HalEnvironmentSensor::Reading environment_;
+  uint32_t environmentPollMs_ = 0;
+  bool environmentSampled_ = false;
 
   void switchFace(int8_t delta);
   void startTimeSync();
@@ -56,6 +61,7 @@ class StandbyActivity final : public Activity {
   void stopTimeSyncWifi();
   void completeTimeSync();
   void processFaceTick(bool waitForUpdate);
+  bool updateEnvironment();
   bool tryLightSleep(uint32_t idleMs);
 
   // Layer a 4-level grayscale refresh on top of the BW image just committed by

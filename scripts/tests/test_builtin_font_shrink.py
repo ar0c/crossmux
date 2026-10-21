@@ -18,6 +18,7 @@ FONTS = ROOT / "lib/EpdFont/builtinFonts"
 CHARACTERS = "0123456789 +-×÷.%=e�"
 CJK_ADDED_CODEPOINTS = {0x0401, 0x0451, 0x2116} | set(range(0x0410, 0x0450))
 CJK_FORK_UI_CODEPOINTS = {ord(char) for char in "且云仍代决冻另含听响影忙旧核满给诊轮队隔零"}
+CJK_ENVIRONMENT_UI_CODEPOINTS = {ord("湿")}
 REGENERATE = "--regenerate" in sys.argv
 if REGENERATE:
     sys.argv.remove("--regenerate")
@@ -93,7 +94,7 @@ class BuiltinFontShrinkTest(unittest.TestCase):
         }
         for size, (count, digest) in expected.items():
             glyphs = cjk_glyphs(size)
-            fork_ui = CJK_FORK_UI_CODEPOINTS if size >= 14 else set()
+            fork_ui = CJK_FORK_UI_CODEPOINTS | CJK_ENVIRONMENT_UI_CODEPOINTS if size >= 14 else set()
             legacy = {cp: glyph for cp, glyph in glyphs.items() if cp not in CJK_ADDED_CODEPOINTS | fork_ui}
             self.assertEqual(len(legacy), count)
             self.assertEqual(len(glyphs), count + len(CJK_ADDED_CODEPOINTS) + len(fork_ui))
