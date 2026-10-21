@@ -19,6 +19,11 @@ on:
         options:
           - auto
           - waveshare_epaper_397
+      ci_run_id:
+        description: 'Successful CI run for this exact commit (auto selects the latest)'
+        required: false
+        default: auto
+        type: string
 
 concurrency:
   group: firmware-nightly-publish
@@ -28,16 +33,10 @@ permissions:
   contents: read
 
 jobs:
-  select_runner:
-    uses: ./.github/workflows/select-build-runner.yml
-    secrets:
-      runner_status_token: ${{ secrets.H2O_RUNNER_TOKEN }}
-
   prepare:
     runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.release.outputs.channel }}
-      matrix: ${{ steps.release.outputs.matrix }}
       build_id: ${{ steps.release.outputs.build_id }}
       build_tag: ${{ steps.release.outputs.build_tag }}
       target_args: ${{ steps.release.outputs.target_args }}
@@ -59,7 +58,6 @@ jobs:
             *) echo "::error::Unsupported Nightly target: $RELEASE_TARGET"; exit 1 ;;
           esac
           echo "target_args=${target_args[*]}" >> "$GITHUB_OUTPUT"
-          echo "matrix=$(python3 scripts/package_nightly_target.py --channel "$channel" --matrix "${target_args[@]}")" >> "$GITHUB_OUTPUT"
 
   notes:
     needs: prepare
@@ -103,55 +101,37 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
-  build:
-    needs: [prepare, select_runner]
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-    name: ${{ matrix.targetId }} (${{ needs.prepare.outputs.channel }})
-    runs-on: ${{ fromJSON(needs.select_runner.outputs['runs-on']) }}
+  reuse_ci:
+    needs: prepare
+    name: Reuse verified CI firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
     steps:
-      - name: Isolate PlatformIO toolchains
-        run: echo "PLATFORMIO_CORE_DIR=$RUNNER_TEMP/.platformio-$GITHUB_RUN_ID-$GITHUB_JOB-${{ matrix.targetId }}" >> "$GITHUB_ENV"
-      - name: Use runner temporary directory
-        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@v7
-        with:
-          version: latest
-          enable-cache: false
-      - name: Install PlatformIO Core
-        run: uv pip install --system -U pioarduino==6.2.0
-
-      - name: Prepare platform tools
-        run: python scripts/patch_pioarduino_cache.py --prepare-platform
-      - name: Set seven-character build revision
-        run: |
-          echo "CROSSPOINT_RC_HASH=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-          echo "CROSSPOINT_BUILD_KIND=rc" >> "$GITHUB_ENV"
-      - name: Build unified target
-        run: pio run -e "${{ matrix.environment }}"
-      - name: Package and verify unified target
+      - name: Download and reverify exact successful CI package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
         run: |
           set -euo pipefail
-          python3 scripts/package_nightly_target.py "${{ matrix.targetId }}" \
-            --channel "${{ needs.prepare.outputs.channel }}" \
-            --output "dist/${{ matrix.targetId }}"
-          (cd "dist/${{ matrix.targetId }}" && sha256sum --check *-SHA256SUMS)
+          python3 scripts/promote_ci_firmware.py promote \
+            --run-id "${CI_RUN_ID:-auto}" --output dist/waveshare_epaper_397
+          (cd dist/waveshare_epaper_397 && sha256sum --check *-SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ needs.prepare.outputs.channel }}-${{ matrix.targetId }}
-          path: dist/${{ matrix.targetId }}
+          name: firmware-${{ needs.prepare.outputs.channel }}-waveshare_epaper_397
+          path: dist/waveshare_epaper_397
           if-no-files-found: error
           retention-days: 14
 
   publish_github:
-    needs: [prepare, notes, build]
+    needs: [prepare, notes, reuse_ci]
     runs-on: ubuntu-latest
     outputs:
       has_previous: ${{ steps.previous.outputs.present }}

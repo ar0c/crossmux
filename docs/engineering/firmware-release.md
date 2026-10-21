@@ -83,9 +83,34 @@ business result. A healthy Pod or OTA index alone does not prove device
 behavior. Do not release uncertain reading-time batches, fabricate credit, or
 perform irreversible hardware/security writes under this authorization.
 
-Each target job builds once and packages one binary set plus two compatibility
-manifests. Packaging checks the ESP image chip ID, required board tag, partition
-layout, app-slot size, and SHA-256 before emitting the manifests.
+CI builds and packages one binary set plus two compatibility manifests. Packaging
+checks the ESP image chip ID, required board tag, partition layout, app-slot size,
+and SHA-256 before emitting the manifests. CI seals the complete package with its
+repository, ref, commit, SDK, run ID, attempt, target, version and per-file hashes,
+then uploads `firmware-nightly-waveshare_epaper_397-ci-<attempt>` for 14 days.
+The legacy single-binary CI download remains available.
+
+Firmware Release promotes that package instead of invoking PlatformIO. Its optional
+`ci_run_id` input defaults to `auto`, selecting the latest successful CI run for
+the exact release commit and ref. Only this repository's `.github/workflows/ci.yml`
+push or manual runs qualify; PR/fork runs never qualify. Manual CI on another
+owned branch can still feed a release dispatched on that same branch.
+
+Promotion requires the overall CI run to be complete and successful, a unique
+unexpired artifact for its current attempt, and GitHub's archive SHA-256 digest.
+The archive is size-bounded and extracted only after checking for extra/nested
+files, duplicates and symlinks. The downloaded package is checked again against
+the release checkout: SDK gitlink, embedded firmware version, board/chip, debug
+exclusion, OTA limit, manifest pair, checksum file and provenance must all agree.
+The selected run and artifact are read again before promotion to reject a racing
+rerun or deletion. The reused binary bytes are not repackaged or rebuilt; the CI
+provenance is retained with the immutable release and linked in the job summary.
+
+A missing, expired, old-attempt or invalid package blocks publication. Re-run the
+complete CI workflow on that commit, then dispatch release again (optionally pin
+the new CI run ID). A failed-jobs-only rerun cannot substitute an earlier attempt's
+package. There is no automatic rebuild or fallback to another commit. Historical
+releases remain the rollback source even after CI artifacts expire.
 
 The fork publishes to its GitHub Releases only, in this order:
 
@@ -93,7 +118,7 @@ The fork publishes to its GitHub Releases only, in this order:
 2. immutable target manifests;
 3. rolling channel index.
 
-Every target selected for a channel must build successfully before publication.
+Every target selected for a channel must have a successfully verified CI package before publication.
 CI resolves every manifest and verifies each distinct asset's size and SHA-256.
 Previous Nightly indexes are saved as evidence. The current workflow does
 not delete retired firmware assets or historical builds. The rolling Nightly

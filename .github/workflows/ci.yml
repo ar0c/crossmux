@@ -167,6 +167,19 @@ jobs:
           python3 scripts/package_nightly_target.py waveshare_epaper_397 --channel nightly
           (cd dist/nightly/waveshare_epaper_397 && sha256sum --check *-SHA256SUMS)
 
+      - name: Seal complete CI firmware package
+        run: |
+          python3 scripts/promote_ci_firmware.py seal \
+            --package dist/nightly/waveshare_epaper_397
+
+      - name: Upload reusable CI firmware package
+        uses: actions/upload-artifact@v6
+        with:
+          name: firmware-nightly-waveshare_epaper_397-ci-${{ github.run_attempt }}
+          path: dist/nightly/waveshare_epaper_397/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Extract firmware stats
         run: |
           set -euo pipefail
