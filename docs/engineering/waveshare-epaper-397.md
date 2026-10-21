@@ -105,6 +105,9 @@ invalidates the reading; the UI shows an unavailable state rather than stale
 values. A later scheduled read can recover. Each activity holds only its current
 reading and the standby polling timestamp; formatting uses bounded stack buffers.
 Other boards and the simulator neither access SHTC3 nor reserve a footer band.
+The simulator replaces the hardware HAL library, so its build hook explicitly
+compiles the project-owned `HalEnvironmentSensor.cpp` unsupported fallback.
+The environment host test links that fallback using the hook's source registrations.
 
 Host validation: `python3 test/environment/test_environment.py` covers protocol,
 conversion, failures/recovery, sleep attempts, badge layout and gray-plane gates.
