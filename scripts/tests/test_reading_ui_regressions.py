@@ -990,6 +990,7 @@ template<class T,class... Args> auto makeUniqueNoThrow(Args&&... args) {
   return std::make_unique<T>(std::forward<Args>(args)...);
 }
 struct { bool standbyShortcutEnabled=true; } SETTINGS;
+struct { bool retryPendingSave(bool = false) const { return true; } } RECENT_BOOKS;
 struct ActivityManager {
 ''' + header[state_start:state_end] + r'''
   enum class PendingAction { None,Push,Pop,Replace };
