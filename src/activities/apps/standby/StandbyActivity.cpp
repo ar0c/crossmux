@@ -28,7 +28,14 @@
 #include "ChineseCalendarFace.h"
 #endif
 #include "SloppyClockFace.h"
+#include "StandbySchedule.h"
 #include "StandbyTime.h"
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+#include "activities/apps/weread/webapi/WeReadTimeSync.h"
+#if CROSSPOINT_CAP_SOUND_FEEDBACK
+#include <SoundFeedback.h>
+#endif
+#endif
 #include "WifiCredentialStore.h"
 #include "components/EnvironmentOverlay.h"
 #include "components/UITheme.h"
@@ -39,7 +46,6 @@ namespace {
 constexpr uint32_t kWifiTimeoutMs = 15000u;  // Same as WifiSelectionActivity
 constexpr uint32_t kNtpTimeoutMs = 12000u;
 constexpr uint32_t kSyncDelayMs = 1500u;
-constexpr uint32_t kEnvironmentIntervalMs = 60000u;
 constexpr int kEnvironmentBottomInset = 38;  // leave the face pagination dots visible
 #if CROSSPOINT_EMULATED == 0
 constexpr uint32_t kMaxLightSleepSeconds = 60u;
@@ -372,22 +378,26 @@ void StandbyActivity::completeTimeSync() {
   requestUpdate();
 }
 
-bool StandbyActivity::updateEnvironment() {
+bool StandbyActivity::updateEnvironment(const bool faceChanged) {
   if (!HalEnvironmentSensor::supported()) return false;
   const uint32_t now = millis();
-  if (environmentSampled_ && now - environmentPollMs_ < kEnvironmentIntervalMs) return false;
+  if (!standby_schedule::sampleDue(now, environmentPollMs_, environmentSampled_, faceChanged)) return false;
   RenderLock lock;
-  HalEnvironmentSensor::read(environment_);
+  HalEnvironmentSensor::Reading next;
+  HalEnvironmentSensor::read(next);
+  const bool changed = !environmentSampled_ || EnvironmentOverlay::visibleReadingChanged(environment_, next);
+  environment_ = next;
   environmentSampled_ = true;
   environmentPollMs_ = millis();
-  return true;
+  return changed;
 }
 
 void StandbyActivity::processFaceTick(const bool waitForUpdate) {
   if (!currentFace_) return;
-  const bool environmentChanged = updateEnvironment();
+  const auto faceTick = currentFace_->tick();
+  const bool environmentChanged = updateEnvironment(faceTick != StandbyFace::TickResult::None);
 
-  switch (currentFace_->tick()) {
+  switch (faceTick) {
     case StandbyFace::TickResult::None:
       if (!environmentChanged) return;
       break;
@@ -409,6 +419,14 @@ void StandbyActivity::processFaceTick(const bool waitForUpdate) {
 bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
 #if CROSSPOINT_EMULATED == 0
   if (mode_ != DisplayMode::Immersive || !currentFace_) return false;
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  // A retained-RAM sleep must not freeze a background upload/SD transaction.
+  if (WeReadTimeSync::active() || activityManager.isSwitchPending()) return false;
+  // The PMIC IRQ is acknowledged by the shared poll on press. Its GPIO may
+  // already be high while Power is still held: keep polling for hold/release.
+  for (uint8_t i = 0; i < MappedInputManager::kButtonCount; ++i)
+    if (mappedInput.isPressed(static_cast<MappedInputManager::Button>(i))) return false;
+#endif
 
   const bool syncActive = syncState_ != SyncState::Idle;
   const bool wifiActive = WiFi.getMode() != WIFI_MODE_NULL;
@@ -417,10 +435,18 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
     return false;
   }
 
-  const uint32_t seconds = std::clamp<uint32_t>(currentFace_->secondsUntilNextWake(), 1, kMaxLightSleepSeconds);
+  const uint32_t seconds = HalEnvironmentSensor::supported()
+                               ? standby_schedule::sleepSeconds(currentFace_->secondsUntilNextWake(), millis(),
+                                                                environmentPollMs_, environmentSampled_)
+                               : std::clamp<uint32_t>(currentFace_->secondsUntilNextWake(), 1, kMaxLightSleepSeconds);
   HalPowerManager::LightSleepWakeReason wakeReason;
   {
     RenderLock lock;
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397 && CROSSPOINT_CAP_SOUND_FEEDBACK
+    // Physical cues have finished after the idle threshold. Release I2S and
+    // the amp/audio rails; the next real key initializes them again as usual.
+    SoundFeedback::shutdown();
+#endif
     wakeReason = powerManager.lightSleepFor(seconds);
   }
   switch (wakeReason) {
@@ -431,6 +457,11 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
       mode_ = DisplayMode::Normal;
       lastInputMs_ = millis();
       requestUpdate();
+      return true;
+    case HalPowerManager::LightSleepWakeReason::Input:
+      // Let the ordinary shared input poll classify this gesture, including
+      // short/double/held rocker presses and PWR hold-to-sleep. Do not eat it.
+      lastInputMs_ = millis();
       return true;
     case HalPowerManager::LightSleepWakeReason::Failed:
       lastInputMs_ = millis();
@@ -649,7 +680,7 @@ void StandbyActivity::applyGrayscalePass(const Rect& viewport) {
   EnvironmentOverlay::draw(renderer, environment_, false, kEnvironmentBottomInset);
   renderer.copyGrayscaleMsbBuffers();
 
-  renderer.displayGrayBuffer();
+  renderer.displayGrayBuffer(HalEnvironmentSensor::supported());
   renderer.setRenderMode(GfxRenderer::BW);
   renderer.restoreBwBuffer();
 }

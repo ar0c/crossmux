@@ -25,7 +25,7 @@ class HalPowerManager {
   SemaphoreHandle_t modeMutex = nullptr;  // Protect lock mode, clock transitions, and isLowPower
 
  public:
-  enum class LightSleepWakeReason : uint8_t { Timer, PowerButton, Failed };
+  enum class LightSleepWakeReason : uint8_t { Timer, PowerButton, Input, Failed };
 
 #if BOARD_HAS_PSRAM
   static constexpr int LOW_POWER_FREQ = 80;  // MHz
@@ -44,9 +44,10 @@ class HalPowerManager {
   // Should be called inside main loop() to handle the currentLockMode
   void startDeepSleep(HalGPIO& gpio) const;
 
-  // True when this board can run a light-sleep cycle at all. Only the
-  // runtime-selected X3 profiles and Read Pico have validated standby wake
-  // wiring; every other target reports false. Read Pico's is valid whenever the
+  // True when this board's configured standby wake sources are available.
+  // Waveshare uses its PMIC IRQ plus the four physical buttons, with
+  // radio/background-work guards. The existing X3 retention policy is unchanged.
+  // Read Pico's wake source is available whenever the
   // FCA9555 came up, and its wake set is armed in HalPowerManager.cpp (IOE INT#
   // GPIO41, low level) rather than from a GPIO power pin.
   bool canStandbyLightSleep(const HalGPIO& gpio) const;

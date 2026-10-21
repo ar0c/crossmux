@@ -464,7 +464,8 @@ class GfxRenderer {
                             HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH) const;
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
-  void displayGrayBuffer() const;
+  // Optionally power down the panel's analog drive after refreshing; retain its image and RAM.
+  void displayGrayBuffer(bool turnOffScreen = false) const;
   // Active input encoding, used when drawing monochrome overlays into planes.
   bool grayPlanesAreAbsolute() const { return absoluteGrayPlanes; }
 

@@ -24,6 +24,7 @@
 
 #include "HalGPIO.h"
 #include "Waveshare397Power.h"
+#include "Waveshare397Standby.h"
 
 #if FREEINK_DEVICE_PAPERMONO
 #include <M5Pm1.h>
@@ -318,7 +319,10 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
 }
 
 bool HalPowerManager::canStandbyLightSleep(const HalGPIO& gpio) const {
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  (void)gpio;
+  return Waveshare397Standby::available();
+#elif FREEINK_DEVICE_READPICO
   // The power key is PMU-owned and has no GPIO, so the generic
   // powerPin/retention test below can never pass here. What this board has is a
   // LEVEL wake on the FCA9555 INT# (GPIO41) plus the sleep timer, and the
@@ -332,7 +336,16 @@ bool HalPowerManager::canStandbyLightSleep(const HalGPIO& gpio) const {
 }
 
 HalPowerManager::LightSleepWakeReason HalPowerManager::lightSleepFor(const uint32_t seconds) const {
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  switch (Waveshare397Standby::sleepFor(seconds)) {
+    case Waveshare397Standby::Wake::Timer:
+      return LightSleepWakeReason::Timer;
+    case Waveshare397Standby::Wake::Input:
+      return LightSleepWakeReason::Input;
+    default:
+      return LightSleepWakeReason::Failed;
+  }
+#elif FREEINK_DEVICE_READPICO
   // Read Pico: no GPIO power key, no standby retention rail. The wake set is the
   // FCA9555 INT# (GPIO41) on the LOW level plus the timer, wired through the new
   // freeink::PowerManager light-sleep primitives. GPIO41 is NOT RTC-capable on

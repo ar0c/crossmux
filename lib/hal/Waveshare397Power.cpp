@@ -11,7 +11,7 @@ namespace Waveshare397Power {
 namespace {
 
 constexpr uint8_t I2C_ADDRESS = 0x34;
-constexpr int8_t IRQ_PIN = 38;
+constexpr int8_t IRQ_PIN = POWER_IRQ_PIN;
 
 enum class Register : uint8_t {
   Status1 = 0x00,
@@ -130,6 +130,8 @@ bool begin() {
   }
   return true;
 }
+
+bool isReady() { return ready; }
 
 bool wasWokenByPowerKeyAfterSoftwareShutdown() { return ready && softwareSleepPowerKeyBoot; }
 

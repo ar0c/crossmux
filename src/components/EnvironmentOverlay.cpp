@@ -6,9 +6,29 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+void formatValue(char (&value)[64], const HalEnvironmentSensor::Reading& reading) {
+  if (reading.valid) {
+    std::snprintf(value, sizeof(value), tr(STR_ENVIRONMENT_READING), static_cast<double>(reading.temperatureC),
+                  static_cast<unsigned>(std::lround(reading.humidityPct)));
+  } else {
+    std::snprintf(value, sizeof(value), "%s", tr(STR_ENVIRONMENT_UNAVAILABLE));
+  }
+}
+}  // namespace
+
+bool EnvironmentOverlay::visibleReadingChanged(const HalEnvironmentSensor::Reading& before,
+                                               const HalEnvironmentSensor::Reading& after) {
+  char oldValue[64], newValue[64];
+  formatValue(oldValue, before);
+  formatValue(newValue, after);
+  return std::strcmp(oldValue, newValue) != 0;
+}
 
 int EnvironmentOverlay::reservedHeight(const GfxRenderer& renderer, const int bottomInset) {
   return HalEnvironmentSensor::supported() ? renderer.getLineHeight(SMALL_FONT_ID) + 8 + bottomInset : 0;
@@ -18,12 +38,7 @@ void EnvironmentOverlay::draw(const GfxRenderer& renderer, const HalEnvironmentS
                               const bool snapshot, const int bottomInset) {
   if (!HalEnvironmentSensor::supported()) return;
   char value[64];
-  if (reading.valid) {
-    std::snprintf(value, sizeof(value), tr(STR_ENVIRONMENT_READING), static_cast<double>(reading.temperatureC),
-                  static_cast<unsigned>(std::lround(reading.humidityPct)));
-  } else {
-    std::snprintf(value, sizeof(value), "%s", tr(STR_ENVIRONMENT_UNAVAILABLE));
-  }
+  formatValue(value, reading);
   char text[96];
   std::snprintf(text, sizeof(text), snapshot ? tr(STR_ENVIRONMENT_BEFORE_SLEEP) : "%s", value);
 

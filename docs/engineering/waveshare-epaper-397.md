@@ -69,10 +69,28 @@ is introduced. The shared bus is initialized by existing hardware startup.
 
 Apps → Standby shows Celsius and relative humidity below both the clock and
 Chinese-calendar faces, reserving a band above the existing face dots. It
-samples on entry and at most once per 60 seconds, including in immersive mode;
+samples on entry and every 60 seconds, coalescing with face ticks when possible;
 face navigation, inverse mode, time synchronization and gray enhancement remain.
 Sampling happens outside rendering and is serialized with the render lock.
 The calendar's independent day tick does not prevent ambient refreshes.
+
+After 35 seconds without input, immersive standby uses retained-RAM light sleep
+on battery. The timer wakes for the next clock tick or ambient sample, with a
+maximum interval of 60 seconds. GPIO0/4/5/6 and the AXP2101 IRQ on GPIO38 use
+digital low-level wake; normal input processing still classifies short, double
+and held gestures. A pending input prevents sleep. Every attempted cycle removes
+its GPIO/timer wake sources before returning; failures back off through the idle
+threshold rather than looping immediately.
+
+USB/charging, Wi-Fi, time synchronization, a running BLE host, background WeRead
+synchronization or a pending activity switch keep the existing awake behavior.
+Light sleep does not disconnect radio links to save power. Idle audio/I2S and
+audio rails are shut down before sleeping and restart on the next physical cue.
+The grayscale standby pass powers down the panel's analog drive after refresh
+without clearing its image or RAM. Unchanged formatted sensor values do not
+cause a redraw; changed values use the existing full-face rendering path.
+No new framebuffer, worker task or persistent setting is added. Other boards'
+standby sleep policy remains unchanged.
 
 All Waveshare sleep-screen modes (default, blank, cover, bitmap wallpaper,
 transparent BMP/PNG overlay and quick resume) show a small bottom badge marked
@@ -90,10 +108,16 @@ Other boards and the simulator neither access SHTC3 nor reserve a footer band.
 
 Host validation: `python3 test/environment/test_environment.py` covers protocol,
 conversion, failures/recovery, sleep attempts, badge layout and gray-plane gates.
+`python3 test/standby_power/test_standby_power.py` compiles the production sleep
+helper against fault-injecting GPIO/timer/radio stubs and covers cadence, each
+wake pin, input races, setup/cleanup failures and unsupported-board/simulator gates.
 Physical acceptance remains separate: compare ambient readings with a reference,
 test both faces and sleep modes, disconnect/reconnect the sensor only while
 powered off, and measure standby/sleep current. Board self-heating and enclosure
 placement can affect readings; no unmeasured correction offset is applied.
+Also hold each input across timer boundaries, repeat wake gestures, test BLE and
+USB exclusions, and verify clock/ambient updates during a long battery-only idle.
+No measured current reduction or hardware wake reliability is claimed by host tests.
 
 System Settings exposes **Sound Feedback** with Off/Low/Medium/High levels;
 Medium is the default on this target. Low/Medium map to the previous Medium/High
@@ -116,7 +140,7 @@ it at the next PCM buffer boundary; input handling never waits for playback.
 The I²S line is primed before the NS4150B is raised, followed by a Waveshare-only
 10 ms amp-settle interval so the 10 ms `select` waveform is not clipped. Off
 stops playback and powers down the codec, amplifier, and AXP2101 audio rails.
-The wake gesture remains absorbed. A screenshot chord may play the constituent
+The PMIC power-on gesture remains absorbed. A screenshot chord may play the constituent
 physical-key cues, but screenshot recognition adds no cue of its own.
 
 GPIO4/GPIO6 short presses emit Left/Right on release. Holding either key for

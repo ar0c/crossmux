@@ -3,6 +3,7 @@
 #include <cstdint>
 
 namespace Waveshare397Power {
+inline constexpr int8_t POWER_IRQ_PIN = 38;
 
 // AXP2101 REG20/REG21 distinguish a PWR-key start after firmware shutdown
 // from USB insertion and other cold boots. Unknown or mixed causes fail closed.
@@ -53,6 +54,7 @@ class PowerKeyState {
 };
 
 bool begin();
+bool isReady();
 bool wasWokenByPowerKeyAfterSoftwareShutdown();
 bool powerButtonPressed();
 void waitForPowerButtonRelease();

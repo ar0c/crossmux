@@ -13,6 +13,12 @@ unsigned delayMs = 0;
 
 int main() {
   using HalEnvironmentSensor::Reading;
+  assert(!EnvironmentOverlay::visibleReadingChanged({25.21f, 50.1f, true}, {25.24f, 50.2f, true}));
+  assert(EnvironmentOverlay::visibleReadingChanged({25.21f, 50.1f, true}, {25.31f, 50.2f, true}));
+  assert(EnvironmentOverlay::visibleReadingChanged({25.21f, 50.1f, true}, {25.21f, 51.1f, true}));
+  assert(EnvironmentOverlay::visibleReadingChanged({}, {25, 50, true}));
+  assert(EnvironmentOverlay::visibleReadingChanged({25, 50, true}, {}));
+  assert(!EnvironmentOverlay::visibleReadingChanged({}, {}));
 #if FREEINK_DEVICE_WAVESHARE_EPAPER_397 && !defined(SIMULATOR)
   assert(HalEnvironmentSensor::supported());
   Reading reading;

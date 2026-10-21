@@ -214,6 +214,9 @@ add_test(NAME HalTiltGestures
 add_test(NAME EnvironmentStandby
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/environment/test_environment.py)
 
+add_test(NAME WaveshareStandbyPower
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/standby_power/test_standby_power.py)
+
 add_test(NAME NativeGrayscale
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_native_grayscale.py
     ${crosspoint_simulator_SOURCE_DIR} ${CMAKE_CXX_COMPILER} ${jpegdec_SOURCE_DIR}/src)

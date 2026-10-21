@@ -2899,8 +2899,8 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuff
 
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
-void GfxRenderer::displayGrayBuffer() const {
-  display.displayGrayBuffer(fadingFix);
+void GfxRenderer::displayGrayBuffer(const bool turnOffScreen) const {
+  display.displayGrayBuffer(turnOffScreen || fadingFix);
   absoluteGrayPlanes = false;
 }
 

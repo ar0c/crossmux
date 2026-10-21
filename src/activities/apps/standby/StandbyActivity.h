@@ -61,7 +61,7 @@ class StandbyActivity final : public Activity {
   void stopTimeSyncWifi();
   void completeTimeSync();
   void processFaceTick(bool waitForUpdate);
-  bool updateEnvironment();
+  bool updateEnvironment(bool faceChanged = false);
   bool tryLightSleep(uint32_t idleMs);
 
   // Layer a 4-level grayscale refresh on top of the BW image just committed by
