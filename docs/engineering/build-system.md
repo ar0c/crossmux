@@ -28,6 +28,13 @@
 * `platformio.local.ini`: Local overrides (gitignored, create if needed)
 * `partitions.csv`: ESP32 flash partition layout
 
+Current version families and isolation boundaries are recorded in
+[DEPENDENCIES.md](../../DEPENDENCIES.md). Reader and remote share only the
+pioarduino 6.2.0 download cache at `~/.cache/pioarduino-6.2.0`; installed SDKs,
+project libraries and derived build caches remain separate. Explicit
+`PLATFORMIO_CACHE_DIR` overrides still take precedence. Existing caches are
+retained; this does not publish or upgrade firmware.
+
 The default PlatformIO core directory is project-local (`.platformio`, ignored).
 This isolates both pinned framework packages and platform build-script patches:
 another project's upgrade must not replace Arduino headers during this build.
