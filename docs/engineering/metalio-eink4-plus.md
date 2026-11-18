@@ -31,7 +31,8 @@
 - `platformio.ini` 的 `metalio_eink4_plus_platform` 将 [pioarduino 61.04.00-RC1](https://github.com/pioarduino/platform-espressif32/releases/tag/61.04.00-RC1) 单独固定到 S31 验证目标。该版本使用 Arduino 4.0.0-RC1 与 ESP-IDF 6.1，包含 16 MB Flash／Octal PSRAM 的 `esp32-s31-coreboard-1`。此板配置只用于 CPU 和编译链验证。探针使用默认 QIO／OPI 配置与 USB Serial/JTAG；CoreBoard 整包的应用起址为 `0x10000`，只作离线构建产物。Metalio 原厂启动应用起址为 `0x80000`。
 - 当前固定 SDK `ab5c45b0` 的 `BoardConfig.h:115` 未定义 S31 系列，`EpdiyLcd/src/epdiy/src/output_common/render_method.h:7` 将并行屏后端限制在 S3。可保留 `FreeInkDisplay.cpp:278` 的 `EpdiyLcdDriver` 刷新接口，在 SDK 内为 S31 增加独立板级配置及输出。原厂 2.0.79 已有 S31 输出参考。1216×684 紧密排布的单个 1 bpp 缓冲为 103,968 字节，单个 4 bpp 缓冲为 415,872 字节，尚无 DMA 或峰值分配的实机测量。 [原厂 S31 输出驱动](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/display/output_lcd/lcd_driver.c#L73)
 - 原厂 2.0.79 的 I²C SDA/SCL 为 GPIO0/1。FT6336U 地址 `0x38`、中断 GPIO5，复位由 TCA9555 P1.2 控制并与其他外设共享。双路前光候选 PWM GPIO6/7，四线 SDMMC 的 CLK/CMD 为 GPIO24/25，D0–D3 为 GPIO20–23。 [原厂固定引脚配置](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/config.h#L42)
-- 在本机已校验的 2.0.79 Flash 备份中，解析 `ota_0` ESP 镜像的载入段。原厂 `k_epd_bus_pins` 对应的 16 个小端 32 位值 `8,9,10,11,12,13,14,15,16,17,18,4,35,40,19,37` 在段 0 的 Flash 偏移 `0xec870` 唯一匹配。旧版注释中的 XSTL GPIO19／MODE GPIO36 组合无匹配。由此确认本机原厂镜像的 XSTL GPIO4／MODE GPIO19，PCB 丝印、屏号、VCOM 校准及实板时序仍待确认。 [原厂引脚表定义](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/display/epd_board_metalio_eink4_plus.c#L411)
+- 在本机已校验的 2.0.79 Flash 备份中，解析 `ota_0` ESP 镜像的载入段。原厂 `k_epd_bus_pins` 对应的 16 个小端 32 位值 `8,9,10,11,12,13,14,15,16,17,18,4,35,40,19,37` 在段 0 的 Flash 偏移 `0xec870` 唯一匹配。旧版注释中的 XSTL GPIO19／MODE GPIO36 组合无匹配。由此确认本机原厂镜像的 XSTL GPIO4／MODE GPIO19，PCB 丝印、屏号、电压测量及实板时序仍待确认。 [原厂引脚表定义](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/display/epd_board_metalio_eink4_plus.c#L411)
+- 原厂软件在 `screen:black_depth` 存储索引 0／1／2，分别请求 VCOM 幅值 1200／1600／2000 mV，键缺失时用索引 0。本机 2.0.79 备份未设置该项，因此恢复镜像的预期请求值为 1200 mV。仅将此值用于建立本机原厂对照，实板输出、面板标称 VCOM 和当前运行期间的值仍待确认。 [原厂黑度映射](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/display/epd_refresh.cc#L58) · [原厂设置读取](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/display/epd_refresh.cc#L586)
 - BQ27220、CX25601N 和 PCF8563 属原厂硬件参考。电池统计继续以供电、充电、USB 三者已确认的区间为准，且纳入欠压保存与重启回读验收。当前电流、功耗、休眠时基和供电状态的能力仍待验证。
 
 ## 复现与验收状态
@@ -48,7 +49,8 @@
 | 探针 C++ 格式 | 通过 | `clang-format --dry-run --Werror src/debug/MetalioEink4PlusPlatform.cpp`，版本 21.1.8。 |
 | 完整固件回归与 CI | 待验证 | 完整 S31 应用可构建后运行 `./bin/ci-check` 与受影响目标回归，共享层变化覆盖 X3/X4 基线。 |
 | USB 调试端口归属 | 通过 | 11 月 18 日 15:12:13（新加坡时间），用户唤醒后 `COM26` 重新枚举。用 `pnputil /enum-devices /connected /bus USB /properties` 核对接口的 USB 父设备 `303a:1001`，其序列标识与同次拍摄的「关于」页 MAC 一致。仅保存匹配结果。 |
-| 原厂运行日志中的 VCOM | 待验证 | 再次唯一匹配 `COM26` 后，以 115200、DTR/RTS 关闭的只读监听方式接收 15,560 字节。90 秒内没有匹配到原厂 `TPS PowerOn ok vcom=… mV`，未取得当前设定，源码默认的 1200 mV 仍仅为参考值。 |
+| 原厂恢复镜像的 VCOM 请求值 | 通过（离线） | 核对完整备份 SHA-256 和实际分区表后，用 ESP-IDF 6.2 的 `components/nvs_flash/nvs_partition_tool/nvs_parser.py` 在内存解析 `0x9000` 起的 16 KiB NVS。校验有效页头及目标记录状态，只查 `screen: black_depth`。该项缺失，原厂 2.0.79 使用默认索引 0，即请求 1200 mV。 |
+| 原厂运行中的 VCOM | 待验证 | 再次唯一匹配 `COM26` 后，以 115200、DTR/RTS 关闭的只读监听方式接收 15,560 字节。90 秒内没有匹配到原厂 `TPS PowerOn ok vcom=… mV`。电压未测量。 |
 | CrossMux 串口传输与休眠复连 | 待验证 | 已观察到 Plus 的 USB 端口在原厂固件运行时消失，并于唤醒后枚举。ROM 传输已在原厂恢复中验证。CrossMux 运行日志和休眠复连仍待验证。 |
 | 原厂同机恢复 | 通过 | 已完成 2.0.79 整档备份、同机写回、全量摘要校验和硬件复位。用户确认原厂界面、2.0.79 版本、触控和书架正常。 |
 | CrossMux 真机验收 | 待验证 | 待核实板号及排线、验证启动、显示、触控和按键、SD 与阅读、双路前光、休眠唤醒、堆内存与功耗。 |
