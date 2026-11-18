@@ -1,6 +1,6 @@
 # Metalio E-Ink 4 Plus 适配记录
 
-最后核对日期 2026-11-18。Metalio E-Ink 4 Plus 已通过原厂同机恢复、S31 独立构建及使用临时 FreeInk SDK 的 BSP 联编。完整 CrossMux 应用已链接，超出原厂应用槽，仍无可刷镜像。面板实测待完成。
+最后核对日期 2026-11-18。Metalio E-Ink 4 Plus 已通过原厂同机恢复、S31 独立构建及临时 FreeInk SDK 联编。完整 CrossMux 应用已通过临时 6.25 MiB 槽的构建与镜像检查，待授权刷写和面板实测。
 
 ## 硬件事实与资料
 
@@ -78,15 +78,19 @@ python -m esptool image-info .pio/build/metalio_eink4_plus/firmware.bin
 
 完整应用链接占用 Flash 6,089,024 字节，静态 RAM 96,784 字节。原厂单槽上限 5,242,880 字节。已有 LTO 配置把链接占用降到 5,678,914 字节，仍超出 436,034 字节，并产生 Arduino TLS 类型定义不一致告警。开发目标保留常规编译选项。日志 `build/metalio-s31-toolchain/plus-full-08.log` 和 `plus-full-lto.log`。
 
-厂商固定源码 `sdkconfig` 将 Flash 设置为 DIO/80 MHz、Octal PSRAM 设置为 200 MHz。原厂应用镜像头与 Flash 配置一致。Arduino 4.0.0-RC1 自带的 S31 CoreBoard 预编译库设定为 Octal PSRAM 250 MHz。实际芯片工作参数待真机核实，准备按厂商 200 MHz 重建候选。固定 pioarduino 依赖的 ESP-IDF 6.1.0 源码包已校验 SHA-256，S31 PSRAM Kconfig 提供 200 MHz 配置。 [厂商 sdkconfig](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/sdkconfig) · [ESP32-S31 引导说明](https://docs.espressif.com/projects/esp-idf/en/release-v6.1/esp32s31/api-guides/bootloader.html)
+厂商固定源码 `sdkconfig` 将 Flash 设置为 DIO/80 MHz、Octal PSRAM 设置为 200 MHz。原厂应用镜像头与 Flash 配置一致。Arduino 4.0.0-RC1 自带的 S31 CoreBoard 预编译库设定为 Octal PSRAM 250 MHz。固定 pioarduino 依赖的 ESP-IDF 6.1.0 源码包已校验 SHA-256。实机的 PSRAM 初始化和稳定性仍待核实。 [厂商 sdkconfig](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/sdkconfig) · [ESP32-S31 引导说明](https://docs.espressif.com/projects/esp-idf/en/release-v6.1/esp32s31/api-guides/bootloader.html)
+
+重建时确认平台提供的 ESP-IDF 6.1.0 源码包与 Arduino 4.0.0-RC1 的 S31 标头来自不同提交，蓝牙配置因此不匹配。现已使用 Arduino `versions.txt` 声明的 ESP-IDF `94639ab7251fc8230ca725df638c9a57dbb17153` 和其递归固定子模块完成同源库重建。实际生成配置为 Octal PSRAM 200 MHz、DIO/80 MHz、C++ 异常关闭。Windows 本地日志 `build/metalio-s31-toolchain/plus-exact-sdk-200mhz-02.log`，工作树内的 `build/metalio-s31-toolchain/plus-200-exact.ini` 保留该次本地配置，工具链专属缓存设在工作树外。Windows SDK 阶段需要本地 `patch_ldgen_windows.py` 直接传参给链接脚本生成器，随后使用同一配置重新执行 `pio run -c build/metalio-s31-toolchain/plus-200-exact.ini -e metalio_eink4_plus -j 8`，以便复用同源库。 [乐鑫精确源码提交](https://github.com/espressif/esp-idf/commit/94639ab7251fc8230ca725df638c9a57dbb17153)
+
+完整应用版号 `1.6.5-e2370df-metalio-plus-dev`，CrossMux 提交 `e2370df7865b333b16565c0dee04450d36ca23f0`，FreeInk 临时提交 `950a06953445c0d20b81514e4006e078af3ef09d`。应用文件为 `build/metalio-s31-toolchain/crossmux-ar0c-metalio-e-ink4-plus-1.6.5-fae079cb-app.bin`，6,093,488 字节。SHA-256 `fae079cb34836e344da5d2dbe0a8144dab2e835ad04c34003fb4cd2762a2b52a`。静态 RAM 96,712 字节，应用槽剩余 460,112 字节。esptool 5.5.0 离线核对芯片 ESP32-S31、最低修订 v0.0、16 MB Flash、DIO/80 MHz、镜像校验和和内置哈希。独立核对 Plus 板型标记、完整应用入口、板级显示实现及无 eFuse 检查绕过入口。日志 `build/metalio-s31-toolchain/plus-exact-app-200mhz-02.log` 和 `plus-app-exact-200mhz-image-info.txt`。
 
 ### 首次显示台架验证与恢复
 
 首次运行前在同一台机器确认 ROM 下载设备身份、16 MiB Flash、Secure Boot／Flash 加密状态、当前 `ota_0` 启动槽及原厂分区表，并重新验证一份当前的完整 Flash 快照。复核该快照中的原厂黑度仍请求 1200 mV。取出个人 microSD 并保管，首次上电预期可显示缺卡页，后续书架测试使用独立测试卡。先看串口中的电源错误、缺行、超时与重启，再观察屏幕是否刷新、有无条纹。在未确认电源和扫描结果时停止连续刷新。电压和时序需要台架量测。
 
-首次试写范围为 `ota_0` 的应用镜像起址 `0x80000`，最大 `0x500000` 字节，写入后先 `verify-flash`，再复位。原厂引导程序、分区表、`otadata`、`ota_1` 和数据分区保留原始映射。PlatformIO 的 `firmware.factory.bin` 和常规上传会覆盖更多地址，不用于此流程。固件运行可能读写 NVS，适配阶段避免 Wi-Fi、OTA 和字体预载。回滚使用写前完整同机快照从 `0x0` 恢复并全量校验，复位后确认原厂 `2.0.79`、触控和书架。完整同机恢复流程已验证，Plus 新固件仍未写入或启动。
+本次台架试写拟在 `0x8000` 写入临时分区表，在 `0x80000` 写入应用。`ota_0` 扩为 `0x640000`（6.25 MiB）。`ota_1` 改为 `0x6c0000` 起的 `0x3c0000`（3.75 MiB），原 `ota_1` 内容会被部分覆盖。其余分区记录与原厂逐字节一致。校验过的分区表为 `build/metalio-s31-toolchain/partitions_metalio_eink4_plus_bench.bin`，3,072 字节，SHA-256 `78db7caa721bfbeb811f1e32282ccb322ecc347d1f9f8fe1a6d2c0388b8cd1e4`，与构建生成的 `partitions.bin` 一致。
 
-若完整应用仍超过原厂槽，备用台架布局只移动两个应用槽的边界。`ota_0` 仍从 `0x80000` 开始，扩为 `0x640000`（6.25 MiB）。`ota_1` 改为 `0x6c0000` 起的 `0x3c0000`（3.75 MiB），其原有镜像会被部分覆盖。分区表仍位于 `0x8000`，其他分区记录逐字节一致，表已离线校验。此方案必须获准变更分区后才可分段写入，依赖完整同机快照回滚并恢复两套原厂应用槽。禁止用该布局试验 OTA 或字体预载。候选镜像仍需确认 200 MHz PSRAM 配置、镜像完整性、尺寸和真机状态。
+获准变更分区、核对写前完整备份后，以 esptool 的 ROM 会话分段写入分区表与应用，保持 ROM 会话并分别执行 `verify-flash`，校验后复位。工具生成的 `firmware.factory.bin` 和常规 `pio run -t upload` 还会写引导、额外 OTA 记录等地址，不用于此流程。固件运行可能读写 NVS，适配阶段避免 Wi-Fi、OTA 和字体预载。台架阶段结束时，用写前完整同机快照从 `0x0` 恢复，覆盖原始分区表、两个原厂应用槽及数据。全量读回校验后复位，确认原厂 `2.0.79`、触控和书架。完整同机恢复流程已验证，CrossMux 镜像仍未写入或启动。
 
 ## 复现与验收状态
 
@@ -99,7 +103,7 @@ python -m esptool image-info .pio/build/metalio_eink4_plus/firmware.bin
 | Arduino S31 平台探针 | 通过（离线） | `pio run -e metalio_eink4_plus_platform -j 3` 仅编译 `src/debug/MetalioEink4PlusPlatform.cpp`。检查芯片目标、Arduino 主版本及 RGB LCD、RMT、SDMMC、LEDC 能力。`python -m esptool image-info .pio/build/metalio_eink4_plus_platform/firmware.bin` 确认芯片 ID 32、16 MB Flash、镜像哈希有效；346,304 字节，SHA-256 `3d42d4db4b6c5dfe9659b5cd1324e4bf7bc8f2cc407fb5f6b9e250dca4046132`。本次未刷写探针。 |
 | S31 BSP 联编 | 通过（临时 SDK） | `pio run -e metalio_eink4_plus_sdk -e metalio_eink4_plus_platform -j 3` 通过。`esptool image-info` 确认 SDK 探针为 S31，镜像 SHA-256 `d4577727702b571a56c0170083618a2eedf2e8a988f95c7935084cd3d1c1ce1c`。 |
 | SDK 显示宿主回归 | 通过 | 在 Ubuntu 运行 `test_s31_packing.py`、`test_transactions.py`、`test_waveform_trim.py`。覆盖高位优先打包、掩码及现有 Read Pico 的刷新事务、资源失败和原有波形一致性。 |
-| CrossMux S31 主程序和 FreeInk | 通过链接，原厂槽位失败 | 使用临时 SDK `950a0695`，静态 RAM 使用 96,784 字节，应用超过原厂 5 MiB。完整候选和 ROM 启动待验证。 |
+| CrossMux S31 主程序和 FreeInk | 通过（临时 SDK 和分区） | 原厂 5 MiB 槽容量验证失败。200 MHz 完整应用在 6.25 MiB 台架槽内通过编译、板型与镜像校验，ROM 启动待验证。 |
 | CI 选择与发布回归 | 通过 | `python -m unittest discover -s scripts/tests -p test_ci_plan.py` 通过 12 项，`python -m unittest discover -s scripts/tests -p test_nightly_release.py` 通过 39 项。默认目标及发布矩阵均为 Waveshare 3.97。 |
 | 探针 C++ 格式 | 通过 | `clang-format --dry-run --Werror src/debug/MetalioEink4PlusPlatform.cpp`，版本 21.1.8。 |
 | 完整固件回归与 CI | 待验证 | 完整 S31 应用可构建后运行 `./bin/ci-check` 与受影响目标回归，共享层变化覆盖 X3/X4 基线。 |
