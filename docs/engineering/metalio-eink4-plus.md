@@ -53,7 +53,7 @@ pio run -e metalio_eink4_plus_sdk -e metalio_eink4_plus_platform -j 3
 python -m esptool image-info .pio/build/metalio_eink4_plus_sdk/firmware.bin
 ```
 
-上游 CrossMux 的固定 SDK 为 `0x1abin/freeink-sdk` 的 `24195eb2`，与本次验证用的个人 SDK 分叉。上游草稿通过临时 SDK checkout 评审联编入口，正式集成需要将 SDK 变更移植到上游对应基线并按该固定引用验证。
+上游评审见 [CrossMux Draft PR #465](https://github.com/0x1abin/crossmux/pull/465)。上游 CrossMux 的固定 SDK 为 `0x1abin/freeink-sdk` 的 `24195eb2`，与本次验证用的个人 SDK 分叉。上游草稿通过临时 SDK checkout 评审联编入口，正式集成需要将 SDK 变更移植到上游对应基线并按该固定引用验证。
 
 ## 复现与验收状态
 
@@ -76,7 +76,7 @@ python -m esptool image-info .pio/build/metalio_eink4_plus_sdk/firmware.bin
 | CrossMux 串口传输与休眠复连 | 待验证 | 已观察到 Plus 的 USB 端口在原厂固件运行时消失，并于唤醒后枚举。ROM 传输已在原厂恢复中验证。CrossMux 运行日志和休眠复连仍待验证。 |
 | 原厂同机恢复 | 通过 | 已完成 2.0.79 整档备份、同机写回、全量摘要校验和硬件复位。用户确认原厂界面、2.0.79 版本、触控和书架正常。 |
 | CrossMux 真机验收 | 待验证 | 待核实板号及排线、验证启动、显示、触控和按键、SD 与阅读、双路前光、休眠唤醒、堆内存与功耗。 |
-| SDK 和 CrossMux PR | 待验证 | SDK 已建 Draft，CrossMux 依赖集成待验证。上游草稿采用其 `main` 的独立分支，当前复现需临时 SDK checkout。维护者协调、正式依赖固定及验收均待完成。 |
+| SDK 和 CrossMux PR | 待验证 | [SDK #1](https://github.com/ar0c/freeink-sdk/pull/1) 与 [CrossMux #465](https://github.com/0x1abin/crossmux/pull/465) 已建立 Draft。上游草稿采用其 `main` 的独立分支，当前复现需临时 SDK checkout。维护者协调、正式依赖固定及验收均待完成。 |
 
 ## 原厂 2.0.79 恢复预检
 
