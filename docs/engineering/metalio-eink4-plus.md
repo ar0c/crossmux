@@ -1,6 +1,6 @@
 # Metalio E-Ink 4 Plus 适配记录
 
-最后核对日期 2026-11-18。当前工作基线为 `ar0c/crossmux:main`，用于 Metalio E-Ink 4 Plus 适配。原厂同机恢复已实测通过，S31 独立 Arduino 构建和镜像校验已通过。
+最后核对日期 2026-11-18。Metalio E-Ink 4 Plus 已通过原厂同机恢复、S31 独立构建及使用临时 FreeInk SDK 的 BSP 联编。完整 CrossMux 固件和面板实测待完成。
 
 ## 硬件事实与资料
 
@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 整机 | 实机「关于」页显示 `metalio-e-ink4-plus`，原厂固件 `2.0.79`，编译时间 `Nov 11 2026 20:06:41`（页面未标时区）。厂商有同版本公开源码提交 `14aa1d06`。 | PCB 版号、屏排线，以及实机二进制与公开构建的差异。 |
 | 平台 | 实机「关于」页显示 ESP32-S31 双核、16.0 MB Flash、16.0 MB PSRAM。ROM 确认 ESP32-S31 rev v0.0 和 16 MiB Flash。已读回启动分区表、原厂应用及 ROM 恢复入口。厂商文档注明 Octal PSRAM，使用 ESP-IDF 6.1。 | CrossMux 的 PSRAM 初始化、可用内存和运行稳定性。 |
-| 屏幕 | 厂商 README 记为 ED047TC2 系列，板级 C 文件记为 E0470A14-AF。两份资料均为 1216×684、并行 EPDiy、TPS65185 和 TCA9555。独立 kiikoread 适配标注 V1.5、34Pin、E0470A14-AF。 | 用户暂无可核对的标签。具体屏号、PCB 与排线版本对应关系，VCOM 校准值、波形、上电和掉电时序仍待确认。 |
+| 屏幕 | 本机 2.0.79 备份匹配原厂 `E0470A14-AF 34Pin` 初始化标记及 GC／GL／DU 表，源文件为 1216×684、8 位并行输出、TPS65185 和 TCA9555。厂商 README 另记 ED047TC2 系列。 | PCB 与实物排线丝印、VCOM 实际电压、波形使用范围及上电／掉电时序。 |
 | 输入及存储 | 厂商参考为 FT6336U 触控、盖板虚拟键、通过 TCA9555 读取的按键、4-bit SDMMC。 | 坐标、方向、共享复位和电源、按键映射、存储读写及缺卡恢复。 |
 | 电源及前光 | 厂商参考包含 BQ27220 电量计、CX25601N 充电器、PCF8563 RTC、双路前光以及 USB Serial/JTAG 和 USB HS MSC。用户确认双路前光纳入首版。 | 实机前光配置、亮度和色温调节，休眠熄灯和唤醒恢复。待核实剩余电量、充电、外部供电和 USB 调试各自的信号来源，以及休眠／唤醒、欠压保存和电池统计能力。电流与续航仍待测量。 |
 
@@ -35,6 +35,26 @@
 - 原厂软件在 `screen:black_depth` 存储索引 0／1／2，分别请求 VCOM 幅值 1200／1600／2000 mV，键缺失时用索引 0。本机 2.0.79 备份未设置该项，因此恢复镜像的预期请求值为 1200 mV。仅将此值用于建立本机原厂对照，实板输出、面板标称 VCOM 和当前运行期间的值仍待确认。 [原厂黑度映射](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/display/epd_refresh.cc#L58) · [原厂设置读取](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/display/epd_refresh.cc#L586)
 - BQ27220、CX25601N 和 PCF8563 属原厂硬件参考。电池统计继续以供电、充电、USB 三者已确认的区间为准，且纳入欠压保存与重启回读验收。当前电流、功耗、休眠时基和供电状态的能力仍待验证。
 
+### SDK 联编与面板证据
+
+- 在已校验的 `ota_0` 载入段中独立比对固定厂商提交的字节。初始化标记 `EPDiy init E0470A14-AF 34Pin` 见 Flash 偏移 `0xaf094`，GC 表的 3008 字节显式初值、GL 表 3072 字节及 DU 表 1280 字节分别在 `0x118e38`、`0x11822c` 和 `0x119a38` 唯一匹配。该结果确认原厂软件选用的面板及原始表，实际排线和时序仍待验证。 [原厂显示初始化](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/display/metalio_epd.c#L31) · [原厂面板定义](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/display/displays.c#L76)
+- 临时 SDK 的 `FREEINK_DEVICE_METALIO_EINK4_PLUS` 提供独立 S31 配置、1216×684 PSRAM 帧缓冲、四线 SDMMC、BQ27220 参数和 GPIO6/7 双路前光。前光沿用原厂 20 kHz、10 位、总 PWM 上限 10%。触控共享复位、TCA9555 按键、电源管理及实际 SD 挂载仍待接入或验证。 [原厂前光频率](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/periph/frontlight.h#L44) · [原厂前光限幅](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/periph/frontlight.cc#L23)
+- S31 后端采用原生 8 位 RGB、AXI GDMA 和 RMT，按每字节高位优先打包 2 位驱动值。扫描超时、中途失败和缺行均返回错误，禁止推进软件刷新基准。S31 调用必须提供匹配的面板定义、波形和电源钩子。适配探针仅链接这些入口。原厂运行时波形加工、实机扫描同步和时间预算仍待验证。
+- 两个 64 槽内部 SRAM 线队列存放 38,912 字节像素输出，两个 8 行 DMA 缓冲共 4,864 字节，另外还有任务栈、信号量、描述符和临时转换区。联编镜像报告静态 RAM 42,852 字节、程序 403,542 字节。峰值堆内存、最终应用分区余量和功耗待测。
+
+联编使用 [FreeInk SDK Draft PR #1](https://github.com/ar0c/freeink-sdk/pull/1) 的 `codex/metalio-eink4-plus-s31`，提交 `8764655de14f9ce2f5051304bbdab01608af48fa`。以下命令在个人 fork 的 CrossMux 功能分支根目录执行，SDK 工作树须干净。根仓库中已提交的 gitlink 保持原样。
+
+```sh
+git submodule update --init --recursive
+git -C freeink-sdk fetch https://github.com/ar0c/freeink-sdk.git refs/heads/codex/metalio-eink4-plus-s31
+git -C freeink-sdk switch --detach 8764655de14f9ce2f5051304bbdab01608af48fa
+git -C freeink-sdk submodule update --init --recursive
+pio run -e metalio_eink4_plus_sdk -e metalio_eink4_plus_platform -j 3
+python -m esptool image-info .pio/build/metalio_eink4_plus_sdk/firmware.bin
+```
+
+上游 CrossMux 的固定 SDK 为 `0x1abin/freeink-sdk` 的 `24195eb2`，与本次验证用的个人 SDK 分叉。上游草稿通过临时 SDK checkout 评审联编入口，正式集成需要将 SDK 变更移植到上游对应基线并按该固定引用验证。
+
 ## 复现与验收状态
 
 | 验证项 | 状态 | 证据或下一步 |
@@ -44,6 +64,8 @@
 | 现有 Windows 工具版本 | 通过 | PlatformIO Core 6.2.0、Python 3.13.14、esptool 5.5.0。原生 ESP-IDF 6.2.0，提交 `7b9cc1ac79f865983f59bb8ff3ff43eb74ff1dbe`。在当前 shell 将已安装的 `idf6.2_py3.13_env/Scripts` 加到 PATH 首位，再执行 IDF 的 `export.ps1`。 |
 | 原生 S31 最小构建 | 通过 | 在忽略的 `build/metalio-s31-toolchain/hello_world/` 复制官方 `examples/get-started/hello_world`，执行 `idf.py -B ../out -DIDF_TARGET=esp32s31 reconfigure`、`cmake --build ../out --parallel 3` 和 `python -m esptool image-info ../out/hello_world.bin`。配置和编译均返回 0，镜像识别为 ESP32-S31（Chip ID 32），150240 字节，SHA-256 `f787ac946a5970d7acb3eeb28bdcc78c1c802bced141ce9a3b435bae3b70fb2c`。日志 `build/metalio-s31-toolchain/build.log`。仅离线验证。 |
 | Arduino S31 平台探针 | 通过（离线） | `pio run -e metalio_eink4_plus_platform -j 3` 仅编译 `src/debug/MetalioEink4PlusPlatform.cpp`。检查芯片目标、Arduino 主版本及 RGB LCD、RMT、SDMMC、LEDC 能力。`python -m esptool image-info .pio/build/metalio_eink4_plus_platform/firmware.bin` 确认芯片 ID 32、16 MB Flash、镜像哈希有效；346,304 字节，SHA-256 `3d42d4db4b6c5dfe9659b5cd1324e4bf7bc8f2cc407fb5f6b9e250dca4046132`。本次未刷写探针。 |
+| S31 BSP 联编 | 通过（临时 SDK） | `pio run -e metalio_eink4_plus_sdk -e metalio_eink4_plus_platform -j 3` 通过。`esptool image-info` 确认 SDK 探针为 S31，镜像 SHA-256 `d4577727702b571a56c0170083618a2eedf2e8a988f95c7935084cd3d1c1ce1c`。 |
+| SDK 显示宿主回归 | 通过 | 在 Ubuntu 运行 `test_s31_packing.py`、`test_transactions.py`、`test_waveform_trim.py`。覆盖高位优先打包、掩码及现有 Read Pico 的刷新事务、资源失败和原有波形一致性。 |
 | CrossMux S31 主程序和 FreeInk | 待验证 | 面板后端及板级配置接入后再构建。 |
 | CI 选择与发布回归 | 通过 | `python -m unittest discover -s scripts/tests -p test_ci_plan.py` 通过 12 项，`python -m unittest discover -s scripts/tests -p test_nightly_release.py` 通过 39 项。默认目标及发布矩阵均为 Waveshare 3.97。 |
 | 探针 C++ 格式 | 通过 | `clang-format --dry-run --Werror src/debug/MetalioEink4PlusPlatform.cpp`，版本 21.1.8。 |
@@ -54,7 +76,7 @@
 | CrossMux 串口传输与休眠复连 | 待验证 | 已观察到 Plus 的 USB 端口在原厂固件运行时消失，并于唤醒后枚举。ROM 传输已在原厂恢复中验证。CrossMux 运行日志和休眠复连仍待验证。 |
 | 原厂同机恢复 | 通过 | 已完成 2.0.79 整档备份、同机写回、全量摘要校验和硬件复位。用户确认原厂界面、2.0.79 版本、触控和书架正常。 |
 | CrossMux 真机验收 | 待验证 | 待核实板号及排线、验证启动、显示、触控和按键、SD 与阅读、双路前光、休眠唤醒、堆内存与功耗。 |
-| SDK 和 CrossMux PR | 待验证 | 当前仅完成探针。个人 fork 与上游各有独立提交，后续面向上游的 PR 需从其 `main` 单独移植本设备变更。若有 SDK 依赖，先独立提交 SDK，CrossMux 使用 Draft 并保留原 gitlink，记录临时 SDK SHA 与复现命令。 |
+| SDK 和 CrossMux PR | 待验证 | SDK 已建 Draft，CrossMux 依赖集成待验证。上游草稿采用其 `main` 的独立分支，当前复现需临时 SDK checkout。维护者协调、正式依赖固定及验收均待完成。 |
 
 ## 原厂 2.0.79 恢复预检
 
