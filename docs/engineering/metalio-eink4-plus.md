@@ -1,6 +1,6 @@
 # Metalio E-Ink 4 Plus 适配记录
 
-最后核对日期 2026-11-18。Metalio E-Ink 4 Plus 已通过原厂同机恢复、S31 独立构建及使用临时 FreeInk SDK 的 BSP 联编。完整 CrossMux 固件和面板实测待完成。
+最后核对日期 2026-11-18。Metalio E-Ink 4 Plus 已通过原厂同机恢复、S31 独立构建及使用临时 FreeInk SDK 的 BSP 联编。完整 CrossMux 应用已链接，超出原厂应用槽，仍无可刷镜像。面板实测待完成。
 
 ## 硬件事实与资料
 
@@ -55,6 +55,39 @@ python -m esptool image-info .pio/build/metalio_eink4_plus_sdk/firmware.bin
 
 上游评审见 [CrossMux Draft PR #465](https://github.com/0x1abin/crossmux/pull/465)。上游 CrossMux 的固定 SDK 为 `0x1abin/freeink-sdk` 的 `24195eb2`，与本次验证用的个人 SDK 分叉。上游草稿通过临时 SDK checkout 评审联编入口，正式集成需要将 SDK 变更移植到上游对应基线并按该固定引用验证。
 
+### 原厂供电和波形接入
+
+- Plus 板级驱动先拉低 XOE／MODE，并在 TCA9555 上预置输出锁存值，再设置方向。复用原厂 P05／P12／P14 时序。TPS65185 在 WAKEUP 后等 50 ms，再核对 REVID、写 `UPSEQ0=0xE4` 和 `UPSEQ1=0x55`。PWRUP／VCOM_CTRL 升起后先等待外部 PWR_GOOD，再配置 ENABLE 和易失 VCOM DAC。只有 TPS 内部 `PG & 0xFA == 0xFA` 才允许 XOE 输出。掉电先关闭 XOE／MODE，至少等 12 µs 才降低 VCOM_CTRL／PWRUP，然后降低 WAKEUP。断电未能确认时禁止再次上电。 [原厂驱动](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/display/epd_board_metalio_eink4_plus.c#L808) · [TI TPS65185 数据手册](https://www.ti.com/lit/ds/symlink/tps65185.pdf)
+- 目前按本机 2.0.79 备份的默认黑度请求值使用 1200 mV，`VCOM2.PROG` 和 `VCOM2.ACQ` 保持为零。实际 VCOM、面板排线和电源边沿待真机确认。原厂公开 MIT 波形提供 GC16／GL16 各 48 相和 DU 20 相。驱动保留平衡档、GL 白底维护和 DU 黑白补偿，软件限制每相起始间隔至少 11,765 µs。上电探测后直接掉轨，首次实际显示使用 GC16。遇到扫描失败时掉轨，并禁用后续扫描直至重启。 [原厂波形](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/display/waveforms/my_waveform.c) · [原厂节拍](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/main/boards/metalio-e-ink4-plus/display/output_lcd/render_lcd.c#L98)
+- 完整应用目标 `metalio_eink4_plus` 使用原厂分区布局，支持单独构建主程序。当前 Plus 关闭空闲自动休眠，等待通过扩展器实现并验证唤醒。触控、翻页键、休眠、SD、双路前光的物理验收仍待进行。
+- S31 的 GPIO 深睡保持按 ESP-IDF 能力选择。IDF 缺少公开 mbedTLS RSA 接口时，继续使用现有 wolfSSL RSA 密钥生成。QRCode 0.0.1 的单个 C 文件使用 GNU17，兼容它在 C23 前定义的 `bool`。SHA-256 HAL 在新版 IDF 调用公开 PSA API，原有目标保留 mbedTLS 路径。Plus 开发镜像使用独立版本后缀和 `metalio_eink4_plus` 板型标记。
+- Linux 主机测试 `python3 freeink-sdk/libs/hardware/BoardMetalioEInk4Plus/test/host/test_panel.py` 覆盖供电顺序、PGOOD 超时、错误 PMIC、VCOM 失败、断电失败保护及地址歧义。`python3 freeink-sdk/libs/display/EpdiyLcd/test/host/test_transactions.py` 覆盖 Read Pico 显示回归。两套均通过。
+
+新版供电、波形和完整应用联编使用临时 FreeInk SDK `codex/metalio-eink4-plus-s31` 的 `950a06953445c0d20b81514e4006e078af3ef09d`。从干净 SDK 工作树执行如下命令。此流程不更新 CrossMux 的 gitlink。
+
+```sh
+git submodule update --init --recursive
+git -C freeink-sdk fetch https://github.com/ar0c/freeink-sdk.git refs/heads/codex/metalio-eink4-plus-s31
+git -C freeink-sdk switch --detach 950a06953445c0d20b81514e4006e078af3ef09d
+git -C freeink-sdk submodule update --init --recursive
+pio run -e metalio_eink4_plus -j 6
+python -m esptool image-info .pio/build/metalio_eink4_plus/firmware.bin
+```
+
+使用 Arduino 工具链自带的分区表生成器离线生成 3,072 字节分区表，并与原厂快照从 `0x8000` 开始的内容逐字节比较，一致。分区表 SHA-256 为 `b2ab8fbfdadaf0bcd91955cae6e646dcc92e698df9a364c7f9481334e5fa3113`。
+
+完整应用链接占用 Flash 6,089,024 字节，静态 RAM 96,784 字节。原厂单槽上限 5,242,880 字节。已有 LTO 配置把链接占用降到 5,678,914 字节，仍超出 436,034 字节，并产生 Arduino TLS 类型定义不一致告警。开发目标保留常规编译选项。日志 `build/metalio-s31-toolchain/plus-full-08.log` 和 `plus-full-lto.log`。
+
+厂商固定源码 `sdkconfig` 将 Flash 设置为 DIO/80 MHz、Octal PSRAM 设置为 200 MHz。原厂应用镜像头与 Flash 配置一致。Arduino 4.0.0-RC1 自带的 S31 CoreBoard 预编译库设定为 Octal PSRAM 250 MHz。实际芯片工作参数待真机核实，准备按厂商 200 MHz 重建候选。固定 pioarduino 依赖的 ESP-IDF 6.1.0 源码包已校验 SHA-256，S31 PSRAM Kconfig 提供 200 MHz 配置。 [厂商 sdkconfig](https://github.com/CloudZao/Metalio-E-INK4-Plus/blob/14aa1d06d15a46435f234aa14f3cffa478ed2802/sdkconfig) · [ESP32-S31 引导说明](https://docs.espressif.com/projects/esp-idf/en/release-v6.1/esp32s31/api-guides/bootloader.html)
+
+### 首次显示台架验证与恢复
+
+首次运行前在同一台机器确认 ROM 下载设备身份、16 MiB Flash、Secure Boot／Flash 加密状态、当前 `ota_0` 启动槽及原厂分区表，并重新验证一份当前的完整 Flash 快照。复核该快照中的原厂黑度仍请求 1200 mV。取出个人 microSD 并保管，首次上电预期可显示缺卡页，后续书架测试使用独立测试卡。先看串口中的电源错误、缺行、超时与重启，再观察屏幕是否刷新、有无条纹。在未确认电源和扫描结果时停止连续刷新。电压和时序需要台架量测。
+
+首次试写范围为 `ota_0` 的应用镜像起址 `0x80000`，最大 `0x500000` 字节，写入后先 `verify-flash`，再复位。原厂引导程序、分区表、`otadata`、`ota_1` 和数据分区保留原始映射。PlatformIO 的 `firmware.factory.bin` 和常规上传会覆盖更多地址，不用于此流程。固件运行可能读写 NVS，适配阶段避免 Wi-Fi、OTA 和字体预载。回滚使用写前完整同机快照从 `0x0` 恢复并全量校验，复位后确认原厂 `2.0.79`、触控和书架。完整同机恢复流程已验证，Plus 新固件仍未写入或启动。
+
+若完整应用仍超过原厂槽，备用台架布局只移动两个应用槽的边界。`ota_0` 仍从 `0x80000` 开始，扩为 `0x640000`（6.25 MiB）。`ota_1` 改为 `0x6c0000` 起的 `0x3c0000`（3.75 MiB），其原有镜像会被部分覆盖。分区表仍位于 `0x8000`，其他分区记录逐字节一致，表已离线校验。此方案必须获准变更分区后才可分段写入，依赖完整同机快照回滚并恢复两套原厂应用槽。禁止用该布局试验 OTA 或字体预载。候选镜像仍需确认 200 MHz PSRAM 配置、镜像完整性、尺寸和真机状态。
+
 ## 复现与验收状态
 
 | 验证项 | 状态 | 证据或下一步 |
@@ -66,7 +99,7 @@ python -m esptool image-info .pio/build/metalio_eink4_plus_sdk/firmware.bin
 | Arduino S31 平台探针 | 通过（离线） | `pio run -e metalio_eink4_plus_platform -j 3` 仅编译 `src/debug/MetalioEink4PlusPlatform.cpp`。检查芯片目标、Arduino 主版本及 RGB LCD、RMT、SDMMC、LEDC 能力。`python -m esptool image-info .pio/build/metalio_eink4_plus_platform/firmware.bin` 确认芯片 ID 32、16 MB Flash、镜像哈希有效；346,304 字节，SHA-256 `3d42d4db4b6c5dfe9659b5cd1324e4bf7bc8f2cc407fb5f6b9e250dca4046132`。本次未刷写探针。 |
 | S31 BSP 联编 | 通过（临时 SDK） | `pio run -e metalio_eink4_plus_sdk -e metalio_eink4_plus_platform -j 3` 通过。`esptool image-info` 确认 SDK 探针为 S31，镜像 SHA-256 `d4577727702b571a56c0170083618a2eedf2e8a988f95c7935084cd3d1c1ce1c`。 |
 | SDK 显示宿主回归 | 通过 | 在 Ubuntu 运行 `test_s31_packing.py`、`test_transactions.py`、`test_waveform_trim.py`。覆盖高位优先打包、掩码及现有 Read Pico 的刷新事务、资源失败和原有波形一致性。 |
-| CrossMux S31 主程序和 FreeInk | 待验证 | 面板后端及板级配置接入后再构建。 |
+| CrossMux S31 主程序和 FreeInk | 通过链接，原厂槽位失败 | 使用临时 SDK `950a0695`，静态 RAM 使用 96,784 字节，应用超过原厂 5 MiB。完整候选和 ROM 启动待验证。 |
 | CI 选择与发布回归 | 通过 | `python -m unittest discover -s scripts/tests -p test_ci_plan.py` 通过 12 项，`python -m unittest discover -s scripts/tests -p test_nightly_release.py` 通过 39 项。默认目标及发布矩阵均为 Waveshare 3.97。 |
 | 探针 C++ 格式 | 通过 | `clang-format --dry-run --Werror src/debug/MetalioEink4PlusPlatform.cpp`，版本 21.1.8。 |
 | 完整固件回归与 CI | 待验证 | 完整 S31 应用可构建后运行 `./bin/ci-check` 与受影响目标回归，共享层变化覆盖 X3/X4 基线。 |

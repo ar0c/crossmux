@@ -1,8 +1,8 @@
 #include "ManagedWeReadClient.h"
 #ifdef ENABLE_CHINESE_VERSION
+#include <HalSha256.h>
 #include <HalStorage.h>
 #include <StreamingJsonParser.h>
-#include <mbedtls/sha256.h>
 #include <strings.h>
 
 #include <cstdio>
@@ -302,13 +302,7 @@ bool ManagedWeReadClient::connect(uint8_t* buffer, size_t size, char* account, s
 bool ManagedWeReadClient::resourceID(const char* url, char out[65]) {
   if (!url || strlen(url) > 511) return false;
   uint8_t hash[32];
-  mbedtls_sha256_context ctx;
-  mbedtls_sha256_init(&ctx);
-  const bool ok = mbedtls_sha256_starts(&ctx, 0) == 0 &&
-                  mbedtls_sha256_update(&ctx, reinterpret_cast<const uint8_t*>(url), strlen(url)) == 0 &&
-                  mbedtls_sha256_finish(&ctx, hash) == 0;
-  mbedtls_sha256_free(&ctx);
-  if (!ok) return false;
+  if (!HalSha256::compute(reinterpret_cast<const uint8_t*>(url), strlen(url), hash)) return false;
   for (size_t i = 0; i < 32; i++) snprintf(out + i * 2, 65 - i * 2, "%02x", hash[i]);
   return true;
 }

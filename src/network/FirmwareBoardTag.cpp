@@ -6,11 +6,13 @@
 
 // The board name derives from the FREEINK_DEVICE_* build flags so every env
 // (and any fork built from this source) is tagged automatically. Names match
-// the supported board identifiers in the release manifest.
+// release board identifiers when a release target is configured.
 #if FREEINK_DEVICE_X4PRO
 #define CROSSPOINT_BOARD_NAME "x4pro"
 #elif FREEINK_DEVICE_WAVESHARE_EPAPER_397
 #define CROSSPOINT_BOARD_NAME "waveshare_epaper_397"
+#elif FREEINK_DEVICE_METALIO_EINK4_PLUS
+#define CROSSPOINT_BOARD_NAME "metalio_eink4_plus"
 #elif CROSSPOINT_EMULATED
 #define CROSSPOINT_BOARD_NAME "simulator"
 #else

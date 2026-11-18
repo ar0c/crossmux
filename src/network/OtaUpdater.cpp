@@ -6,12 +6,12 @@
 // the local header last and break the build.
 #include "HttpDownloader.h"
 #include <ArduinoJson.h>
+#include <HalSha256.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <ReleaseJsonParser.h>
 #include <esp_ota_ops.h>
 #include <esp_wifi.h>
-#include <mbedtls/sha256.h>
 // clang-format on
 
 #include <algorithm>
@@ -298,10 +298,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   bool wrongChip = false;
   board_tag::Scanner boardScanner;
   bool wrongBoard = false;
-  mbedtls_sha256_context shaCtx;
-  mbedtls_sha256_init(&shaCtx);
-  if (mbedtls_sha256_starts(&shaCtx, 0) != 0) {
-    mbedtls_sha256_free(&shaCtx);
+  HalSha256 sha;
+  if (!sha.start()) {
     esp_ota_abort(otaHandle);
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     return INTERNAL_UPDATE_ERROR;
@@ -334,7 +332,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
       wrongBoard = true;
       return false;  // abort before selecting the incomplete image as bootable
     }
-    if (mbedtls_sha256_update(&shaCtx, data, len) != 0) {
+    if (!sha.update(data, len)) {
       hashOk = false;
       return false;
     }
@@ -360,10 +358,9 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
   uint8_t actualDigest[32] = {};
-  if (mbedtls_sha256_finish(&shaCtx, actualDigest) != 0 || processedSize != otaSize ||
+  if (!sha.finish(actualDigest) || processedSize != otaSize ||
       std::memcmp(actualDigest, otaSha256.data(), otaSha256.size()) != 0)
     hashOk = false;
-  mbedtls_sha256_free(&shaCtx);
 
   if (wrongChip || wrongBoard) {
     LOG_ERR("OTA", "Firmware install aborted: wrong device (chip=%d board=%d, received=%zu/%zu)", wrongChip, wrongBoard,

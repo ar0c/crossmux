@@ -2,6 +2,7 @@
 #ifdef ENABLE_CHINESE_VERSION
 #include <Arduino.h>
 #include <HalMemory.h>
+#include <HalSha256.h>
 #include <HalSystem.h>
 #include <HalTlsMemory.h>
 #include <Logging.h>
@@ -9,7 +10,6 @@
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <mbedtls/sha256.h>
 
 #include <algorithm>
 #include <atomic>
@@ -106,14 +106,8 @@ bool Accounting::audit(const Source& source, const char* account, Totals& totals
           totals.hostPaused = work->manifest.hostPaused(manifest, work->receipt.identity);
           return false;
         }
-        mbedtls_sha256_context digestContext;
-        mbedtls_sha256_init(&digestContext);
-        const bool digestReady = mbedtls_sha256_starts(&digestContext, 0) == 0 &&
-                                 mbedtls_sha256_update(&digestContext, work->external.receiptBytes(),
-                                                       WeReadTime::ExternalTime::kSize) == 0 &&
-                                 mbedtls_sha256_finish(&digestContext, work->digest) == 0;
-        mbedtls_sha256_free(&digestContext);
-        if (!digestReady) return false;
+        if (!HalSha256::compute(work->external.receiptBytes(), WeReadTime::ExternalTime::kSize, work->digest))
+          return false;
         for (unsigned i = 0; i < 32; ++i) std::snprintf(work->hex + i * 2, 3, "%02x", work->digest[i]);
         if (!work->manifest.receipt(manifest, work->receipt.identity, work->hex)) return false;
         switch (work->manifest.next(manifest)) {

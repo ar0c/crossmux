@@ -352,16 +352,18 @@ struct Scanner {
 }
 // Crypto is a boundary double here: exercise the production digest comparison,
 // abort and boot-selection paths, without claiming a SHA256 implementation test.
-struct mbedtls_sha256_context { size_t bytes=0; };
-void mbedtls_sha256_init(mbedtls_sha256_context* c) { c->bytes=0; }
-int mbedtls_sha256_starts(mbedtls_sha256_context*,int) { return 0; }
-int mbedtls_sha256_update(mbedtls_sha256_context* c,const uint8_t*,size_t n) { c->bytes+=n; return 0; }
-int mbedtls_sha256_finish(mbedtls_sha256_context* c,uint8_t* digest) {
-  memset(digest,0,32);
-  if (fault==Failure::BadHash || c->bytes!=1000) digest[0]=1;
-  return 0;
-}
-void mbedtls_sha256_free(mbedtls_sha256_context*) {}
+class HalSha256 {
+  size_t bytes=0;
+
+ public:
+  bool start() { bytes=0; return true; }
+  bool update(const uint8_t*,size_t n) { bytes+=n; return true; }
+  bool finish(uint8_t (&digest)[32]) {
+    memset(digest,0,sizeof(digest));
+    if (fault==Failure::BadHash || bytes!=1000) digest[0]=1;
+    return true;
+  }
+};
 namespace HttpDownloader {
 template<class F> bool fetchVerifiedUrl(const std::string&,F write) {
   size_t previous=0;

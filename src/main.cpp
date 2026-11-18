@@ -1256,7 +1256,11 @@ void loop() {
     debugWasKeepingAwake = debugKeepAwake;
   }
 #endif
-#if CROSSMUX_USB_DEBUG
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  // The Plus still needs its expander-backed wake path. Keep the bring-up
+  // image awake until that path can be exercised on the device.
+  constexpr unsigned long sleepTimeoutMs = 0;
+#elif CROSSMUX_USB_DEBUG
   const unsigned long sleepTimeoutMs = debugbridge::sleepTimeout(SETTINGS.getSleepTimeoutMs());
 #else
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
